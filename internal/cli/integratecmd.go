@@ -12,13 +12,13 @@ import (
 )
 
 func init() {
-	register(command{"integrate", "write Agent instructions into a project: integrate codex [--path] | --print", cmdIntegrate})
+	register(command{"integrate", "set up an Agent integration: integrate codex|claude|mcp [--path] | --print", cmdIntegrate})
 	registerIntegration("codex", integrateCodex)
 }
 
 // integrationTarget writes (or would write) the Agent instructions for one
-// integration. Registered by init() in this file and, later, by CLA-11
-// (claude); mcp is registered by integrate_mcp.go. Each target lives in its
+// integration. codex is registered by init() in this file, claude by
+// integrate_claude.go, mcp by integrate_mcp.go. Each target lives in its
 // own file.
 type integrationTarget func(e *env, args []string) int
 
