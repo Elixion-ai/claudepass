@@ -87,7 +87,11 @@ func Run(spec Spec) (int, error) {
 		}
 		patterns = append(patterns, redact.Variants(s.Handle, s.Value)...)
 		if s.Exposed && spec.Warn != nil {
-			fmt.Fprintf(spec.Warn, "cpass: %s is Exposed, rotate it\n", s.Handle)
+			since := "an unknown date"
+			if !s.ExposedAt.IsZero() {
+				since = s.ExposedAt.Format("2006-01-02")
+			}
+			fmt.Fprintf(spec.Warn, "cpass: %s is Exposed since %s, rotate it\n", s.Handle, since)
 		}
 	}
 	logPath := ""

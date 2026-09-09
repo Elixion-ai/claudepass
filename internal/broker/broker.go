@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"claudepass/internal/vault"
 )
@@ -143,6 +144,10 @@ type Resolved struct {
 	Value   string
 	Binding vault.Binding
 	Exposed bool
+	// ExposedAt is when the Secret most recently became Exposed. Zero when
+	// Exposed is false or the Vault carries no exposure history for it (CI
+	// mode never sets this: there is no Vault to read it from).
+	ExposedAt time.Time
 }
 
 // Resolve turns Refs into Secrets. It fails on the first missing Handle,
@@ -176,7 +181,11 @@ func Resolve(refs []Ref) ([]Resolved, error) {
 		if r.Override != "" {
 			b.Name = r.Override
 		}
-		out = append(out, Resolved{Handle: e.Handle, Value: e.Value, Binding: b, Exposed: e.Exposed})
+		res := Resolved{Handle: e.Handle, Value: e.Value, Binding: b, Exposed: e.Exposed}
+		if e.Exposed && len(e.Exposures) > 0 {
+			res.ExposedAt = e.Exposures[len(e.Exposures)-1].At
+		}
+		out = append(out, res)
 	}
 	return out, nil
 }
