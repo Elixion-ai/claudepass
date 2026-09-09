@@ -1,0 +1,66 @@
+# GoReleaser config for cpass. See docs/adr/0007-go-single-binary.md (Go,
+# single static binary, cross-compiled for macOS/Linux) and CLA-16.
+#
+# Local verification: `goreleaser release --snapshot --clean` builds all
+# four binaries without needing a GitHub token or a real tag.
+#
+# Real releases: pushing a `vX.Y.Z` tag runs .github/workflows/release.yml,
+# which needs GITHUB_TOKEN (the workflow's default token, scoped to this
+# repo, is sufficient since the release target is this same private repo).
+#
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: claudepass
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: cpass
+    main: ./cmd/cpass
+    binary: cpass
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    # Injects claudepass/internal/cli.Version (see internal/cli/cli.go); the
+    # binary defaults to "dev" when built without these ldflags.
+    ldflags:
+      - -s -w
+      - -X claudepass/internal/cli.Version={{ .Version }}
+
+archives:
+  - id: cpass
+    ids: [cpass]
+    formats: [tar.gz]
+    # No version in the archive name so install.sh and the Homebrew formula
+    # can address "the darwin/arm64 asset of release vX" without templating
+    # the version into the filename twice.
+    name_template: "cpass_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  github:
+    owner: gumruyanzh
+    name: claudepass
+  # This repo is private (ADR-0006: closed source); the release itself is
+  # only reachable by users with access to the repo or a token. See the
+  # Homebrew formula and install.sh comments for how consumers authenticate.
+  footer: >-
+
+    ClaudePass {{ .Tag }} — a secret manager for AI coding agents.
