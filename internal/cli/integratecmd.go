@@ -18,7 +18,8 @@ func init() {
 
 // integrationTarget writes (or would write) the Agent instructions for one
 // integration. Registered by init() in this file and, later, by CLA-11
-// (claude) and CLA-13 (mcp), so each target lives in its own file.
+// (claude); mcp is registered by integrate_mcp.go. Each target lives in its
+// own file.
 type integrationTarget func(e *env, args []string) int
 
 var integrationTargets = map[string]integrationTarget{}

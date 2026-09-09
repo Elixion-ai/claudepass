@@ -1,0 +1,419 @@
+package e2e
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"io"
+	"os/exec"
+	"strings"
+	"sync"
+	"testing"
+)
+
+// mcpSession drives `cpass mcp` as a live subprocess talking JSON-RPC 2.0
+// over stdio: the exact boundary an MCP Agent uses. rawOut accumulates
+// every byte the process ever writes to stdout — every JSON-RPC frame —
+// so a test can assert a raw Secret value never appears anywhere in the
+// stream, not only in the one response it happens to check.
+type mcpSession struct {
+	t      *testing.T
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	reader *bufio.Reader
+	rawOut *syncBuffer
+	stderr *bytes.Buffer
+	nextID int
+}
+
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// startMCP launches `cpass mcp` against ve's Vault. extraEnv is appended to
+// the process environment, e.g. to set HELPER_ECHO for helperBin.
+func startMCP(t *testing.T, ve *vaultEnv, extraEnv ...string) *mcpSession {
+	t.Helper()
+	cmd := exec.Command(cpassBin, "mcp")
+	cmd.Env = append(baseEnv(), "CPASS_HOME="+ve.home, "CPASS_KEY="+ve.key)
+	cmd.Env = append(cmd.Env, extraEnv...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	raw := &syncBuffer{}
+	s := &mcpSession{
+		t: t, cmd: cmd, stdin: stdin, rawOut: raw, stderr: &stderr,
+		reader: bufio.NewReaderSize(io.TeeReader(stdoutPipe, raw), 1<<20),
+	}
+	t.Cleanup(func() {
+		_ = s.stdin.Close()
+		_ = s.cmd.Wait()
+	})
+	return s
+}
+
+// call sends a JSON-RPC request with a fresh id and returns its result,
+// failing the test on a malformed response or a JSON-RPC-level error.
+func (s *mcpSession) call(method string, params any) json.RawMessage {
+	s.t.Helper()
+	s.nextID++
+	id := s.nextID
+	req := map[string]any{"jsonrpc": "2.0", "id": id, "method": method}
+	if params != nil {
+		req["params"] = params
+	}
+	s.write(req)
+	line := s.readLine()
+	var resp struct {
+		ID     int             `json:"id"`
+		Result json.RawMessage `json:"result"`
+		Error  *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(line, &resp); err != nil {
+		s.t.Fatalf("bad response %q: %v", line, err)
+	}
+	if resp.ID != id {
+		s.t.Fatalf("response id %d, want %d: %s", resp.ID, id, line)
+	}
+	if resp.Error != nil {
+		s.t.Fatalf("%s: rpc error %d: %s", method, resp.Error.Code, resp.Error.Message)
+	}
+	return resp.Result
+}
+
+// notify sends a notification: no id, no response expected.
+func (s *mcpSession) notify(method string) {
+	s.write(map[string]any{"jsonrpc": "2.0", "method": method})
+}
+
+func (s *mcpSession) write(v any) {
+	s.t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	b = append(b, '\n')
+	if _, err := s.stdin.Write(b); err != nil {
+		s.t.Fatalf("write request: %v (stderr: %s)", err, s.stderr.String())
+	}
+}
+
+func (s *mcpSession) readLine() []byte {
+	s.t.Helper()
+	line, err := s.reader.ReadBytes('\n')
+	if err != nil && len(line) == 0 {
+		s.t.Fatalf("read response: %v (stderr: %s)", err, s.stderr.String())
+	}
+	return bytes.TrimSpace(line)
+}
+
+// initialize performs the standard handshake and returns the raw
+// initialize result.
+func (s *mcpSession) initialize() json.RawMessage {
+	s.t.Helper()
+	result := s.call("initialize", map[string]any{
+		"protocolVersion": "2025-06-18",
+		"capabilities":    map[string]any{},
+		"clientInfo":      map[string]any{"name": "cpass-e2e", "version": "0"},
+	})
+	s.notify("notifications/initialized")
+	return result
+}
+
+// callTool calls tools/call and returns its content blocks' text (the
+// first block is always the tool's own JSON result; a second block, if
+// present, carries redaction/Exposed notices — see run_with_secrets) and
+// whether the result was marked isError.
+func (s *mcpSession) callTool(name string, args any) (text []string, isError bool) {
+	s.t.Helper()
+	raw := s.call("tools/call", map[string]any{"name": name, "arguments": args})
+	var result struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		IsError bool `json:"isError"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		s.t.Fatalf("bad tool result %q: %v", raw, err)
+	}
+	for _, c := range result.Content {
+		text = append(text, c.Text)
+	}
+	return text, result.IsError
+}
+
+// callToolText is callTool for the common case: exactly one content block.
+func (s *mcpSession) callToolText(name string, args any) (text string, isError bool) {
+	s.t.Helper()
+	parts, isError := s.callTool(name, args)
+	return strings.Join(parts, "\n"), isError
+}
+
+func TestMCPInitializeHandshake(t *testing.T) {
+	ve := newVault(t)
+	s := startMCP(t, ve)
+	raw := s.initialize()
+	var res struct {
+		ProtocolVersion string `json:"protocolVersion"`
+		ServerInfo      struct {
+			Name string `json:"name"`
+		} `json:"serverInfo"`
+		Capabilities struct {
+			Tools map[string]any `json:"tools"`
+		} `json:"capabilities"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.ProtocolVersion != "2025-06-18" {
+		t.Fatalf("protocolVersion not negotiated: %s", res.ProtocolVersion)
+	}
+	if res.ServerInfo.Name != "claudepass" {
+		t.Fatalf("serverInfo.name: %s", res.ServerInfo.Name)
+	}
+	if res.Capabilities.Tools == nil {
+		t.Fatalf("capabilities.tools missing: %s", raw)
+	}
+}
+
+func TestMCPToolsListShowsThreeTools(t *testing.T) {
+	ve := newVault(t)
+	s := startMCP(t, ve)
+	s.initialize()
+	raw := s.call("tools/list", nil)
+	var res struct {
+		Tools []struct {
+			Name        string         `json:"name"`
+			Description string         `json:"description"`
+			InputSchema map[string]any `json:"inputSchema"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Tools) != 3 {
+		t.Fatalf("want 3 tools, got %d: %s", len(res.Tools), raw)
+	}
+	names := map[string]bool{}
+	for _, tool := range res.Tools {
+		names[tool.Name] = true
+		if tool.Description == "" || tool.InputSchema == nil {
+			t.Fatalf("tool %s missing description/inputSchema: %s", tool.Name, raw)
+		}
+	}
+	for _, want := range []string{"list_handles", "run_with_secrets", "capture"} {
+		if !names[want] {
+			t.Fatalf("tools/list missing %q: %s", want, raw)
+		}
+	}
+}
+
+// TestMCPRunWithSecretsSucceedsAndRedacts mirrors the CLI leak-suite
+// pattern (TestCaptureWithInjectsOtherHandles): HELPER_ECHO is set on the
+// process environment, not in argv, so Command Policy sees nothing to
+// refuse and Redaction alone must catch the value on its way out.
+func TestMCPRunWithSecretsSucceedsAndRedacts(t *testing.T) {
+	ve := newVault(t)
+	ve.add("stripe/live", secret)
+	s := startMCP(t, ve, "HELPER_ECHO=wrapped-$STRIPE_LIVE")
+	s.initialize()
+	parts, isError := s.callTool("run_with_secrets", map[string]any{
+		"command": []string{helperBin},
+		"handles": []string{"stripe/live"},
+	})
+	if isError {
+		t.Fatalf("run_with_secrets reported an error: %v", parts)
+	}
+	var out struct {
+		Stdout   string `json:"stdout"`
+		Stderr   string `json:"stderr"`
+		ExitCode int    `json:"exit_code"`
+	}
+	if err := json.Unmarshal([]byte(parts[0]), &out); err != nil {
+		t.Fatalf("bad result %q: %v", parts[0], err)
+	}
+	// A redaction notice is the expected second content block: it names
+	// the Handle and count, never the value.
+	if len(parts) > 1 && strings.Contains(parts[1], secret) {
+		t.Fatalf("redaction notice leaked the raw value: %s", parts[1])
+	}
+	if out.ExitCode != 0 {
+		t.Fatalf("exit_code: %d (stderr %q)", out.ExitCode, out.Stderr)
+	}
+	if strings.Contains(out.Stdout, secret) {
+		t.Fatalf("raw value in stdout: %s", out.Stdout)
+	}
+	if !strings.Contains(out.Stdout, "[REDACTED:stripe/live]") {
+		t.Fatalf("marker missing from stdout: %q", out.Stdout)
+	}
+}
+
+func TestMCPRunWithSecretsRefusesCommandPolicyViolation(t *testing.T) {
+	ve := newVault(t)
+	ve.add("stripe/live", secret)
+	s := startMCP(t, ve)
+	s.initialize()
+	text, isError := s.callToolText("run_with_secrets", map[string]any{
+		"command": []string{"env"},
+		"handles": []string{"stripe/live"},
+	})
+	if !isError {
+		t.Fatalf("want a Command Policy refusal, got success: %s", text)
+	}
+	if !strings.Contains(text, "refused") {
+		t.Fatalf("refusal message: %s", text)
+	}
+	if strings.Contains(text, secret) || strings.Contains(s.rawOut.String(), secret) {
+		t.Fatalf("refused command leaked the value: %s", text)
+	}
+}
+
+func TestMCPCaptureThenListHandles(t *testing.T) {
+	ve := newVault(t)
+	s := startMCP(t, ve)
+	s.initialize()
+	text, isError := s.callToolText("capture", map[string]any{
+		"handle":  "demo/token",
+		"command": []string{"sh", "-c", "echo tok_abcdef123456"},
+	})
+	if isError {
+		t.Fatalf("capture reported an error: %s", text)
+	}
+	var captured struct {
+		Handle string `json:"handle"`
+	}
+	if err := json.Unmarshal([]byte(text), &captured); err != nil {
+		t.Fatalf("bad capture result %q: %v", text, err)
+	}
+	if captured.Handle != "demo/token" {
+		t.Fatalf("handle: %s", captured.Handle)
+	}
+	if strings.Contains(text, "tok_") {
+		t.Fatalf("captured value leaked in tool result: %s", text)
+	}
+
+	listText, isError := s.callToolText("list_handles", map[string]any{})
+	if isError {
+		t.Fatalf("list_handles reported an error: %s", listText)
+	}
+	var listed struct {
+		Handles []string `json:"handles"`
+	}
+	if err := json.Unmarshal([]byte(listText), &listed); err != nil {
+		t.Fatalf("bad list_handles result %q: %v", listText, err)
+	}
+	found := false
+	for _, h := range listed.Handles {
+		if h == "demo/token" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("demo/token not listed: %v", listed.Handles)
+	}
+	if strings.Contains(s.rawOut.String(), "tok_abcdef123456") {
+		t.Fatal("raw captured value appeared in a JSON-RPC frame")
+	}
+}
+
+func TestMCPCaptureRejectsExistingHandle(t *testing.T) {
+	ve := newVault(t)
+	ve.add("demo/token", "already-here-value")
+	s := startMCP(t, ve)
+	s.initialize()
+	text, isError := s.callToolText("capture", map[string]any{
+		"handle":  "demo/token",
+		"command": []string{"sh", "-c", "echo tok_abcdef123456"},
+	})
+	if !isError || !strings.Contains(text, "already exists") {
+		t.Fatalf("want a collision error: %s", text)
+	}
+}
+
+func TestMCPRunWithSecretsUsesManifestWhenHandlesOmitted(t *testing.T) {
+	ve := newVault(t)
+	ve.add("a/one", "value-number-one")
+	repo := t.TempDir()
+	if r := ve.runIn(repo, nil, "manifest", "init"); r.code != 0 {
+		t.Fatalf("manifest init: %s", r)
+	}
+	if r := ve.runIn(repo, nil, "manifest", "add", "a/one"); r.code != 0 {
+		t.Fatalf("manifest add: %s", r)
+	}
+	s := startMCP(t, ve)
+	s.initialize()
+	text, isError := s.callToolText("run_with_secrets", map[string]any{
+		"command": []string{"sh", "-c", "echo present-$A_ONE" + "-ok"},
+		"cwd":     repo,
+	})
+	// The bound variable is referenced in a shell echo, so Command Policy
+	// refuses it — proving the Manifest's Handle really was resolved and
+	// bound (an unbound A_ONE would not trip the refusal at all).
+	if !isError || !strings.Contains(text, "refused") {
+		t.Fatalf("want a policy refusal proving the Manifest handle was bound: %s", text)
+	}
+}
+
+func TestMCPCommandRejectsExtraArgs(t *testing.T) {
+	ve := newVault(t)
+	r := ve.run(nil, "mcp", "extra")
+	if r.code != 2 || !strings.Contains(r.stderr, "usage") {
+		t.Fatalf("want usage error: %s", r)
+	}
+}
+
+// TestMCPRawValueNeverInAnyFrame drives a full session — initialize,
+// tools/list, a successful run_with_secrets, a refused one, a capture, and
+// a list_handles — and asserts the raw value of every Secret involved is
+// absent from every byte the server ever wrote to stdout across the whole
+// session, not only from the one response each other test happens to
+// check.
+func TestMCPRawValueNeverInAnyFrame(t *testing.T) {
+	ve := newVault(t)
+	ve.add("stripe/live", secret)
+	s := startMCP(t, ve, "HELPER_ECHO=wrapped-$STRIPE_LIVE")
+	s.initialize()
+	s.call("tools/list", nil)
+	s.callTool("run_with_secrets", map[string]any{"command": []string{helperBin}, "handles": []string{"stripe/live"}})
+	s.callTool("run_with_secrets", map[string]any{"command": []string{"env"}, "handles": []string{"stripe/live"}})
+	s.callTool("capture", map[string]any{"handle": "demo/token", "command": []string{"sh", "-c", "echo tok_abcdef123456"}})
+	s.callTool("list_handles", map[string]any{})
+
+	all := s.rawOut.String()
+	if strings.Contains(all, secret) {
+		t.Fatal("raw Secret value appeared in the JSON-RPC stream")
+	}
+	if strings.Contains(all, "tok_abcdef123456") {
+		t.Fatal("raw captured value appeared in the JSON-RPC stream")
+	}
+	if !strings.Contains(all, "[REDACTED:stripe/live]") {
+		t.Fatal("redaction marker missing from the stream")
+	}
+}

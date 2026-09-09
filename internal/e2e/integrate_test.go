@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,6 +102,37 @@ func TestIntegratePrintOutputsSnippetOnly(t *testing.T) {
 	}
 	if r.stderr != "" {
 		t.Fatalf("--print wrote to stderr: %s", r.stderr)
+	}
+}
+
+func TestIntegrateMCPPrintsJSONSnippet(t *testing.T) {
+	ve := newVault(t)
+	r := ve.runIn(t.TempDir(), nil, "integrate", "mcp")
+	if r.code != 0 {
+		t.Fatalf("integrate mcp: %s", r)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &cfg); err != nil {
+		t.Fatalf("snippet is not valid JSON: %v\n%s", err, r.stdout)
+	}
+	servers, ok := cfg["mcpServers"].(map[string]any)
+	if !ok {
+		t.Fatalf("snippet missing mcpServers: %s", r.stdout)
+	}
+	cp, ok := servers["claudepass"].(map[string]any)
+	if !ok || cp["command"] != "cpass" {
+		t.Fatalf("snippet missing a claudepass server entry running cpass: %s", r.stdout)
+	}
+	if r.stderr != "" {
+		t.Fatalf("integrate mcp wrote to stderr: %s", r.stderr)
+	}
+}
+
+func TestIntegrateMCPRejectsExtraArgs(t *testing.T) {
+	ve := newVault(t)
+	r := ve.runIn(t.TempDir(), nil, "integrate", "mcp", "extra")
+	if r.code != 2 {
+		t.Fatalf("expected ExitUsage for extra args: %s", r)
 	}
 }
 

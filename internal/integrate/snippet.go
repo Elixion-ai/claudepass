@@ -24,6 +24,22 @@ This project keeps Secrets in a ClaudePass Vault; you only ever see a Handle, ne
 - Before relying on a Secret being available, run ` + "`cpass manifest check`" + `; it exits non-zero and names any missing Handle.
 `
 
+// MCPSnippet is the JSON config for registering the ClaudePass MCP server
+// (`cpass mcp`) with an MCP-aware Agent: usable as-is for Claude Code's
+// `claude mcp add-json claudepass -` (piped on stdin), a project's
+// `.mcp.json`, or adapted into Codex's `mcp_servers` config. It is printed,
+// never written to a file, since every client keeps its config somewhere
+// different.
+const MCPSnippet = `{
+  "mcpServers": {
+    "claudepass": {
+      "command": "cpass",
+      "args": ["mcp"]
+    }
+  }
+}
+`
+
 // section is the full delimited block written into a target file: a begin
 // marker, the Snippet, and an end marker, each on its own line.
 func section() string {
