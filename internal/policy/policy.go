@@ -74,10 +74,9 @@ var (
 		"tac": true, "rev": true, "sort": true, "uniq": true, "cut": true, "awk": true, "sed": true,
 		"grep": true, "jq": true, "yq": true, "dd": true, "install": true, "rsync": true, "scp": true,
 	}
-	dumpBuiltins = map[string]bool{"set": true, "export": true, "declare": true, "typeset": true, "compgen": true, "env": true}
-	procEnviron  = regexp.MustCompile(`/proc/(self|\$\$|[0-9]+|[a-z]*\$[A-Za-z_{]*[}]?)/environ`)
-	varRef       = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)`)
-	assignment   = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)=(.*)$`)
+	procEnviron = regexp.MustCompile(`/proc/(self|\$\$|[0-9]+|[a-z]*\$[A-Za-z_{]*[}]?)/environ`)
+	varRef      = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)`)
+	assignment  = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)=(.*)$`)
 )
 
 func base(s string) string { return filepath.Base(s) }

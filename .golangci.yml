@@ -1,0 +1,28 @@
+# Small, deliberately unopinionated golangci-lint config for CLA-18.
+#
+# linters.default: standard enables golangci-lint's own default set:
+# govet, ineffassign, staticcheck, unused, errcheck. errcheck is disabled
+# here because it currently flags ~80 pre-existing `fmt.Fprint*` and
+# deferred `Close` calls across the CLI package (idiomatic for a small CLI
+# writing to its own stdout/stderr) — enabling it is tracked separately
+# so it doesn't block wiring up CI in the first place; see CLA-4 follow-up.
+#
+# yaml-language-server: $schema=https://golangci-lint.run/jsonschema/golangci.jsonschema.json
+version: "2"
+
+run:
+  timeout: 5m
+  # internal/cli/testhooks_on.go (the e2e test-hook shims) only builds
+  # under this tag; lint it the same way `go vet -tags e2e ./...` does so
+  # it isn't silently skipped.
+  build-tags:
+    - e2e
+
+linters:
+  default: standard
+  disable:
+    - errcheck
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

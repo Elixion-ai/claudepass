@@ -1,0 +1,128 @@
+name: ci
+
+# Build, vet, lint and test on every push and PR, on both platforms cpass
+# ships for (ADR-0007). This is the check CLA-18 asks to make required on
+# main; release.yml (tag-triggered) is a separate workflow. See CLAUDE.md /
+# CONTEXT.md for the vocabulary (Secret, Handle, Broker, Redaction, ...)
+# this comment and the smoke test below rely on.
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - main
+
+# Cancel a stale run for the same ref when new commits land on it.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    # The matrix leg name (e.g. "build-and-test (ubuntu-latest)") is the
+    # status-check context to mark required on main once this workflow has
+    # run at least once — see the branch-protection note below.
+    name: build-and-test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          # actions/setup-go caches $GOMODCACHE and the build cache keyed
+          # on go.sum, so `go build`/`go vet`/`go test` below don't
+          # redownload modules every run.
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: gofmt
+        shell: bash
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "$unformatted"
+            echo "::error::gofmt found unformatted files — run 'gofmt -w .'"
+            exit 1
+          fi
+
+      - name: go vet (with the e2e tag, so the test-hook shims are checked too)
+        run: go vet -tags e2e ./...
+
+      - name: go build
+        # -o bin/ (a directory) with the ./... pattern places every command
+        # package's binary under bin/ instead of littering the repo root;
+        # cmd/cpass/bin/cpass is what the smoke test below runs.
+        run: go build -o bin/ ./...
+
+      - name: golangci-lint
+        # NOT the `curl .../install.sh | sh` one-liner some docs suggest:
+        # that script has a live checksum-matching bug on this exact
+        # release (it compares the downloaded .tar.gz against the
+        # adjacent .tar.gz.sbom.json entry in checksums.txt and always
+        # rejects it) — reproduced locally while writing this workflow.
+        # The action downloads the same GitHub release asset through
+        # actions/toolkit's tool-cache instead, which doesn't go through
+        # that code path.
+        uses: golangci/golangci-lint-action@v9.3.0
+        with:
+          version: v2.13.2
+
+      - name: go test -race (unit tests, e2e suite, and the leak suite)
+        # internal/e2e builds cpass and the helper binary itself (with
+        # -tags e2e) and drives them as subprocesses — this one command is
+        # what runs the entire internal/e2e/leak_test.go suite (every known
+        # reveal path from ADR-0002 / CLA-21) plus, on ubuntu-latest, the
+        # Broker-process unlock path from internal/e2e/unlock_test.go
+        # (CLA-8): UseKeychain() is only true on darwin, so the Linux leg
+        # exercises the socket Broker with no extra flags needed. On
+        # macos-latest, TestKeychainUnlockRoundTrip exercises the real
+        # login Keychain (a throwaway service name, never "cpass").
+        run: go test -race -count=1 ./...
+
+      - name: cpass run smoke test (CPASS_CI=1, no Vault)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cpass="$PWD/bin/cpass"
+          project="$(mktemp -d)"
+          home="$(mktemp -d)"
+
+          cd "$project"
+          "$cpass" manifest init
+          "$cpass" manifest add ci/smoke --binding CPASS_CI_SMOKE_VALUE
+
+          # CPASS_CI=1 forces CI mode (broker.CIMode): Handles resolve from
+          # the environment the Manifest names, never from a Vault. No
+          # CPASS_KEY is set and CPASS_HOME points at a directory that is
+          # never given a vault.cpv, so a Vault read here would fail loudly
+          # rather than silently succeed — proving the Manifest path is
+          # really what ran.
+          export CPASS_HOME="$home"
+          export CPASS_CI=1
+          export CPASS_CI_SMOKE_VALUE="smoke-test-value"
+
+          "$cpass" manifest check
+          "$cpass" run -- true
+
+          if [ -e "$home/vault.cpv" ]; then
+            echo "::error::CI-mode run touched a Vault file; it should only read the environment"
+            exit 1
+          fi
+          echo "ok: cpass run resolved the Manifest from the environment with no Vault"
+
+# Branch protection (a repo setting, not expressible in this file): once
+# this workflow has run on main at least once, require both
+# "build-and-test (macos-latest)" and "build-and-test (ubuntu-latest)" as
+# status checks on main. Left for a human/owner action — see CLA-18's
+# agent summary for why (this team pushes to main directly rather than
+# through PRs, and turning this on before a check has ever reported risks
+# rejecting that very push).
