@@ -70,13 +70,14 @@ func cmdAdd(e *env) int {
 	binding := fs.String("binding", "", "environment variable name (default derived from the Handle)")
 	file := fs.Bool("file", false, "bind as a temp file whose path is placed in the variable")
 	exposed := fs.Bool("exposed", false, "the value has already been seen by an Agent; store it flagged for rotation")
-	if err := fs.Parse(e.args); err != nil {
+	pos, err := parseInterspersed(fs, e.args)
+	if err != nil {
 		return ExitUsage
 	}
-	if fs.NArg() != 1 {
+	if len(pos) != 1 {
 		return e.fail(ExitUsage, "usage: cpass add <handle> [--binding NAME] [--file] [--exposed]")
 	}
-	handle := fs.Arg(0)
+	handle := pos[0]
 	if err := vault.ValidateHandle(handle); err != nil {
 		return e.failErr(err)
 	}

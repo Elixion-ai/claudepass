@@ -3,6 +3,7 @@ package cli
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -73,6 +74,23 @@ func usage(w io.Writer) {
 		fmt.Fprintf(w, "  %-10s %s\n", n, commands[n].summary)
 	}
 	fmt.Fprintf(w, "  %-10s %s\n", "version", "print the version")
+}
+
+// parseInterspersed parses flags that may appear before or after positional
+// arguments (Go's flag package stops at the first positional).
+func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
+	var positional []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			return positional, nil
+		}
+		positional = append(positional, rest[0])
+		args = rest[1:]
+	}
 }
 
 // fail prints a one-line error and returns the exit code.

@@ -71,10 +71,33 @@ func OpenVault() (*vault.Vault, error) {
 	return vault.Open(p, key)
 }
 
+// EnvCI forces CI mode: Handles resolve from the environment, no Vault.
+const EnvCI = "CPASS_CI"
+
+// CIMode reports whether Handles resolve from the environment instead of a
+// Vault: CPASS_CI=1, or CI=true with no Vault file present.
+func CIMode() bool {
+	if os.Getenv(EnvCI) == "1" {
+		return true
+	}
+	if os.Getenv(EnvCI) == "0" {
+		return false
+	}
+	if os.Getenv("CI") == "true" {
+		if p, err := VaultPath(); err == nil && !vault.Exists(p) {
+			return true
+		}
+	}
+	return false
+}
+
 // Ref names a Handle to inject, with an optional Binding-name override.
 type Ref struct {
 	Handle   string
 	Override string // environment variable name; empty keeps the Handle's default
+	// Declared is the Manifest's Binding for this Handle, if any. It wins
+	// over the Vault's default Binding and is the only source in CI mode.
+	Declared vault.Binding
 }
 
 // ParseRef parses "handle" or "handle:BINDING".
@@ -91,6 +114,29 @@ func ParseRef(s string) (Ref, error) {
 
 var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+func resolveFromEnv(refs []Ref) ([]Resolved, error) {
+	out := make([]Resolved, 0, len(refs))
+	for _, r := range refs {
+		name := r.Override
+		if name == "" {
+			name = r.Declared.Name
+		}
+		if name == "" {
+			name = vault.DefaultBindingName(r.Handle)
+		}
+		val, ok := os.LookupEnv(name)
+		if !ok {
+			return nil, fmt.Errorf("CI mode: %s expects %s in the environment", r.Handle, name)
+		}
+		kind := r.Declared.Kind
+		if kind == "" {
+			kind = vault.BindEnv
+		}
+		out = append(out, Resolved{Handle: r.Handle, Value: val, Binding: vault.Binding{Kind: kind, Name: name}})
+	}
+	return out, nil
+}
+
 // Resolved is a Secret ready to inject.
 type Resolved struct {
 	Handle  string
@@ -100,10 +146,15 @@ type Resolved struct {
 }
 
 // Resolve turns Refs into Secrets. It fails on the first missing Handle,
-// naming it and nothing else.
+// naming it and nothing else. In CI mode each Handle resolves from the
+// environment variable named by its Binding; refs must then carry the
+// Binding (Override or Kind/Name via ResolveWithBindings).
 func Resolve(refs []Ref) ([]Resolved, error) {
 	if len(refs) == 0 {
 		return nil, nil
+	}
+	if CIMode() {
+		return resolveFromEnv(refs)
 	}
 	v, err := OpenVault()
 	if err != nil {
@@ -116,6 +167,12 @@ func Resolve(refs []Ref) ([]Resolved, error) {
 			return nil, fmt.Errorf("no such handle: %s", r.Handle)
 		}
 		b := e.Binding
+		if r.Declared.Name != "" {
+			b.Name = r.Declared.Name
+		}
+		if r.Declared.Kind != "" {
+			b.Kind = r.Declared.Kind
+		}
 		if r.Override != "" {
 			b.Name = r.Override
 		}

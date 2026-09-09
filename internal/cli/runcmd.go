@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"claudepass/internal/broker"
+	"claudepass/internal/manifest"
 	"claudepass/internal/policy"
 	"claudepass/internal/run"
 )
@@ -32,14 +33,35 @@ func cmdRun(e *env) int {
 	if len(argv) == 0 {
 		return e.fail(ExitUsage, "usage: cpass run [--with handle[:VAR]]... -- <command> [args]")
 	}
-	refs := make([]broker.Ref, 0, len(with))
+	var refs []broker.Ref
+	if p, err := manifest.Find("."); err == nil {
+		m, err := manifest.Load(p)
+		if err != nil {
+			return e.failErr(err)
+		}
+		for _, en := range m.Entries {
+			refs = append(refs, broker.Ref{Handle: en.Handle, Declared: en.Binding})
+		}
+	} else if !errors.Is(err, manifest.ErrNotFound) {
+		return e.failErr(err)
+	}
 	for _, w := range with {
 		r, err := broker.ParseRef(w)
 		if err != nil {
 			return e.failErr(err)
 		}
-		refs = append(refs, r)
+		replaced := false
+		for i := range refs {
+			if refs[i].Handle == r.Handle {
+				refs[i].Override = r.Override
+				replaced = true
+			}
+		}
+		if !replaced {
+			refs = append(refs, r)
+		}
 	}
+
 	if *unsafe && !e.humanPresent() {
 		return e.fail(ExitRefused, "--unsafe-allow needs a terminal: only a human may skip Command Policy")
 	}
