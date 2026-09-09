@@ -23,6 +23,9 @@ type Var struct {
 type Input struct {
 	Argv  []string
 	Bound []Var
+	// ProtectedDirs are directories (file-Binding run dirs) that readers
+	// may not reference by literal path.
+	ProtectedDirs []string
 }
 
 // Refusal explains why a command was refused. It is an error so the run
@@ -36,7 +39,7 @@ func (r *Refusal) Error() string { return "refused: " + r.Rule + " — " + r.Adv
 
 // Evaluate returns nil when the command may run, or a *Refusal.
 func Evaluate(in Input) error {
-	ev := &evaluator{bound: map[string]vault.BindingKind{}, tainted: map[string]bool{}}
+	ev := &evaluator{bound: map[string]vault.BindingKind{}, tainted: map[string]bool{}, protected: in.ProtectedDirs}
 	for _, v := range in.Bound {
 		ev.bound[v.Name] = v.Kind
 	}
@@ -44,8 +47,18 @@ func Evaluate(in Input) error {
 }
 
 type evaluator struct {
-	bound   map[string]vault.BindingKind
-	tainted map[string]bool // shell variables assigned from a bound variable
+	bound     map[string]vault.BindingKind
+	tainted   map[string]bool // shell variables assigned from a bound variable
+	protected []string
+}
+
+func (ev *evaluator) underProtected(w string) bool {
+	for _, d := range ev.protected {
+		if d != "" && strings.HasPrefix(w, d+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 const maxDepth = 8
@@ -81,6 +94,13 @@ func (ev *evaluator) argv(argv []string, depth int) error {
 		}
 	}
 	prog := base(argv[0])
+	if readers[prog] {
+		for _, w := range argv[1:] {
+			if ev.underProtected(w) {
+				return &Refusal{Rule: prog + " would print a Secret file", Advice: "pass the path to the tool that needs the file instead"}
+			}
+		}
+	}
 	switch {
 	case revealPrograms[prog]:
 		return &Refusal{Rule: prog + " prints environment variables", Advice: "pass the variable to the tool that needs it instead"}
@@ -235,6 +255,9 @@ func (ev *evaluator) simple(words []word, depth int) error {
 		for _, a := range args {
 			if v := ev.referencesFile(a.raw); v != "" {
 				return &Refusal{Rule: fmt.Sprintf("%s would print the file behind $%s", prog, v), Advice: "pass the path to the tool that needs the file instead"}
+			}
+			if ev.underProtected(a.raw) {
+				return &Refusal{Rule: prog + " would print a Secret file", Advice: "pass the path to the tool that needs the file instead"}
 			}
 		}
 	}

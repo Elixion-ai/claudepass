@@ -81,6 +81,22 @@ func TestEvaluate(t *testing.T) {
 	}
 }
 
+func TestProtectedDirs(t *testing.T) {
+	in := Input{Bound: bound, ProtectedDirs: []string{"/home/u/.config/claudepass/run"}}
+	in.Argv = []string{"cat", "/home/u/.config/claudepass/run/abc/gcp-sa"}
+	if Evaluate(in) == nil {
+		t.Fatal("literal path under run dir should be refused for a reader")
+	}
+	in.Argv = []string{"sh", "-c", "head -c 10 /home/u/.config/claudepass/run/abc/gcp-sa"}
+	if Evaluate(in) == nil {
+		t.Fatal("literal path in shell should be refused")
+	}
+	in.Argv = []string{"gcloud", "--key-file", "/home/u/.config/claudepass/run/abc/gcp-sa"}
+	if Evaluate(in) != nil {
+		t.Fatal("non-reader may use the path")
+	}
+}
+
 func TestSplitCommands(t *testing.T) {
 	cmds := splitCommands(`a "b c" 'd e' f\ g; h | i && j > out 2>&1; k $(l m) n`)
 	want := [][]string{{"a", "b c", "d e", "f g"}, {"h"}, {"i"}, {"j"}, {"k", "$(l m)", "n"}}

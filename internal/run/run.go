@@ -47,8 +47,9 @@ func Run(spec Spec) (int, error) {
 	if err != nil {
 		return 1, err
 	}
+	root, _ := runRoot()
 	if !spec.UnsafeAllow {
-		in := policy.Input{Argv: spec.Argv}
+		in := policy.Input{Argv: spec.Argv, ProtectedDirs: []string{root}}
 		for _, s := range secrets {
 			in.Bound = append(in.Bound, policy.Var{Name: s.Binding.Name, Kind: s.Binding.Kind})
 		}
@@ -58,11 +59,26 @@ func Run(spec Spec) (int, error) {
 	}
 	env := os.Environ()
 	var patterns []redact.Pattern
+	var dir *runDir
+	defer func() { dir.destroy() }()
 	for _, s := range secrets {
-		if s.Binding.Kind != vault.BindEnv {
-			return 1, fmt.Errorf("%s has a file Binding, which cpass run does not support yet", s.Handle)
+		switch s.Binding.Kind {
+		case vault.BindFile:
+			if dir == nil {
+				d, err := newRunDir()
+				if err != nil {
+					return 1, err
+				}
+				dir = d
+			}
+			path, err := dir.add(s.Handle, s.Value)
+			if err != nil {
+				return 1, err
+			}
+			env = setEnv(env, s.Binding.Name, path)
+		default:
+			env = setEnv(env, s.Binding.Name, s.Value)
 		}
-		env = setEnv(env, s.Binding.Name, s.Value)
 		patterns = append(patterns, redact.Variants(s.Handle, s.Value)...)
 		if s.Exposed && spec.Warn != nil {
 			fmt.Fprintf(spec.Warn, "cpass: %s is Exposed, rotate it\n", s.Handle)
@@ -86,6 +102,7 @@ func Run(spec Spec) (int, error) {
 	stop := forwardSignals(cmd.Process)
 	err = cmd.Wait()
 	stop()
+	dir.destroy()
 	stdout.Close()
 	stderr.Close()
 	if spec.Warn != nil {
