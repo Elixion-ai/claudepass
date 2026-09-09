@@ -9,7 +9,7 @@ import (
 // license tokens offline. Generated once with `go run
 // ./internal/license/cmd/keygen`; the matching private key is not in this
 // repository — see that command's doc comment for where it lives.
-const PublicKeyBase64 = "7mjfYSUPR8yCtHnKqpEb2s1/aew1iHq1zxUGgCIg9pg="
+const PublicKeyBase64 = "xzVpCa8P1lBh7U27rQdCJvw7341XBB0E+xvVirQEx4o="
 
 // trustedPublicKey is decoded from PublicKeyBase64 by this package-level
 // var initializer, which the Go spec guarantees runs before any init()
