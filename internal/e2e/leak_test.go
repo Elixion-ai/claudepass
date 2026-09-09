@@ -143,8 +143,12 @@ func TestThroughput10MB(t *testing.T) {
 	if r.code != 0 || len(r.stdout) < 10485760 {
 		t.Fatalf("blast: exit %d, %d bytes", r.code, len(r.stdout))
 	}
-	if el > 2*time.Second {
-		t.Fatalf("10MB took %v, want < 2s", el)
+	bound := 2 * time.Second
+	if raceEnabled {
+		bound = 15 * time.Second
+	}
+	if el > bound {
+		t.Fatalf("10MB took %v, want < %v", el, bound)
 	}
 	t.Logf("10MB through cpass run in %v", el)
 }

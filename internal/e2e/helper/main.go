@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strconv"
@@ -26,9 +27,11 @@ func main() {
 	}
 	if n, _ := strconv.Atoi(os.Getenv("HELPER_BLAST")); n > 0 {
 		line := []byte(strings.Repeat("x", 63) + "\n")
+		w := bufio.NewWriterSize(os.Stdout, 64*1024)
 		for written := 0; written < n; written += len(line) {
-			os.Stdout.Write(line)
+			w.Write(line)
 		}
+		w.Flush()
 	}
 	if s := os.Getenv("HELPER_ECHO"); s != "" {
 		fmt.Println(os.ExpandEnv(s))
