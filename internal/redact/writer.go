@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"sort"
 	"sync"
 	"time"
 )
@@ -27,14 +28,14 @@ type Writer struct {
 	dst      io.Writer
 	stream   string
 	patterns []Pattern
-	maxLen   int
-	first    [256]bool
+	ac       *automaton // nil when patterns is empty
 	onEvent  func(Event)
 
 	mu       sync.Mutex
 	held     []byte // suffix that may still complete a Pattern
 	heldAt   time.Time
 	timer    *time.Timer
+	matchBuf []acMatch // scratch, reused across scan calls
 	closed   bool
 	writeErr error
 }
@@ -52,11 +53,8 @@ const (
 // NewWriter wraps dst. stream names it in events ("stdout"/"stderr").
 func NewWriter(dst io.Writer, stream string, patterns []Pattern, onEvent func(Event)) *Writer {
 	w := &Writer{dst: dst, stream: stream, patterns: patterns, onEvent: onEvent}
-	for _, p := range patterns {
-		if len(p.Bytes) > w.maxLen {
-			w.maxLen = len(p.Bytes)
-		}
-		w.first[p.Bytes[0]] = true
+	if len(patterns) > 0 {
+		w.ac = buildAutomaton(patterns)
 	}
 	return w
 }
@@ -74,7 +72,12 @@ func (w *Writer) Write(p []byte) (int, error) {
 		w.timer.Stop()
 		w.timer = nil
 	}
-	buf := append(w.held, p...)
+	// The common case carries nothing over from the last Write: scan p
+	// directly rather than copying it onto an empty w.held first.
+	buf := p
+	if len(w.held) > 0 {
+		buf = append(w.held, p...)
+	}
 	w.held = nil
 	out, rest := w.scan(buf)
 	if len(out) > 0 {
@@ -97,62 +100,53 @@ func (w *Writer) Write(p []byte) (int, error) {
 
 // scan replaces complete matches in buf and returns the bytes safe to emit
 // and the suffix that must be held because it could still complete a match.
+//
+// A single Aho-Corasick walk (automaton.find) locates every occurrence of
+// every Pattern in one pass over buf, however many Secrets are loaded; scan
+// then resolves those (possibly overlapping) occurrences to the
+// leftmost-longest, non-overlapping set: at each position take the earliest
+// occurrence, and the longest of any that start there, exactly as the
+// original per-pattern bytes.Index loop did, but without repeating the scan
+// once per pattern.
 func (w *Writer) scan(buf []byte) (out, rest []byte) {
-	if len(w.patterns) == 0 {
+	if w.ac == nil {
 		return buf, nil
 	}
+	w.matchBuf = w.ac.find(buf, w.matchBuf[:0])
+	if len(w.matchBuf) == 0 {
+		// Nothing matched: no marker to write, so skip the copy entirely and
+		// just find how much of the end must be held back.
+		hold := w.ac.partialLen(buf)
+		return buf[:len(buf)-hold], buf[len(buf)-hold:]
+	}
+	sort.Slice(w.matchBuf, func(i, j int) bool {
+		a, b := w.matchBuf[i], w.matchBuf[j]
+		if a.start != b.start {
+			return a.start < b.start
+		}
+		if a.length != b.length {
+			return a.length > b.length // longest wins ties on the same start
+		}
+		return a.pidx < b.pidx // stable: first pattern in list order wins
+	})
 	var res bytes.Buffer
-	i := 0
-	for i < len(buf) {
-		// Find the leftmost match at or after i, longest wins on ties.
-		mi, mp := -1, -1
-		for pi := range w.patterns {
-			pb := w.patterns[pi].Bytes
-			j := bytes.Index(buf[i:], pb)
-			if j < 0 {
-				continue
-			}
-			j += i
-			if mi < 0 || j < mi || (j == mi && len(pb) > len(w.patterns[mp].Bytes)) {
-				mi, mp = j, pi
-			}
+	cursor := 0
+	for _, m := range w.matchBuf {
+		if m.start < cursor {
+			continue // overlaps a match already emitted
 		}
-		if mi < 0 {
-			break
-		}
-		res.Write(buf[i:mi])
-		pat := w.patterns[mp]
+		res.Write(buf[cursor:m.start])
+		pat := w.patterns[m.pidx]
 		res.Write(Marker(pat.Handle))
 		if w.onEvent != nil {
 			w.onEvent(Event{Handle: pat.Handle, Encoding: pat.Encoding, Stream: w.stream})
 		}
-		i = mi + len(pat.Bytes)
+		cursor = m.start + m.length
 	}
-	tail := buf[i:]
-	hold := w.partialAt(tail)
+	tail := buf[cursor:]
+	hold := w.ac.partialLen(tail)
 	res.Write(tail[:len(tail)-hold])
 	return res.Bytes(), tail[len(tail)-hold:]
-}
-
-// partialAt returns the length of the longest suffix of tail that is a
-// proper prefix of some Pattern.
-func (w *Writer) partialAt(tail []byte) int {
-	start := len(tail) - (w.maxLen - 1)
-	if start < 0 {
-		start = 0
-	}
-	for i := start; i < len(tail); i++ {
-		if !w.first[tail[i]] {
-			continue
-		}
-		suffix := tail[i:]
-		for _, p := range w.patterns {
-			if len(p.Bytes) > len(suffix) && bytes.HasPrefix(p.Bytes, suffix) {
-				return len(suffix)
-			}
-		}
-	}
-	return 0
 }
 
 func (w *Writer) idleFlush() {

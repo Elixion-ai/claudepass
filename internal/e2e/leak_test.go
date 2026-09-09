@@ -159,3 +159,40 @@ func TestThroughput10MB(t *testing.T) {
 	}
 	t.Logf("10MB through cpass run in %v", el)
 }
+
+// TestThroughput10MBTenManifestHandles is the multi-Secret companion to
+// TestThroughput10MB: a Manifest with 10 Handles means the Redactor holds
+// ~10x the Patterns (every variant of every Handle), all live for the same
+// stream at once. It must still push 10MB through cpass run in under a
+// second: the single-pass automaton, not a scan repeated per Pattern.
+func TestThroughput10MBTenManifestHandles(t *testing.T) {
+	ve := newVault(t)
+	for i := 0; i < 10; i++ {
+		d := string(rune('0' + i))
+		ve.add("secret/"+d, leakVal+"_"+d)
+	}
+	repo := t.TempDir()
+	if r := ve.runIn(repo, nil, "manifest", "init"); r.code != 0 {
+		t.Fatalf("manifest init: %s", r)
+	}
+	for i := 0; i < 10; i++ {
+		d := string(rune('0' + i))
+		if r := ve.runIn(repo, nil, "manifest", "add", "secret/"+d); r.code != 0 {
+			t.Fatalf("manifest add secret/%s: %s", d, r)
+		}
+	}
+	start := time.Now()
+	r := ve.runIn(repo, []string{"HELPER_BLAST=10485760"}, "run", "--", helperBin)
+	el := time.Since(start)
+	if r.code != 0 || len(r.stdout) < 10485760 {
+		t.Fatalf("blast: exit %d, %d bytes", r.code, len(r.stdout))
+	}
+	bound := time.Second
+	if raceEnabled {
+		bound = 10 * time.Second
+	}
+	if el > bound {
+		t.Fatalf("10MB through cpass run with 10 Manifest Handles took %v, want < %v", el, bound)
+	}
+	t.Logf("10MB through cpass run with 10 Manifest Handles in %v", el)
+}
