@@ -32,6 +32,12 @@ type Spec struct {
 	Warn io.Writer
 	// UnsafeAllow skips Command Policy. The CLI only sets it for a human.
 	UnsafeAllow bool
+	// RawStdout writes the child's stdout to Stdout unredacted, bypassing the
+	// Redactor entirely. cpass capture sets this: stdout is stored directly
+	// as a new Secret rather than shown to an Agent, so there is nothing to
+	// redact it from and redacting it would corrupt the captured value.
+	// Stderr is still redacted and Command Policy still applies.
+	RawStdout bool
 }
 
 // ErrNoCommand is returned when Argv is empty.
@@ -89,7 +95,12 @@ func Run(spec Spec) (int, error) {
 		logPath = filepath.Join(home, "redactions.log")
 	}
 	rlog := redact.NewLog(logPath, filepath.Base(spec.Argv[0]))
-	stdout := redact.NewWriter(spec.Stdout, "stdout", patterns, rlog.Record)
+	var stdout io.WriteCloser
+	if spec.RawStdout {
+		stdout = nopWriteCloser{spec.Stdout}
+	} else {
+		stdout = redact.NewWriter(spec.Stdout, "stdout", patterns, rlog.Record)
+	}
 	stderr := redact.NewWriter(spec.Stderr, "stderr", patterns, rlog.Record)
 
 	cmd := exec.Command(spec.Argv[0], spec.Argv[1:]...)
@@ -118,6 +129,12 @@ func Run(spec Spec) (int, error) {
 	}
 	return exitCode(err), nil
 }
+
+// nopWriteCloser adapts an io.Writer to io.WriteCloser with a no-op Close,
+// so RawStdout can share the same shutdown path as the redacted writers.
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
 
 func setEnv(env []string, name, value string) []string {
 	prefix := name + "="
