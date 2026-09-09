@@ -15,6 +15,7 @@ import (
 	"sort"
 
 	"claudepass/internal/broker"
+	"claudepass/internal/policy"
 	"claudepass/internal/redact"
 	"claudepass/internal/vault"
 )
@@ -29,6 +30,8 @@ type Spec struct {
 	Stderr io.Writer
 	// Warn receives one-line notices for the human (e.g. Exposed reminders).
 	Warn io.Writer
+	// UnsafeAllow skips Command Policy. The CLI only sets it for a human.
+	UnsafeAllow bool
 }
 
 // ErrNoCommand is returned when Argv is empty.
@@ -43,6 +46,15 @@ func Run(spec Spec) (int, error) {
 	secrets, err := broker.Resolve(spec.Refs)
 	if err != nil {
 		return 1, err
+	}
+	if !spec.UnsafeAllow {
+		in := policy.Input{Argv: spec.Argv}
+		for _, s := range secrets {
+			in.Bound = append(in.Bound, policy.Var{Name: s.Binding.Name, Kind: s.Binding.Kind})
+		}
+		if err := policy.Evaluate(in); err != nil {
+			return 3, err
+		}
 	}
 	env := os.Environ()
 	var patterns []redact.Pattern

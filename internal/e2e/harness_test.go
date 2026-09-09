@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -28,7 +29,7 @@ func TestMain(m *testing.M) {
 	cpassBin = filepath.Join(dir, "cpass")
 	helperBin = filepath.Join(dir, "helper")
 	for _, b := range [][2]string{{cpassBin, "claudepass/cmd/cpass"}, {helperBin, "claudepass/internal/e2e/helper"}} {
-		cmd := exec.Command("go", "build", "-o", b[0], b[1])
+		cmd := exec.Command("go", "build", "-tags", "e2e", "-o", b[0], b[1])
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			panic("build " + b[1] + ": " + err.Error())
@@ -77,8 +78,35 @@ func (ve *vaultEnv) run(stdin []byte, args ...string) result {
 }
 
 func (ve *vaultEnv) runEnv(extra []string, stdin []byte, args ...string) result {
+	return ve.runBin(cpassBin, extra, stdin, args...)
+}
+
+// buildRelease builds cpass without the e2e tag, once per test binary.
+func buildRelease(t *testing.T) string {
+	t.Helper()
+	releaseOnce.Do(func() {
+		releaseBin = filepath.Join(filepath.Dir(cpassBin), "cpass-release")
+		cmd := exec.Command("go", "build", "-o", releaseBin, "claudepass/cmd/cpass")
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			releaseErr = err
+		}
+	})
+	if releaseErr != nil {
+		t.Fatal(releaseErr)
+	}
+	return releaseBin
+}
+
+var (
+	releaseOnce sync.Once
+	releaseBin  string
+	releaseErr  error
+)
+
+func (ve *vaultEnv) runBin(bin string, extra []string, stdin []byte, args ...string) result {
 	ve.t.Helper()
-	cmd := exec.Command(cpassBin, args...)
+	cmd := exec.Command(bin, args...)
 	cmd.Env = append(baseEnv(), "CPASS_HOME="+ve.home, "CPASS_KEY="+ve.key)
 	cmd.Env = append(cmd.Env, extra...)
 	if stdin != nil {

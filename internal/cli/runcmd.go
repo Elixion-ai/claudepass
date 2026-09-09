@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"claudepass/internal/broker"
+	"claudepass/internal/policy"
 	"claudepass/internal/run"
 )
 
@@ -23,6 +24,7 @@ func cmdRun(e *env) int {
 	fs.SetOutput(e.stderr)
 	var with multiFlag
 	fs.Var(&with, "with", "Handle to inject, optionally with a Binding override (handle:VAR); repeatable")
+	unsafe := fs.Bool("unsafe-allow", false, "skip Command Policy (humans only; refused without a terminal)")
 	if err := fs.Parse(e.args); err != nil {
 		return ExitUsage
 	}
@@ -38,13 +40,20 @@ func cmdRun(e *env) int {
 		}
 		refs = append(refs, r)
 	}
+	if *unsafe && !e.humanPresent() {
+		return e.fail(ExitRefused, "--unsafe-allow needs a terminal: only a human may skip Command Policy")
+	}
 	code, err := run.Run(run.Spec{
-		Refs: refs, Argv: argv,
+		Refs: refs, Argv: argv, UnsafeAllow: *unsafe,
 		Stdin: e.stdin, Stdout: e.stdout, Stderr: e.stderr, Warn: e.stderr,
 	})
 	if err != nil {
 		if errors.Is(err, run.ErrNoCommand) {
 			return e.fail(ExitUsage, "%v", err)
+		}
+		var ref *policy.Refusal
+		if errors.As(err, &ref) {
+			return e.fail(ExitRefused, "%v", err)
 		}
 		return e.fail(code, "%v", err)
 	}

@@ -10,10 +10,21 @@ import (
 	"golang.org/x/term"
 )
 
-// EnvTestStdin lets tests feed a value on stdin where a human would type it.
-const EnvTestStdin = "CPASS_TEST_STDIN"
+// testStdin and testTTY are set only by the e2e build tag (see testhooks_on.go).
+var (
+	testStdin bool
+	testTTY   bool
+)
 
 func isTTY(f *os.File) bool { return term.IsTerminal(int(f.Fd())) }
+
+// humanPresent reports whether a human is at the other end of stdin.
+func (e *env) humanPresent() bool {
+	if testTTY {
+		return true
+	}
+	return isTerminal(e.stdin)
+}
 
 // readSecret reads a Secret value from a human. On a terminal it prompts with
 // echo off. Without a terminal it refuses, unless CPASS_TEST_STDIN=1, so an
@@ -28,7 +39,7 @@ func (e *env) readSecret(prompt string) (string, error) {
 		}
 		return string(b), nil
 	}
-	if os.Getenv(EnvTestStdin) == "1" {
+	if testStdin {
 		line, err := bufio.NewReader(e.stdin).ReadString('\n')
 		if err != nil && err != io.EOF {
 			return "", err

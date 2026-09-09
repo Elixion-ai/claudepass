@@ -11,8 +11,8 @@ import (
 
 // Every test here is one known reveal path. Each asserts that the raw value
 // never reaches stdout or stderr, and that a marker naming the Handle does.
-// Command Policy will later refuse several of these outright; Redaction
-// alone must already hold the line.
+// Command Policy refuses several of these outright, so they run with the
+// human-only --unsafe-allow override: Redaction alone must hold the line.
 
 const leakVal = "sk_live_LEAKTESTvalue0123456"
 
@@ -39,16 +39,23 @@ func assertRedacted(t *testing.T, r result, extraForbidden ...string) {
 	}
 }
 
+// sh runs a shell string under cpass run with Command Policy enforced.
 func sh(ve *vaultEnv, script string) result {
 	return ve.run(nil, "run", "--with", "stripe/live", "--", "sh", "-c", script)
 }
 
+// shUnsafe runs with Command Policy skipped (the human-only override),
+// so the leak tests exercise Redaction alone.
+func shUnsafe(ve *vaultEnv, script string) result {
+	return ve.runEnv([]string{"CPASS_TEST_TTY=1"}, nil, "run", "--unsafe-allow", "--with", "stripe/live", "--", "sh", "-c", script)
+}
+
 func TestLeakEchoVar(t *testing.T) {
-	assertRedacted(t, sh(leakVault(t), `echo "$STRIPE_LIVE"`))
+	assertRedacted(t, shUnsafe(leakVault(t), `echo "$STRIPE_LIVE"`))
 }
 
 func TestLeakEnvDump(t *testing.T) {
-	r := sh(leakVault(t), `env`)
+	r := shUnsafe(leakVault(t), `env`)
 	assertRedacted(t, r)
 	if !strings.Contains(r.stdout, "STRIPE_LIVE=[REDACTED:stripe/live]") {
 		t.Fatalf("env line should show the marker: %s", r)
@@ -56,38 +63,38 @@ func TestLeakEnvDump(t *testing.T) {
 }
 
 func TestLeakPrintenv(t *testing.T) {
-	assertRedacted(t, sh(leakVault(t), `printenv STRIPE_LIVE`))
+	assertRedacted(t, shUnsafe(leakVault(t), `printenv STRIPE_LIVE`))
 }
 
 func TestLeakBase64Pipeline(t *testing.T) {
 	enc := base64.StdEncoding.EncodeToString([]byte(leakVal + "\n"))
-	r := sh(leakVault(t), `echo "$STRIPE_LIVE" | base64`)
+	r := shUnsafe(leakVault(t), `echo "$STRIPE_LIVE" | base64`)
 	assertRedacted(t, r, enc)
 	// Embedded in a longer string: every base64 alignment.
 	for _, prefix := range []string{"a", "ab", "abc"} {
 		enc := base64.StdEncoding.EncodeToString([]byte(prefix + leakVal + "\n"))
-		r := sh(leakVault(t), `printf '`+prefix+`%s\n' "$STRIPE_LIVE" | base64`)
+		r := shUnsafe(leakVault(t), `printf '`+prefix+`%s\n' "$STRIPE_LIVE" | base64`)
 		assertRedacted(t, r, enc)
 	}
 }
 
 func TestLeakHex(t *testing.T) {
-	r := sh(leakVault(t), `printf %s "$STRIPE_LIVE" | od -An -tx1 | tr -d ' \n'; echo`)
+	r := shUnsafe(leakVault(t), `printf %s "$STRIPE_LIVE" | od -An -tx1 | tr -d ' \n'; echo`)
 	assertRedacted(t, r)
 }
 
 func TestLeakJSONErrorBody(t *testing.T) {
-	r := sh(leakVault(t), `printf '{"error":"invalid key %s provided","code":401}\n' "$STRIPE_LIVE"`)
+	r := shUnsafe(leakVault(t), `printf '{"error":"invalid key %s provided","code":401}\n' "$STRIPE_LIVE"`)
 	assertRedacted(t, r)
 }
 
 func TestLeakURLEncodedLogLine(t *testing.T) {
-	r := sh(leakVault(t), `printf 'GET /v1/charges?key=%s HTTP/1.1\n' "$STRIPE_LIVE"`)
+	r := shUnsafe(leakVault(t), `printf 'GET /v1/charges?key=%s HTTP/1.1\n' "$STRIPE_LIVE"`)
 	assertRedacted(t, r)
 }
 
 func TestLeakOnStderr(t *testing.T) {
-	r := sh(leakVault(t), `echo "fatal: auth failed for $STRIPE_LIVE" >&2`)
+	r := shUnsafe(leakVault(t), `echo "fatal: auth failed for $STRIPE_LIVE" >&2`)
 	assertRedacted(t, r)
 	if !strings.Contains(r.stderr, "[REDACTED:stripe/live]") {
 		t.Fatalf("marker should be on stderr: %s", r)
@@ -101,12 +108,12 @@ func TestLeakSplitAcrossWritesWithPause(t *testing.T) {
 }
 
 func TestLeakValueInsideLongerToken(t *testing.T) {
-	assertRedacted(t, sh(leakVault(t), `echo "Bearer ${STRIPE_LIVE}xyz"`))
+	assertRedacted(t, shUnsafe(leakVault(t), `echo "Bearer ${STRIPE_LIVE}xyz"`))
 }
 
 func TestRedactionLogAndNotice(t *testing.T) {
 	ve := leakVault(t)
-	r := sh(ve, `echo "$STRIPE_LIVE"; echo "$STRIPE_LIVE" >&2`)
+	r := shUnsafe(ve, `echo "$STRIPE_LIVE"; echo "$STRIPE_LIVE" >&2`)
 	assertRedacted(t, r)
 	if !strings.Contains(r.stderr, "redacted stripe/live from output (2×)") {
 		t.Fatalf("want notice: %s", r)
@@ -126,7 +133,7 @@ func TestRedactionLogAndNotice(t *testing.T) {
 
 func TestNoRedactionNoNoise(t *testing.T) {
 	ve := leakVault(t)
-	r := sh(ve, `echo hello`)
+	r := shUnsafe(ve, `echo hello`)
 	if r.stdout != "hello\n" || r.stderr != "" {
 		t.Fatalf("clean run should be silent: %s", r)
 	}
