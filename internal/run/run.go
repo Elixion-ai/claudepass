@@ -11,7 +11,11 @@ import (
 	"os/signal"
 	"syscall"
 
+	"path/filepath"
+	"sort"
+
 	"claudepass/internal/broker"
+	"claudepass/internal/redact"
 	"claudepass/internal/vault"
 )
 
@@ -41,25 +45,48 @@ func Run(spec Spec) (int, error) {
 		return 1, err
 	}
 	env := os.Environ()
+	var patterns []redact.Pattern
 	for _, s := range secrets {
 		if s.Binding.Kind != vault.BindEnv {
 			return 1, fmt.Errorf("%s has a file Binding, which cpass run does not support yet", s.Handle)
 		}
 		env = setEnv(env, s.Binding.Name, s.Value)
+		patterns = append(patterns, redact.Variants(s.Handle, s.Value)...)
 		if s.Exposed && spec.Warn != nil {
 			fmt.Fprintf(spec.Warn, "cpass: %s is Exposed, rotate it\n", s.Handle)
 		}
 	}
+	logPath := ""
+	if home, err := broker.Home(); err == nil {
+		logPath = filepath.Join(home, "redactions.log")
+	}
+	rlog := redact.NewLog(logPath, filepath.Base(spec.Argv[0]))
+	stdout := redact.NewWriter(spec.Stdout, "stdout", patterns, rlog.Record)
+	stderr := redact.NewWriter(spec.Stderr, "stderr", patterns, rlog.Record)
+
 	cmd := exec.Command(spec.Argv[0], spec.Argv[1:]...)
 	cmd.Env = env
 	cmd.Dir = spec.Dir
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = spec.Stdin, spec.Stdout, spec.Stderr
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = spec.Stdin, stdout, stderr
 	if err := cmd.Start(); err != nil {
 		return 127, fmt.Errorf("cannot start %s: %w", spec.Argv[0], err)
 	}
 	stop := forwardSignals(cmd.Process)
-	defer stop()
 	err = cmd.Wait()
+	stop()
+	stdout.Close()
+	stderr.Close()
+	if spec.Warn != nil {
+		counts := rlog.Counts()
+		handles := make([]string, 0, len(counts))
+		for h := range counts {
+			handles = append(handles, h)
+		}
+		sort.Strings(handles)
+		for _, h := range handles {
+			fmt.Fprintf(spec.Warn, "cpass: redacted %s from output (%d×); the Agent must use the value, not print it\n", h, counts[h])
+		}
+	}
 	return exitCode(err), nil
 }
 
