@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"claudepass/internal/vault"
 )
@@ -67,4 +69,57 @@ func OpenVault() (*vault.Vault, error) {
 		return nil, err
 	}
 	return vault.Open(p, key)
+}
+
+// Ref names a Handle to inject, with an optional Binding-name override.
+type Ref struct {
+	Handle   string
+	Override string // environment variable name; empty keeps the Handle's default
+}
+
+// ParseRef parses "handle" or "handle:BINDING".
+func ParseRef(s string) (Ref, error) {
+	h, name, _ := strings.Cut(s, ":")
+	if err := vault.ValidateHandle(h); err != nil {
+		return Ref{}, err
+	}
+	if name != "" && !envNameRe.MatchString(name) {
+		return Ref{}, fmt.Errorf("invalid binding name %q for %s", name, h)
+	}
+	return Ref{Handle: h, Override: name}, nil
+}
+
+var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// Resolved is a Secret ready to inject.
+type Resolved struct {
+	Handle  string
+	Value   string
+	Binding vault.Binding
+	Exposed bool
+}
+
+// Resolve turns Refs into Secrets. It fails on the first missing Handle,
+// naming it and nothing else.
+func Resolve(refs []Ref) ([]Resolved, error) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	v, err := OpenVault()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Resolved, 0, len(refs))
+	for _, r := range refs {
+		e, err := v.Get(r.Handle)
+		if err != nil {
+			return nil, fmt.Errorf("no such handle: %s", r.Handle)
+		}
+		b := e.Binding
+		if r.Override != "" {
+			b.Name = r.Override
+		}
+		out = append(out, Resolved{Handle: e.Handle, Value: e.Value, Binding: b, Exposed: e.Exposed})
+	}
+	return out, nil
 }

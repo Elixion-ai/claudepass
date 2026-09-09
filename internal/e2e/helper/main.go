@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 func main() {
@@ -20,6 +21,10 @@ func main() {
 	}
 	if s := os.Getenv("HELPER_STDERR"); s != "" {
 		fmt.Fprintln(os.Stderr, os.ExpandEnv(s))
+	}
+	if s := os.Getenv("HELPER_KILL"); s != "" {
+		n, _ := strconv.Atoi(s)
+		_ = syscall.Kill(os.Getpid(), syscall.Signal(n))
 	}
 	code := 0
 	if s := os.Getenv("HELPER_EXIT"); s != "" {
