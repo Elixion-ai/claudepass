@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,9 +28,9 @@ func (e *env) humanPresent() bool {
 }
 
 // readSecret reads a Secret value from a human. On a terminal it prompts with
-// echo off. Without a terminal it refuses, unless CPASS_TEST_STDIN=1, so an
-// Agent can never feed a value it already knows (use cpass capture instead).
-func (e *env) readSecret(prompt string) (string, error) {
+// echo off. Without a terminal it refuses with noTTYMsg, unless
+// CPASS_TEST_STDIN=1, so an Agent can never feed a value it already knows.
+func (e *env) readSecret(prompt, noTTYMsg string) (string, error) {
 	if f, ok := e.stdin.(*os.File); ok && isTTY(f) {
 		fmt.Fprint(e.stderr, prompt)
 		b, err := term.ReadPassword(int(f.Fd()))
@@ -46,5 +47,5 @@ func (e *env) readSecret(prompt string) (string, error) {
 		}
 		return strings.TrimRight(line, "\r\n"), nil
 	}
-	return "", fmt.Errorf("add needs a terminal to type the value into; from an Agent, use `cpass capture <handle> -- <command>` so the value never enters its context")
+	return "", errors.New(noTTYMsg)
 }
