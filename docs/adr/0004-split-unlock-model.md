@@ -1,0 +1,3 @@
+# The Vault unlocks via Keychain on macOS and a long-lived Broker process elsewhere
+
+An Agent's shell has no TTY, so the Vault cannot prompt for a master password from inside `cpass run`; unlocking must be out-of-band. On macOS the Vault key lives in the Keychain and unlocks with Touch ID or the login session, with no daemon. On Linux and in CI a long-lived Broker process (ssh-agent style) holds the key after a human runs `cpass unlock`, or reads it from an environment variable, with an idle timeout. Two unlock paths behind one Broker interface was chosen over a single daemon everywhere because the native macOS path is a materially better experience for the primary audience. Per-use approval prompts were rejected for v1 because they break unattended runs.

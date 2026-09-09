@@ -1,0 +1,3 @@
+# Redaction happens inside the Broker, not in Agent hooks
+
+Injection alone lets an Agent read a value back by printing it, so leaked values must be redacted from command output. Claude Code's PostToolUse hook cannot alter a tool result, and Codex has no equivalent, so Redaction cannot live at the Agent boundary. The Broker spawns the child process, owns its stdout and stderr, and knows every value it injected, so it redacts there, covering common encodings (base64, URL, JSON-escaped). This is best-effort by design; every redaction event is logged so attempts are visible. Command Policy (refusing reveal-only commands) is layered on top.

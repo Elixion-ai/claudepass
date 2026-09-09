@@ -1,0 +1,3 @@
+# The Manifest travels with the repo; the Vault never leaves the machine
+
+A project declares the Handles and Bindings it needs in a committed Manifest that contains no values. The Vault is a single local file that is never synced, uploaded, or shipped to a remote sandbox by ClaudePass. In CI, `cpass run` reads Bindings from the Manifest and values from the environment CI already provides, so the Manifest is the single contract for "what this project needs" everywhere. Cloud-hosted Agent sessions are therefore unsupported in v1; supporting them requires a Broker channel to the user's machine through a relay, which is deferred. The Broker interface is kept channel-agnostic so that can be added without a rewrite.
