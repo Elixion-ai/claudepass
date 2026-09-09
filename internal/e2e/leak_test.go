@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"claudepass/internal/license"
 )
 
 // Every test here is one known reveal path. Each asserts that the raw value
@@ -167,22 +169,33 @@ func TestThroughput10MB(t *testing.T) {
 // second: the single-pass automaton, not a scan repeated per Pattern.
 func TestThroughput10MBTenManifestHandles(t *testing.T) {
 	ve := newVault(t)
+	// 10 Handles sits above the free plan's 3-Secret limit (CLA-14), so this
+	// throughput test -- which needs the volume, not the plan -- activates a
+	// Pro license first, the same way TestExpiredLicenseNeverLocksExistingSecrets
+	// stores more than 3 Secrets.
+	priv, extra := devLicenseKeypair(t)
+	tok := mintToken(t, priv, license.PlanPro, time.Now().Add(time.Hour))
+	if r := ve.runEnv(extra, nil, "license", "activate", tok); r.code != 0 {
+		t.Fatalf("activate: %s", r)
+	}
 	for i := 0; i < 10; i++ {
 		d := string(rune('0' + i))
-		ve.add("secret/"+d, leakVal+"_"+d)
+		if r := ve.runEnv(extra, []byte(leakVal+"_"+d+"\n"), "add", "secret/"+d); r.code != 0 {
+			t.Fatalf("add secret/%s: %s", d, r)
+		}
 	}
 	repo := t.TempDir()
-	if r := ve.runIn(repo, nil, "manifest", "init"); r.code != 0 {
+	if r := ve.runIn(repo, extra, "manifest", "init"); r.code != 0 {
 		t.Fatalf("manifest init: %s", r)
 	}
 	for i := 0; i < 10; i++ {
 		d := string(rune('0' + i))
-		if r := ve.runIn(repo, nil, "manifest", "add", "secret/"+d); r.code != 0 {
+		if r := ve.runIn(repo, extra, "manifest", "add", "secret/"+d); r.code != 0 {
 			t.Fatalf("manifest add secret/%s: %s", d, r)
 		}
 	}
 	start := time.Now()
-	r := ve.runIn(repo, []string{"HELPER_BLAST=10485760"}, "run", "--", helperBin)
+	r := ve.runIn(repo, append(append([]string{}, extra...), "HELPER_BLAST=10485760"), "run", "--", helperBin)
 	el := time.Since(start)
 	if r.code != 0 || len(r.stdout) < 10485760 {
 		t.Fatalf("blast: exit %d, %d bytes", r.code, len(r.stdout))
