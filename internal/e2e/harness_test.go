@@ -7,12 +7,14 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -144,3 +146,23 @@ func baseEnv() []string {
 }
 
 func (ve *vaultEnv) vaultPath() string { return filepath.Join(ve.home, "vault.cpv") }
+
+// shortTempDirCounter makes each shortTempDir unique without embedding the
+// (potentially long) test name in the path.
+var shortTempDirCounter int32
+
+// shortTempDir returns a short-path temp directory, unlike t.TempDir():
+// under macOS's default TMPDIR, a t.TempDir() path can be long enough that
+// appending "/cpass.sock" exceeds sizeof(sockaddr_un.sun_path) (104 bytes on
+// darwin). Broker-socket tests use this for CPASS_HOME/XDG_RUNTIME_DIR
+// instead.
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	n := atomic.AddInt32(&shortTempDirCounter, 1)
+	d := filepath.Join("/tmp", fmt.Sprintf("cpass-e2e-%d-%d", os.Getpid(), n))
+	if err := os.MkdirAll(d, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(d) })
+	return d
+}

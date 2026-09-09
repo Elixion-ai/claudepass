@@ -2,7 +2,6 @@ package cli
 
 import (
 	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -46,14 +45,32 @@ func cmdInit(e *env) int {
 	}
 	key, err := broker.UnlockKey()
 	if errors.Is(err, broker.ErrLocked) {
-		// No key source yet: generate one and tell the human where it went.
-		// The Keychain / Broker-process sources replace this in CLA-8.
-		key = make([]byte, vault.KeySize)
-		if _, err := rand.Read(key); err != nil {
-			return e.failErr(err)
+		// No CPASS_KEY: pick a key via this platform's unlock source.
+		switch {
+		case broker.UseKeychain():
+			key = make([]byte, vault.KeySize)
+			if _, err := rand.Read(key); err != nil {
+				return e.failErr(err)
+			}
+			if err := broker.SetKeychainKey(key); err != nil {
+				return e.failErr(err)
+			}
+			fmt.Fprintf(e.stderr, "cpass: stored the Vault key in the macOS Keychain (service %q)\n", broker.KeychainService())
+		default:
+			passphrase, err := e.readSecret("master passphrase: ",
+				"cpass init needs a terminal to type a master passphrase into, or set CPASS_KEY for CI")
+			if err != nil {
+				return e.failErr(err)
+			}
+			if passphrase == "" {
+				return e.fail(ExitError, "master passphrase must not be empty")
+			}
+			key, err = broker.DeriveKey(passphrase)
+			if err != nil {
+				return e.failErr(err)
+			}
+			fmt.Fprintln(e.stderr, "cpass: run `cpass unlock` before using the Vault from an Agent session")
 		}
-		fmt.Fprintf(e.stderr, "cpass: no %s set; generated one. Export it before using the Vault:\n  export %s=%s\n",
-			broker.EnvKey, broker.EnvKey, base64.StdEncoding.EncodeToString(key))
 	} else if err != nil {
 		return e.failErr(err)
 	}
@@ -88,7 +105,8 @@ func cmdAdd(e *env) int {
 	if err := CheckFreeLimit(e, v); err != nil {
 		return e.fail(ExitRefused, "%v", err)
 	}
-	value, err := e.readSecret(fmt.Sprintf("value for %s: ", handle))
+	value, err := e.readSecret(fmt.Sprintf("value for %s: ", handle),
+		"add needs a terminal to type the value into; from an Agent, use `cpass capture <handle> -- <command>` so the value never enters its context")
 	if err != nil {
 		return e.failErr(err)
 	}

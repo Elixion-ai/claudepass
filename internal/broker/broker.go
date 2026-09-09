@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"claudepass/internal/vault"
@@ -21,8 +22,47 @@ const EnvHome = "CPASS_HOME"
 // EnvKey supplies the unlock key directly (base64, 32 bytes). Used by CI and tests.
 const EnvKey = "CPASS_KEY"
 
+// EnvUnlock, set to "socket", forces the Broker-process unlock source even
+// on macOS (used by tests to exercise that path without a real Keychain).
+const EnvUnlock = "CPASS_UNLOCK"
+
+// EnvKeychainService overrides the Keychain service name. Production code
+// always uses "cpass"; tests set this to a throwaway name so they never
+// touch a real login Keychain item.
+const EnvKeychainService = "CPASS_KEYCHAIN_SERVICE"
+
 // ErrLocked is returned when no unlock key is available.
 var ErrLocked = errors.New("vault is locked, run cpass unlock")
+
+// UseKeychain reports whether this invocation's unlock source is the macOS
+// Keychain (darwin, unless CPASS_UNLOCK=socket forces the Broker process).
+func UseKeychain() bool {
+	return runtime.GOOS == "darwin" && os.Getenv(EnvUnlock) != "socket"
+}
+
+// KeychainService is the Keychain service name Keychain items are stored
+// and looked up under.
+func KeychainService() string {
+	if s := os.Getenv(EnvKeychainService); s != "" {
+		return s
+	}
+	return "cpass"
+}
+
+// keychainAccount is the Keychain account name: the Vault path, so distinct
+// Vaults never collide, falling back to "default" if it cannot be determined.
+func keychainAccount() string {
+	if p, err := VaultPath(); err == nil && p != "" {
+		return p
+	}
+	return "default"
+}
+
+// SetKeychainKey stores key in the Keychain under this Vault's account,
+// creating or replacing the item. macOS only.
+func SetKeychainKey(key []byte) error {
+	return keychainSet(KeychainService(), keychainAccount(), key)
+}
 
 // Home returns the ClaudePass home directory, creating nothing.
 func Home() (string, error) {
@@ -45,8 +85,9 @@ func VaultPath() (string, error) {
 	return filepath.Join(h, "vault.cpv"), nil
 }
 
-// UnlockKey returns the unlock key from the environment. Later slices add
-// the Keychain and Broker-process sources behind this same call.
+// UnlockKey returns the unlock key: CPASS_KEY first (CI), then, on macOS,
+// the Keychain item for this Vault, then the Broker process on its socket.
+// This is the single entry point every unlock source funnels through.
 func UnlockKey() ([]byte, error) {
 	if s := os.Getenv(EnvKey); s != "" {
 		k, err := base64.StdEncoding.DecodeString(s)
@@ -55,7 +96,18 @@ func UnlockKey() ([]byte, error) {
 		}
 		return k, nil
 	}
-	return nil, ErrLocked
+	if UseKeychain() {
+		key, err := keychainGet(KeychainService(), keychainAccount())
+		if err != nil {
+			return nil, ErrLocked
+		}
+		return key, nil
+	}
+	key, err := RequestKey()
+	if err != nil {
+		return nil, ErrLocked
+	}
+	return key, nil
 }
 
 // OpenVault opens the Vault with whatever unlock key is available.
