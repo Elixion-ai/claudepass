@@ -1,0 +1,41 @@
+# Fly.io deploy config for the ClaudePass license service (CLA-15).
+#
+# The Dockerfile needs the whole module as its build context (this service
+# imports claudepass/internal/license), so deploy from the repository
+# root:
+#
+#   fly deploy --config services/license/fly.toml --dockerfile services/license/Dockerfile
+#
+# See services/license/README.md for the one-time `fly launch`/
+# `fly volumes create`/`fly secrets set` setup and every LICENSE_* value
+# this needs.
+app = "claudepass-license"
+primary_region = "iad"
+
+[build]
+
+[env]
+  LICENSE_ADDR = ":8080"
+  LICENSE_DB_PATH = "/data/license.db"
+
+[[mounts]]
+  source = "license_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/healthz"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
