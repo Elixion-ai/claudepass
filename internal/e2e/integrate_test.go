@@ -3,6 +3,7 @@ package e2e
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -141,5 +142,122 @@ func TestIntegrateUnknownTargetIsUsageError(t *testing.T) {
 	r := ve.runIn(t.TempDir(), nil, "integrate", "nonsense")
 	if r.code != 2 {
 		t.Fatalf("expected ExitUsage for unknown target: %s", r)
+	}
+}
+
+func TestIntegrateClaudeFreshInstallWritesPluginFiles(t *testing.T) {
+	ve := newVault(t)
+	skillsDir := t.TempDir()
+	r := ve.run(nil, "integrate", "claude", "--path", skillsDir)
+	if r.code != 0 {
+		t.Fatalf("integrate claude: %s", r)
+	}
+	if !strings.Contains(r.stdout, "installed the ClaudePass plugin") {
+		t.Fatalf("expected an installed message: %s", r)
+	}
+	pluginDir := filepath.Join(skillsDir, "claudepass")
+
+	manifestRaw, err := os.ReadFile(filepath.Join(pluginDir, ".claude-plugin", "plugin.json"))
+	if err != nil {
+		t.Fatalf("plugin.json: %v", err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(manifestRaw, &manifest); err != nil {
+		t.Fatalf("plugin.json is not valid JSON: %v\n%s", err, manifestRaw)
+	}
+	if manifest["name"] != "claudepass" {
+		t.Fatalf("plugin.json name: %v", manifest["name"])
+	}
+
+	hooksRaw, err := os.ReadFile(filepath.Join(pluginDir, "hooks", "hooks.json"))
+	if err != nil {
+		t.Fatalf("hooks.json: %v", err)
+	}
+	var hooks struct {
+		Hooks struct {
+			UserPromptSubmit []struct {
+				Hooks []struct {
+					Type    string `json:"type"`
+					Command string `json:"command"`
+				} `json:"hooks"`
+			} `json:"UserPromptSubmit"`
+			PreToolUse []struct {
+				Matcher string `json:"matcher"`
+				Hooks   []struct {
+					Type    string `json:"type"`
+					Command string `json:"command"`
+				} `json:"hooks"`
+			} `json:"PreToolUse"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(hooksRaw, &hooks); err != nil {
+		t.Fatalf("hooks.json is not valid JSON: %v\n%s", err, hooksRaw)
+	}
+	if len(hooks.Hooks.UserPromptSubmit) != 1 || len(hooks.Hooks.UserPromptSubmit[0].Hooks) != 1 ||
+		hooks.Hooks.UserPromptSubmit[0].Hooks[0].Command != "cpass intercept" {
+		t.Fatalf("UserPromptSubmit should register cpass intercept: %s", hooksRaw)
+	}
+	if len(hooks.Hooks.PreToolUse) != 1 || hooks.Hooks.PreToolUse[0].Matcher != "Bash" ||
+		len(hooks.Hooks.PreToolUse[0].Hooks) != 1 || hooks.Hooks.PreToolUse[0].Hooks[0].Command != "cpass policy --hook" {
+		t.Fatalf("PreToolUse should register cpass policy --hook on matcher Bash: %s", hooksRaw)
+	}
+
+	skillRaw, err := os.ReadFile(filepath.Join(pluginDir, "skills", "claudepass", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("SKILL.md: %v", err)
+	}
+	skill := string(skillRaw)
+	if !strings.HasPrefix(skill, "---\n") {
+		t.Fatalf("SKILL.md should start with YAML frontmatter: %s", skill)
+	}
+	for _, want := range []string{"description:", "cpass run", "cpass capture", "cpass manifest check", ".env", "Handle"} {
+		if !strings.Contains(skill, want) {
+			t.Fatalf("SKILL.md missing %q:\n%s", want, skill)
+		}
+	}
+}
+
+func TestIntegrateClaudeSecondRunReportsUpToDate(t *testing.T) {
+	ve := newVault(t)
+	skillsDir := t.TempDir()
+	if r := ve.run(nil, "integrate", "claude", "--path", skillsDir); r.code != 0 {
+		t.Fatalf("first run: %s", r)
+	}
+	before, err := os.ReadFile(filepath.Join(skillsDir, "claudepass", "hooks", "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := ve.run(nil, "integrate", "claude", "--path", skillsDir)
+	if r.code != 0 {
+		t.Fatalf("second run: %s", r)
+	}
+	if !strings.Contains(r.stdout, "already up to date") {
+		t.Fatalf("expected an unchanged message: %s", r)
+	}
+	after, err := os.ReadFile(filepath.Join(skillsDir, "claudepass", "hooks", "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatalf("file changed on second run:\nbefore: %s\nafter:  %s", before, after)
+	}
+}
+
+func TestIntegrateClaudePluginValidatesAgainstRealClaudeBinary(t *testing.T) {
+	claudeBin, err := exec.LookPath("claude")
+	if err != nil {
+		t.Skip("claude CLI not installed on this machine; skipping live validation")
+	}
+	ve := newVault(t)
+	skillsDir := t.TempDir()
+	if r := ve.run(nil, "integrate", "claude", "--path", skillsDir); r.code != 0 {
+		t.Fatalf("integrate claude: %s", r)
+	}
+	out, err := exec.Command(claudeBin, "plugin", "validate", filepath.Join(skillsDir, "claudepass"), "--strict").CombinedOutput()
+	if err != nil {
+		t.Fatalf("claude plugin validate failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "Validation passed") {
+		t.Fatalf("expected validation to pass: %s", out)
 	}
 }

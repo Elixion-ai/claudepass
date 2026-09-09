@@ -1,0 +1,9 @@
+{
+  "name": "claudepass",
+  "displayName": "ClaudePass",
+  "description": "Secrets for AI coding agents: run commands through cpass instead of reading .env or pasting a value.",
+  "version": "0.1.0",
+  "author": {
+    "name": "ClaudePass"
+  }
+}
