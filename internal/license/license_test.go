@@ -90,17 +90,20 @@ func TestVerifyRejectsTamperedSignature(t *testing.T) {
 	}
 }
 
+// flipChar flips the token's first byte, so the caller gets a
+// same-length string that differs from the original in exactly one
+// place. 'A' flips to 'B' so the result is never mistaken for a no-op.
 func flipChar(s string) string {
-	b := []byte(s)
-	for i := range b {
-		if b[i] != 'A' {
-			b[i] = 'A'
-			return string(b)
-		}
-		b[i] = 'B'
-		return string(b)
+	if s == "" {
+		return "x"
 	}
-	return "x"
+	b := []byte(s)
+	if b[0] != 'A' {
+		b[0] = 'A'
+	} else {
+		b[0] = 'B'
+	}
+	return string(b)
 }
 
 func TestVerifyRejectsMalformed(t *testing.T) {
