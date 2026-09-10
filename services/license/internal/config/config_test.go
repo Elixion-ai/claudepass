@@ -35,14 +35,18 @@ func setEnv(t *testing.T, overrides map[string]string) {
 		EnvStripePriceID, EnvStripeWebhookSecret, EnvSMTPHost, EnvSMTPPort, EnvSMTPUsername,
 		EnvSMTPPassword, EnvSMTPFrom}
 	for _, k := range allVars {
-		os.Unsetenv(k)
+		if err := os.Unsetenv(k); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for k, v := range base {
-		os.Setenv(k, v)
+		if err := os.Setenv(k, v); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Cleanup(func() {
 		for _, k := range allVars {
-			os.Unsetenv(k)
+			_ = os.Unsetenv(k) // best-effort cleanup
 		}
 	})
 }

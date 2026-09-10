@@ -66,10 +66,18 @@ func TestValidateHandle(t *testing.T) {
 
 func TestRenameKeepsCustomBinding(t *testing.T) {
 	v := &Vault{entries: map[string]*Entry{}, key: key(1), dataKey: key(3)}
-	v.Add("a/one", "value-number-one", AddOptions{Binding: Binding{Name: "CUSTOM"}})
-	v.Add("a/two", "value-number-two", AddOptions{})
-	v.Rename("a/one", "b/one")
-	v.Rename("a/two", "b/two")
+	if _, err := v.Add("a/one", "value-number-one", AddOptions{Binding: Binding{Name: "CUSTOM"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Add("a/two", "value-number-two", AddOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Rename("a/one", "b/one"); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Rename("a/two", "b/two"); err != nil {
+		t.Fatal(err)
+	}
 	one, _ := v.Get("b/one")
 	two, _ := v.Get("b/two")
 	if one.Binding.Name != "CUSTOM" || two.Binding.Name != "B_TWO" {

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"flag"
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -51,13 +50,13 @@ func integrateClaude(e *env, args []string) int {
 		return e.failErr(err)
 	}
 	if !changed {
-		fmt.Fprintf(e.stdout, "%s already up to date\n", target)
+		fprintf(e.stdout, "%s already up to date\n", target)
 		return ExitOK
 	}
-	fmt.Fprintf(e.stdout, "installed the ClaudePass plugin at %s\n", target)
-	fmt.Fprintln(e.stdout, "registered hook: UserPromptSubmit -> cpass intercept")
-	fmt.Fprintln(e.stdout, "registered hook: PreToolUse (Bash) -> cpass policy --hook")
-	fmt.Fprintln(e.stdout, "registered skill: claudepass")
-	fmt.Fprintln(e.stdout, "it loads as claudepass@skills-dir on the next `claude` session (or run /reload-plugins in one already open)")
+	fprintf(e.stdout, "installed the ClaudePass plugin at %s\n", target)
+	fprintln(e.stdout, "registered hook: UserPromptSubmit -> cpass intercept")
+	fprintln(e.stdout, "registered hook: PreToolUse (Bash) -> cpass policy --hook")
+	fprintln(e.stdout, "registered skill: claudepass")
+	fprintln(e.stdout, "it loads as claudepass@skills-dir on the next `claude` session (or run /reload-plugins in one already open)")
 	return ExitOK
 }

@@ -206,7 +206,7 @@ func TestKeychainUnlockRoundTrip(t *testing.T) {
 	ve := lockedVault(t)
 	env := []string{"CPASS_KEYCHAIN_SERVICE=" + service}
 	t.Cleanup(func() {
-		exec.Command("security", "delete-generic-password", "-a", ve.vaultPath(), "-s", service).Run()
+		_ = exec.Command("security", "delete-generic-password", "-a", ve.vaultPath(), "-s", service).Run() // best-effort cleanup
 	})
 
 	r := ve.runEnv(env, nil, "init")

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"flag"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -35,7 +34,7 @@ func cmdIntegrate(e *env) int {
 		if len(e.args) != 1 {
 			return e.fail(ExitUsage, "usage: cpass integrate --print")
 		}
-		fmt.Fprint(e.stdout, integrate.Snippet)
+		fprint(e.stdout, integrate.Snippet)
 		return ExitOK
 	}
 	target, rest := e.args[0], e.args[1:]
@@ -81,7 +80,7 @@ func integrateCodex(e *env, args []string) int {
 
 	updated, changed := integrate.Apply(string(existing))
 	if !changed {
-		fmt.Fprintf(e.stdout, "%s already up to date\n", *path)
+		fprintf(e.stdout, "%s already up to date\n", *path)
 		return ExitOK
 	}
 	if dir := filepath.Dir(*path); dir != "." {
@@ -93,9 +92,9 @@ func integrateCodex(e *env, args []string) int {
 		return e.failErr(err)
 	}
 	if fileExisted {
-		fmt.Fprintf(e.stdout, "updated %s\n", *path)
+		fprintf(e.stdout, "updated %s\n", *path)
 	} else {
-		fmt.Fprintf(e.stdout, "created %s\n", *path)
+		fprintf(e.stdout, "created %s\n", *path)
 	}
 	return ExitOK
 }

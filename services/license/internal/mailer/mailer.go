@@ -60,12 +60,12 @@ func (m SMTPMailer) sendTLS(addr string, auth smtp.Auth, to string, msg []byte) 
 	if err != nil {
 		return fmt.Errorf("mailer: dial %s: %w", addr, err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }() // best-effort: c.Quit() below is the real session shutdown
 	c, err := smtp.NewClient(conn, m.Host)
 	if err != nil {
 		return fmt.Errorf("mailer: client %s: %w", addr, err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }() // best-effort: c.Quit() below is the real session shutdown
 	if err := c.Auth(auth); err != nil {
 		return fmt.Errorf("mailer: auth: %w", err)
 	}

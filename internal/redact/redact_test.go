@@ -21,7 +21,9 @@ func collect(t *testing.T, pats []Pattern, chunks ...string) (string, []Event) {
 			t.Fatal(err)
 		}
 	}
-	w.Close()
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
 	return out.String(), evs
 }
 
@@ -147,12 +149,16 @@ func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(
 func TestOrdinaryOutputPassesImmediately(t *testing.T) {
 	var out syncBuf
 	w := NewWriter(&out, "stdout", Variants("h", val), nil)
-	w.Write([]byte("hello world\n"))
+	if _, err := w.Write([]byte("hello world\n")); err != nil {
+		t.Fatal(err)
+	}
 	if out.String() != "hello world\n" {
 		t.Fatalf("should not hold back ordinary output: %q", out.String())
 	}
 	// A suffix that is a prefix of the secret is held...
-	w.Write([]byte("prompt> " + val[:5]))
+	if _, err := w.Write([]byte("prompt> " + val[:5])); err != nil {
+		t.Fatal(err)
+	}
 	if out.String() != "hello world\nprompt> " {
 		t.Fatalf("partial should be held: %q", out.String())
 	}
@@ -161,7 +167,9 @@ func TestOrdinaryOutputPassesImmediately(t *testing.T) {
 	if out.String() != "hello world\nprompt> "+val[:5] {
 		t.Fatalf("partial should be released on idle: %q", out.String())
 	}
-	w.Close()
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestTwoSecretsAdjacent(t *testing.T) {
@@ -210,7 +218,7 @@ func BenchmarkThroughput(b *testing.B) {
 	// against that same CPU-time figure for exactly this reason.
 	startCPU, haveCPU := processCPUSeconds()
 	for i := 0; i < b.N; i++ {
-		w.Write(chunk)
+		_, _ = w.Write(chunk) // dst is discard{}, which never errors; checking here would measure branch overhead, not this package
 	}
 	if haveCPU {
 		if nowCPU, ok := processCPUSeconds(); ok {
@@ -251,7 +259,7 @@ func TestThroughputMeetsBar(t *testing.T) {
 
 	// Warm up so the first, cache-cold call doesn't skew a short run.
 	for i := 0; i < 50; i++ {
-		w.Write(chunk)
+		_, _ = w.Write(chunk) // dst is discard{}, which never errors
 	}
 
 	const (
@@ -264,7 +272,7 @@ func TestThroughputMeetsBar(t *testing.T) {
 	var n int64
 	var cpuSeconds float64
 	for i := 0; ; i++ {
-		w.Write(chunk)
+		_, _ = w.Write(chunk) // dst is discard{}, which never errors; checking here would measure branch overhead, not this package
 		n += int64(len(chunk))
 		if i%8 != 0 { // Getrusage is a syscall; sample it, not every iteration
 			continue

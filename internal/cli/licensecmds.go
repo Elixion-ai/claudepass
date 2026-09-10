@@ -47,7 +47,7 @@ func licenseActivate(e *env, args []string) int {
 	if err != nil {
 		return e.fail(ExitError, "license token refused: %v", err)
 	}
-	fmt.Fprintf(e.stdout, "activated license for %s: plan %s, expires %s\n",
+	fprintf(e.stdout, "activated license for %s: plan %s, expires %s\n",
 		p.Sub, p.Plan, time.Unix(p.Exp, 0).UTC().Format(time.RFC3339))
 	warnIfDegraded(e, license.Load(home))
 	return ExitOK
@@ -64,15 +64,15 @@ func licenseStatus(e *env, args []string) int {
 		return e.failErr(err)
 	}
 	st := license.Load(home)
-	fmt.Fprintf(e.stdout, "plan: %s\n", st.Plan)
+	fprintf(e.stdout, "plan: %s\n", st.Plan)
 	if st.Payload != nil {
-		fmt.Fprintf(e.stdout, "account: %s\n", st.Payload.Sub)
-		fmt.Fprintf(e.stdout, "expires: %s\n", time.Unix(st.Payload.Exp, 0).UTC().Format(time.RFC3339))
+		fprintf(e.stdout, "account: %s\n", st.Payload.Sub)
+		fprintf(e.stdout, "expires: %s\n", time.Unix(st.Payload.Exp, 0).UTC().Format(time.RFC3339))
 	}
 	if st.Plan == license.PlanFree {
-		fmt.Fprintf(e.stdout, "limit: %d Secrets\n", license.FreeSecretLimit)
+		fprintf(e.stdout, "limit: %d Secrets\n", license.FreeSecretLimit)
 	} else {
-		fmt.Fprintln(e.stdout, "limit: unlimited")
+		fprintln(e.stdout, "limit: unlimited")
 	}
 	warnIfDegraded(e, st)
 	return ExitOK
@@ -91,13 +91,13 @@ func licenseDeactivate(e *env, args []string) int {
 	if err := license.Deactivate(home); err != nil {
 		return e.failErr(err)
 	}
-	fmt.Fprintln(e.stdout, "deactivated license; back to the free plan")
+	fprintln(e.stdout, "deactivated license; back to the free plan")
 	return ExitOK
 }
 
 func warnIfDegraded(e *env, st license.Status) {
 	if st.Warning != "" {
-		fmt.Fprintln(e.stderr, "cpass: "+st.Warning)
+		fprintln(e.stderr, "cpass: "+st.Warning)
 	}
 }
 

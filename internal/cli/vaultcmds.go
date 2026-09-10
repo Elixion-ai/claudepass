@@ -55,7 +55,7 @@ func cmdInit(e *env) int {
 			if err := broker.SetKeychainKey(key); err != nil {
 				return e.failErr(err)
 			}
-			fmt.Fprintf(e.stderr, "cpass: stored the Vault key in the macOS Keychain (service %q)\n", broker.KeychainService())
+			fprintf(e.stderr, "cpass: stored the Vault key in the macOS Keychain (service %q)\n", broker.KeychainService())
 		default:
 			passphrase, err := e.readSecret("master passphrase: ",
 				"cpass init needs a terminal to type a master passphrase into, or set CPASS_KEY for CI")
@@ -69,7 +69,7 @@ func cmdInit(e *env) int {
 			if err != nil {
 				return e.failErr(err)
 			}
-			fmt.Fprintln(e.stderr, "cpass: run `cpass unlock` before using the Vault from an Agent session")
+			fprintln(e.stderr, "cpass: run `cpass unlock` before using the Vault from an Agent session")
 		}
 	} else if err != nil {
 		return e.failErr(err)
@@ -77,7 +77,7 @@ func cmdInit(e *env) int {
 	if _, err := vault.Create(path, key); err != nil {
 		return e.failErr(err)
 	}
-	fmt.Fprintf(e.stdout, "initialised vault at %s\n", path)
+	fprintf(e.stdout, "initialised vault at %s\n", path)
 	return ExitOK
 }
 
@@ -125,7 +125,7 @@ func cmdAdd(e *env) int {
 	if err := v.Save(); err != nil {
 		return e.failErr(err)
 	}
-	fmt.Fprintf(e.stdout, "stored %s (%s %s)\n", entry.Handle, entry.Binding.Kind, entry.Binding.Name)
+	fprintf(e.stdout, "stored %s (%s %s)\n", entry.Handle, entry.Binding.Kind, entry.Binding.Name)
 	return ExitOK
 }
 
@@ -154,9 +154,9 @@ func cmdLs(e *env) int {
 			if en.Exposed {
 				flag = "  EXPOSED"
 			}
-			fmt.Fprintf(e.stdout, "%-40s %s %s%s\n", en.Handle, en.Binding.Kind, en.Binding.Name, flag)
+			fprintf(e.stdout, "%-40s %s %s%s\n", en.Handle, en.Binding.Kind, en.Binding.Name, flag)
 		} else {
-			fmt.Fprintln(e.stdout, en.Handle)
+			fprintln(e.stdout, en.Handle)
 		}
 	}
 	return ExitOK
@@ -183,7 +183,7 @@ func cmdRm(e *env) int {
 	if err := v.Save(); err != nil {
 		return e.failErr(err)
 	}
-	fmt.Fprintf(e.stdout, "removed %s\n", strings.Join(fs.Args(), " "))
+	fprintf(e.stdout, "removed %s\n", strings.Join(fs.Args(), " "))
 	return ExitOK
 }
 
@@ -206,6 +206,6 @@ func cmdMv(e *env) int {
 	if err := v.Save(); err != nil {
 		return e.failErr(err)
 	}
-	fmt.Fprintf(e.stdout, "renamed %s -> %s\n", fs.Arg(0), fs.Arg(1))
+	fprintf(e.stdout, "renamed %s -> %s\n", fs.Arg(0), fs.Arg(1))
 	return ExitOK
 }

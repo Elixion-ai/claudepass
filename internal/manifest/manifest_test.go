@@ -23,7 +23,9 @@ func TestRoundTripAndFind(t *testing.T) {
 		t.Fatalf("file:\n%s", raw)
 	}
 	sub := filepath.Join(root, "a", "b")
-	os.MkdirAll(sub, 0o755)
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	p, err := Find(sub)
 	if err != nil || p != m.Path {
 		t.Fatalf("find: %s %v", p, err)
@@ -45,11 +47,15 @@ func TestRoundTripAndFind(t *testing.T) {
 
 func TestLoadRejectsBadHandleAndKind(t *testing.T) {
 	p := filepath.Join(t.TempDir(), FileName)
-	os.WriteFile(p, []byte("[secrets]\n\"Bad Handle\" = \"\"\n"), 0o644)
+	if err := os.WriteFile(p, []byte("[secrets]\n\"Bad Handle\" = \"\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := Load(p); err == nil {
 		t.Fatal("want error for bad handle")
 	}
-	os.WriteFile(p, []byte("[secrets]\n\"a/b\" = { kind = \"blob\" }\n"), 0o644)
+	if err := os.WriteFile(p, []byte("[secrets]\n\"a/b\" = { kind = \"blob\" }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "kind") {
 		t.Fatalf("want kind error, got %v", err)
 	}

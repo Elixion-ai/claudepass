@@ -55,7 +55,9 @@ func TestManifestInitAddCheckAndRun(t *testing.T) {
 	}
 	// From a subdirectory, run with no --with injects both.
 	sub := filepath.Join(repo, "src", "deep")
-	os.MkdirAll(sub, 0o755)
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	out := filepath.Join(t.TempDir(), "env.txt")
 	r := ve.runIn(sub, []string{"HELPER_OUT=" + out}, "run", "--", helperBin)
 	if r.code != 0 {
@@ -108,7 +110,9 @@ func TestManifestFileBindingDeclaration(t *testing.T) {
 func TestCIModeResolvesFromEnvironmentWithoutVault(t *testing.T) {
 	ve := &vaultEnv{t: t, home: t.TempDir(), key: ""} // no vault at all
 	repo := t.TempDir()
-	os.WriteFile(filepath.Join(repo, ".claudepass.toml"), []byte("[secrets]\n\"stripe/live\" = \"STRIPE_SECRET_KEY\"\n\"db/url\" = \"\"\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(repo, ".claudepass.toml"), []byte("[secrets]\n\"stripe/live\" = \"STRIPE_SECRET_KEY\"\n\"db/url\" = \"\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	out := filepath.Join(t.TempDir(), "env.txt")
 	ci := []string{"CPASS_CI=1", "STRIPE_SECRET_KEY=ci-stripe-value", "DB_URL=ci-db-value", "HELPER_OUT=" + out}
 	r := ve.runIn(repo, ci, "run", "--", helperBin)

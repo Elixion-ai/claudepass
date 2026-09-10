@@ -3,7 +3,6 @@ package cli
 import (
 	"bufio"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -32,9 +31,9 @@ func (e *env) humanPresent() bool {
 // CPASS_TEST_STDIN=1, so an Agent can never feed a value it already knows.
 func (e *env) readSecret(prompt, noTTYMsg string) (string, error) {
 	if f, ok := e.stdin.(*os.File); ok && isTTY(f) {
-		fmt.Fprint(e.stderr, prompt)
+		fprint(e.stderr, prompt)
 		b, err := term.ReadPassword(int(f.Fd()))
-		fmt.Fprintln(e.stderr)
+		fprintln(e.stderr)
 		if err != nil {
 			return "", err
 		}

@@ -67,5 +67,5 @@ func (s *Server) handleReissue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintln(w, "a fresh license has been emailed to you")
+	_, _ = fmt.Fprintln(w, "a fresh license has been emailed to you") // best-effort: nothing left to do with a broken response write
 }

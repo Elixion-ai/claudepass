@@ -20,18 +20,21 @@ func main() {
 	}
 	if s := os.Getenv("HELPER_SPLIT"); s != "" {
 		// Write the expanded value in two halves with a pause between them.
+		// Best-effort like every other write to this process's own stdout
+		// below: a failure here just shows up as truncated output to the
+		// e2e test watching for it, which is exactly the right failure mode.
 		v := os.ExpandEnv(s)
-		os.Stdout.WriteString(v[:len(v)/2])
+		_, _ = os.Stdout.WriteString(v[:len(v)/2])
 		time.Sleep(60 * time.Millisecond)
-		os.Stdout.WriteString(v[len(v)/2:] + "\n")
+		_, _ = os.Stdout.WriteString(v[len(v)/2:] + "\n")
 	}
 	if n, _ := strconv.Atoi(os.Getenv("HELPER_BLAST")); n > 0 {
 		line := []byte(strings.Repeat("x", 63) + "\n")
 		w := bufio.NewWriterSize(os.Stdout, 64*1024)
 		for written := 0; written < n; written += len(line) {
-			w.Write(line)
+			_, _ = w.Write(line) // best-effort, see above
 		}
-		w.Flush()
+		_ = w.Flush() // best-effort, see above
 	}
 	if s := os.Getenv("HELPER_ECHO"); s != "" {
 		fmt.Println(os.ExpandEnv(s))

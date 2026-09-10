@@ -69,7 +69,9 @@ func writeTokenPage(w http.ResponseWriter, token string) {
 	// token's alphabet is base64url plus one '.' separator, which needs no
 	// HTML escaping, but this escapes it anyway so nothing here ever
 	// depends on that being true.
-	fmt.Fprintf(w, `<!doctype html>
+	// Best-effort: the client is what would see a write failure here, and
+	// there is no more response to send it either way.
+	_, _ = fmt.Fprintf(w, `<!doctype html>
 <title>ClaudePass license</title>
 <p>Your ClaudePass license is ready. Run this once, on the machine where you use ClaudePass:</p>
 <pre>cpass license activate %s</pre>
@@ -80,9 +82,9 @@ func writeTokenPage(w http.ResponseWriter, token string) {
 func writeAlreadyShownPage(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, `<!doctype html>
+	_, _ = fmt.Fprint(w, `<!doctype html>
 <title>ClaudePass license</title>
 <p>This license was already shown once and cannot be displayed again.</p>
 <p>Lost it? Use <code>POST /reissue</code> with the email you subscribed with.</p>
-`)
+`) // best-effort, see writeTokenPage
 }

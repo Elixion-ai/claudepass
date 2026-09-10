@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"flag"
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -46,7 +45,7 @@ func manifestInit(e *env, args []string) int {
 	if err := m.Save(); err != nil {
 		return e.failErr(err)
 	}
-	fmt.Fprintf(e.stdout, "created %s\n", p)
+	fprintf(e.stdout, "created %s\n", p)
 	return ExitOK
 }
 
@@ -78,7 +77,7 @@ func manifestAdd(e *env, args []string) int {
 	if err := m.Save(); err != nil {
 		return e.failErr(err)
 	}
-	fmt.Fprintf(e.stdout, "declared %s in %s\n", handle, m.Path)
+	fprintf(e.stdout, "declared %s in %s\n", handle, m.Path)
 	return ExitOK
 }
 
@@ -116,12 +115,12 @@ func manifestCheck(e *env, args []string) int {
 
 func reportMissing(e *env, m *manifest.Manifest, missing []string) int {
 	if len(missing) == 0 {
-		fmt.Fprintf(e.stdout, "ok: all %d handles in %s are available\n", len(m.Entries), m.Path)
+		fprintf(e.stdout, "ok: all %d handles in %s are available\n", len(m.Entries), m.Path)
 		return ExitOK
 	}
-	fmt.Fprintf(e.stderr, "cpass: %d missing handle(s):\n", len(missing))
+	fprintf(e.stderr, "cpass: %d missing handle(s):\n", len(missing))
 	for _, h := range missing {
-		fmt.Fprintf(e.stderr, "  %s\n", h)
+		fprintf(e.stderr, "  %s\n", h)
 	}
 	return ExitError
 }
