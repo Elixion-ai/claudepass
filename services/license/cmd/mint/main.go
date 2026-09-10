@@ -165,7 +165,12 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, no
 		return exitError
 	}
 
-	fmt.Fprintln(stdout, token)
+	if _, err := fmt.Fprintln(stdout, token); err != nil {
+		// The audit line is already written; say so, since the operator now
+		// has a jti with no token to match it.
+		_, _ = fmt.Fprintf(stderr, "mint: writing token to stdout (audit jti %s already recorded): %v\n", jti, err)
+		return exitError
+	}
 	return exitOK
 }
 
