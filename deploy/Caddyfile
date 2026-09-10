@@ -40,8 +40,21 @@ claudepass.com {
 	# The license service (services/license/README.md): Checkout, the
 	# post-checkout token page, reissue, Stripe's webhook, and the health
 	# probe. Nothing else is proxied — every other path is the static site.
+	#
+	# This MUST be a `handle` block, not a bare `reverse_proxy` directive:
+	# Caddy's Caddyfile adapter sorts directives of different names by a
+	# fixed global order, not by their position in this file, and that
+	# order places the catch-all `handle {}` file_server below BEFORE a
+	# same-level bare `reverse_proxy` — so a bare `reverse_proxy` here
+	# would never run (every request, including /healthz and /checkout,
+	# would instead hit the catch-all file_server and 404). Grouping all
+	# three branches as `handle` blocks makes them one mutually-exclusive
+	# set evaluated top-to-bottom in the order written, which is what the
+	# comment above always assumed.
 	@licenseService path /checkout /license /reissue /webhook /healthz
-	reverse_proxy @licenseService 127.0.0.1:8080
+	handle @licenseService {
+		reverse_proxy 127.0.0.1:8080
+	}
 
 	# The release mirror install.sh and the Homebrew formula pull from
 	# (CLA-16) — plain static files, directory listing off.

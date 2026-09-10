@@ -50,15 +50,37 @@ rsync -az deploy/Caddyfile "$host:/tmp/claudepass-Caddyfile"
 rsync -az deploy/license.service "$host:/tmp/claudepass-license.service"
 
 echo "==> installing config and restarting services"
+# license.service and caddy are handled independently below: on a droplet
+# where /etc/claudepass/license.env hasn't been provisioned yet (see
+# deploy/README.md), a `systemctl restart license.service` fails every
+# time (EnvironmentFile is required, not optional) — that must not abort
+# the script before caddy gets reloaded, and must not be treated as a
+# fatal deploy failure, since it's the expected state before secrets are
+# provisioned and step 3 of the runbook starts the service explicitly.
 ssh "$host" '
-	set -euo pipefail
+	set -uo pipefail
 	install -o root -g root -m 0644 /tmp/claudepass-Caddyfile /etc/caddy/Caddyfile
 	install -o root -g root -m 0644 /tmp/claudepass-license.service /etc/systemd/system/license.service
 	rm -f /tmp/claudepass-Caddyfile /tmp/claudepass-license.service
 	systemctl daemon-reload
 	systemctl enable license.service >/dev/null
-	systemctl restart license.service
-	systemctl reload caddy 2>/dev/null || systemctl restart caddy
+
+	status=0
+	if [ -f /etc/claudepass/license.env ]; then
+		if ! systemctl restart license.service; then
+			echo "==> WARNING: license.service failed to (re)start — see: journalctl -xeu license.service" >&2
+			status=1
+		fi
+	else
+		echo "==> /etc/claudepass/license.env not present yet; leaving license.service stopped (provision secrets, then: systemctl start license.service)" >&2
+	fi
+
+	if ! systemctl reload caddy 2>/dev/null && ! systemctl restart caddy; then
+		echo "==> WARNING: caddy failed to reload and restart" >&2
+		status=1
+	fi
+
+	exit "$status"
 '
 
 echo "==> done. Check: ssh $host systemctl status license.service caddy --no-pager"
