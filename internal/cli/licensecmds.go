@@ -103,7 +103,7 @@ func warnIfDegraded(e *env, st license.Status) {
 
 // freeLimitMessage is the exact refusal shown when the free plan's Secret
 // limit blocks a new Secret, per CLA-14.
-const freeLimitMessage = "free plan holds %d Secrets; upgrade at https://claudepass.dev/pricing ($9.99/month)"
+const freeLimitMessage = "free plan holds %d Secrets; upgrade at https://claudepass.com/pricing ($9.99/month)"
 
 // CheckFreeLimit refuses to create another Secret when the free plan's
 // limit is reached and no valid, unexpired license lifts it. add and the

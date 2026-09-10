@@ -45,7 +45,7 @@ func mintToken(t *testing.T, priv ed25519.PrivateKey, plan string, exp time.Time
 	return tok
 }
 
-const freeLimitMsg = "cpass: free plan holds 3 Secrets; upgrade at https://claudepass.dev/pricing ($9.99/month)"
+const freeLimitMsg = "cpass: free plan holds 3 Secrets; upgrade at https://claudepass.com/pricing ($9.99/month)"
 
 func TestFreeTierFourthAddRefused(t *testing.T) {
 	ve := newVault(t)

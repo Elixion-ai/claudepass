@@ -84,7 +84,7 @@ func Load(home string) Status {
 		return Status{
 			Plan:    PlanFree,
 			Payload: &p,
-			Warning: fmt.Sprintf("license for %s expired %s; degraded to free plan (upgrade at https://claudepass.dev/pricing)", p.Sub, time.Unix(p.Exp, 0).UTC().Format("2006-01-02")),
+			Warning: fmt.Sprintf("license for %s expired %s; degraded to free plan (upgrade at https://claudepass.com/pricing)", p.Sub, time.Unix(p.Exp, 0).UTC().Format("2006-01-02")),
 		}
 	}
 	return Status{Plan: p.Plan, Payload: &p}

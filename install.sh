@@ -1,37 +1,32 @@
 #!/bin/sh
 # ClaudePass installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/gumruyanzh/claudepass/main/install.sh | sh
+#   curl -fsSL https://claudepass.com/install.sh | sh
 #
-# claudepass is a PRIVATE repo (ADR-0006: closed source). Downloading a
-# release asset therefore needs one of, tried in this order:
-#   1. the `gh` CLI, already authenticated (`gh auth status`) — no extra
-#      setup, this is what the maintainer's own machine uses.
-#   2. GITHUB_TOKEN in the environment, a token with read access to the
-#      repo — used directly against the GitHub REST API.
-#   3. neither: the script tries a plain, unauthenticated download, which
-#      only succeeds if the repo/release has been made public.
+# Downloads a prebuilt cpass release archive and its checksums.txt from
+# claudepass.com's own release mirror (served from /dl/, see
+# deploy/Caddyfile and deploy/README.md — the archives themselves are
+# GoReleaser's output, CLA-16), verifies the archive's sha256 against
+# checksums.txt, and installs the cpass binary. No GitHub credentials are
+# needed: the source repo stays private (ADR-0006), but built binaries are
+# served publicly from the site.
 #
 # Env vars (all optional):
-#   CPASS_REPO         owner/repo to install from  (default gumruyanzh/claudepass)
-#   CPASS_VERSION       "latest" or an explicit tag, e.g. v0.1.0 (default latest)
+#   CPASS_VERSION       "latest" or an explicit tag, e.g. v0.1.2 (default latest)
 #   CPASS_INSTALL_DIR   where to put the binary (default: see pick_install_dir)
-#   GITHUB_TOKEN         a token with access to CPASS_REPO's releases
-#   CPASS_BASE_URL      override the download origin entirely — for a public
-#                       releases-only mirror repo, or for testing against a
-#                       local fixture server. When set, the asset is fetched
-#                       from "$CPASS_BASE_URL/releases/download/<tag>/<asset>"
-#                       with no authentication, and CPASS_VERSION must be an
-#                       explicit tag ("latest" resolution is skipped).
+#   CPASS_BASE_URL      override the download origin entirely — for a
+#                       mirror, or for testing against a local fixture
+#                       server. When set, the asset and checksums.txt are
+#                       fetched from "$CPASS_BASE_URL/dl/<version>/..." with
+#                       no authentication.
 #
 # CI / tests: `CPASS_INSTALL_DIR=$(mktemp -d) sh install.sh` installs into a
 # temp prefix instead of touching the real system paths.
 
 set -eu
 
-repo="${CPASS_REPO:-gumruyanzh/claudepass}"
 version="${CPASS_VERSION:-latest}"
-base_url="${CPASS_BASE_URL:-}"
+base_url="${CPASS_BASE_URL:-https://claudepass.com}"
 
 err() {
     printf 'cpass-install: %s\n' "$1" >&2
@@ -68,88 +63,30 @@ pick_install_dir() {
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
-# json_field FILE FIELD — a tiny JSON scalar/array-of-object field reader
-# with no jq/python3 dependency required, since install.sh must run on any
-# box that merely has curl and a POSIX shell. Good enough for GitHub's
-# release JSON shape; not a general JSON parser.
-json_field() {
-    grep -o "\"$2\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$1" | head -1 | sed -E 's/.*: *"([^"]*)"/\1/'
-}
-
-# asset_id FILE NAME — id of the release asset whose "name" equals NAME,
-# by scanning consecutive "id": N / "name": "..." pairs in the JSON.
-asset_id() {
-    awk -v want="$2" '
-        /"id":/ { match($0, /[0-9]+/); id = substr($0, RSTART, RLENGTH) }
-        /"name":/ {
-            name = $0
-            gsub(/.*"name"[[:space:]]*:[[:space:]]*"/, "", name)
-            gsub(/".*/, "", name)
-            if (name == want) { print id; found = 1; exit }
-        }
-        END { if (!found) exit 1 }
-    ' "$1"
-}
-
-resolve_tag() {
-    if [ -n "$base_url" ]; then
-        [ "$version" = "latest" ] && err "CPASS_VERSION must be an explicit tag when CPASS_BASE_URL is set"
-        echo "$version"
-        return
-    fi
-    if [ "$version" != "latest" ]; then
-        echo "$version"
-        return
-    fi
-    if have gh && gh auth status >/dev/null 2>&1; then
-        gh release view --repo "$repo" --json tagName -q .tagName
-        return
-    fi
-    tmp="$(mktemp)"
-    if [ -n "${GITHUB_TOKEN:-}" ]; then
-        curl -fsSL -H "Authorization: token $GITHUB_TOKEN" -H 'Accept: application/vnd.github+json' \
-            "https://api.github.com/repos/$repo/releases/latest" -o "$tmp" \
-            || err "could not resolve the latest release of $repo (check GITHUB_TOKEN has access)"
+# sha256_of FILE — prints the lowercase hex sha256 of FILE, using whichever
+# of sha256sum (Linux) or shasum (macOS) is present; both ship without
+# extra installs on every platform cpass targets.
+sha256_of() {
+    if have sha256sum; then
+        sha256sum "$1" | awk '{print $1}'
+    elif have shasum; then
+        shasum -a 256 "$1" | awk '{print $1}'
     else
-        curl -fsSL "https://api.github.com/repos/$repo/releases/latest" -o "$tmp" \
-            || err "could not resolve the latest release of $repo. $repo is private; set GITHUB_TOKEN or authenticate 'gh', then retry."
+        err "neither sha256sum nor shasum found; cannot verify the download"
     fi
-    tag="$(json_field "$tmp" tag_name)"
-    rm -f "$tmp"
-    [ -n "$tag" ] || err "could not read a tag_name from the releases/latest response"
-    echo "$tag"
 }
 
-download_asset() {
-    tag="$1" asset="$2" dest="$3"
-
-    if [ -n "$base_url" ]; then
-        curl -fsSL "$base_url/releases/download/$tag/$asset" -o "$dest" && return
-        err "download failed: $base_url/releases/download/$tag/$asset"
-    fi
-
-    if have gh && gh auth status >/dev/null 2>&1; then
-        gh release download "$tag" --repo "$repo" --pattern "$asset" --output "$dest" --clobber && return
-        err "gh release download failed for $repo@$tag ($asset)"
-    fi
-
-    if [ -n "${GITHUB_TOKEN:-}" ]; then
-        meta="$(mktemp)"
-        curl -fsSL -H "Authorization: token $GITHUB_TOKEN" -H 'Accept: application/vnd.github+json' \
-            "https://api.github.com/repos/$repo/releases/tags/$tag" -o "$meta" \
-            || err "could not fetch release metadata for $repo@$tag"
-        id="$(asset_id "$meta" "$asset")" || err "no asset named $asset in $repo@$tag"
-        rm -f "$meta"
-        curl -fsSL -H "Authorization: token $GITHUB_TOKEN" -H 'Accept: application/octet-stream' \
-            "https://api.github.com/repos/$repo/releases/assets/$id" -o "$dest" && return
-        err "asset download failed: $repo@$tag asset id $id"
-    fi
-
-    # Last resort: works only if the repo/release is public.
-    curl -fsSL "https://github.com/$repo/releases/download/$tag/$asset" -o "$dest" && return
-    err "$repo is private and no 'gh' auth or GITHUB_TOKEN was found. Either: \
-export GITHUB_TOKEN=\$(gh auth token) (or any token with read access to $repo), \
-or run 'gh auth login' first."
+# verify_checksum FILE ASSET CHECKSUMS_FILE — looks up ASSET's expected
+# sha256 in a GoReleaser-style checksums.txt ("<hex>  <filename>" per
+# line, filename optionally prefixed with "*" for binary mode) and fails
+# loudly on a missing entry or a mismatch, rather than installing an
+# unverified binary.
+verify_checksum() {
+    file="$1" asset="$2" checksums="$3"
+    want="$(awk -v a="$asset" '{ f = $2; sub(/^\*/, "", f); if (f == a) { print $1; found = 1 } } END { exit !found }' "$checksums")" \
+        || err "no checksum entry for $asset in checksums.txt"
+    got="$(sha256_of "$file")"
+    [ "$want" = "$got" ] || err "checksum mismatch for $asset: expected $want, got $got"
 }
 
 main() {
@@ -158,12 +95,18 @@ main() {
     asset="cpass_${os}_${arch}.tar.gz"
     install_dir="$(pick_install_dir)"
 
-    tag="$(resolve_tag)"
     workdir="$(mktemp -d)"
     trap 'rm -rf "$workdir"' EXIT
 
     archive="$workdir/$asset"
-    download_asset "$tag" "$asset" "$archive"
+    checksums="$workdir/checksums.txt"
+
+    curl -fsSL "$base_url/dl/$version/$asset" -o "$archive" \
+        || err "download failed: $base_url/dl/$version/$asset"
+    curl -fsSL "$base_url/dl/$version/checksums.txt" -o "$checksums" \
+        || err "download failed: $base_url/dl/$version/checksums.txt"
+
+    verify_checksum "$archive" "$asset" "$checksums"
 
     tar -xzf "$archive" -C "$workdir" cpass
     chmod +x "$workdir/cpass"
@@ -171,7 +114,9 @@ main() {
     mkdir -p "$install_dir"
     mv "$workdir/cpass" "$install_dir/cpass"
 
-    echo "cpass $tag installed to $install_dir/cpass"
+    installed_version="$("$install_dir/cpass" version 2>/dev/null || true)"
+    [ -n "$installed_version" ] || installed_version="cpass $version"
+    echo "$installed_version installed to $install_dir/cpass"
     case ":$PATH:" in
         *":$install_dir:"*) ;;
         *) echo "note: $install_dir is not on your PATH; add it to your shell profile." ;;

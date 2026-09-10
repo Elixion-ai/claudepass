@@ -81,8 +81,8 @@ nothing in a handler calls `os.Getenv` directly.
 | `LICENSE_STRIPE_SECRET_KEY` | **yes** | Stripe secret API key (`sk_test_...` for Stripe test mode, `sk_live_...` in production). |
 | `LICENSE_STRIPE_PRICE_ID` | **yes** | The recurring Stripe Price id for the $9.99/month plan (`price_...`). Create it once in the Stripe Dashboard (Product: "ClaudePass Pro", $9.99/month, recurring). |
 | `LICENSE_STRIPE_WEBHOOK_SECRET` | **yes** | Signing secret for this service's webhook endpoint (`whsec_...`), from the Stripe Dashboard (or `stripe listen` while developing). |
-| `LICENSE_BASE_URL` | **yes** | This service's own public URL, no trailing slash (e.g. `https://license.claudepass.dev`). Used to build Checkout's `success_url`/`cancel_url` and the billing portal's `return_url`. |
-| `LICENSE_DB_PATH` | no (default `license.db`) | Path to the SQLite file. On Fly.io this should point at the mounted volume, e.g. `/data/license.db`. |
+| `LICENSE_BASE_URL` | **yes** | This service's own public URL, no trailing slash (e.g. `https://claudepass.com`). Used to build Checkout's `success_url`/`cancel_url` and the billing portal's `return_url`. |
+| `LICENSE_DB_PATH` | no (default `license.db`) | Path to the SQLite file. On the production droplet this is `/srv/claudepass/data/license.db` (the one path `license.service`'s sandbox can write to — see `deploy/`); on Fly.io it should point at the mounted volume, e.g. `/data/license.db`. |
 | `LICENSE_ADDR` | no (default `:8080`) | Listen address. |
 | `LICENSE_SMTP_HOST` | no | SMTP host for `/reissue`'s email. Leave unset (with `LICENSE_SMTP_FROM`) and the service still runs — `/reissue` just refuses every request with a clear error until both are set. |
 | `LICENSE_SMTP_PORT` | no (default `587`) | SMTP port. `465` dials with implicit TLS; anything else uses `net/smtp.SendMail` (STARTTLS handled by the server, standard for 587). |
@@ -139,7 +139,18 @@ flow at `POST /checkout` with a Stripe test card.
   token signed with anything but the production key, and another repeats
   the cancellation-refuses-reissue path over a real socket.
 
-## Deploy (Fly.io)
+## Deploy
+
+**Current production deploy is the DigitalOcean droplet documented in
+[`deploy/`](../../deploy) at the repo root** (`deploy/deploy.sh`,
+`deploy/Caddyfile`, `deploy/license.service`, `deploy/README.md`): this
+service runs there as a systemd unit behind Caddy at claudepass.com,
+alongside the static site — not on Fly.io. The Fly.io instructions below
+are kept as a documented alternative (the D1/Cloudflare option they
+describe is still real if credentials for that ever show up) but are not
+what claudepass.com actually runs.
+
+### Deploy (Fly.io) — alternative, not current production
 
 Fly.io was chosen per CLA-15/ADR-0006's instruction to "choose based on
 what the owner has credentials for, else Fly" — no deploy credentials for
@@ -169,7 +180,7 @@ fly secrets set --app claudepass-license \
   LICENSE_BASE_URL=https://claudepass-license.fly.dev \
   LICENSE_SMTP_HOST=... LICENSE_SMTP_PORT=587 \
   LICENSE_SMTP_USERNAME=... LICENSE_SMTP_PASSWORD=... \
-  LICENSE_SMTP_FROM="ClaudePass <license@claudepass.dev>"
+  LICENSE_SMTP_FROM="ClaudePass <license@claudepass.com>"
 
 fly deploy --config services/license/fly.toml --dockerfile services/license/Dockerfile
 ```

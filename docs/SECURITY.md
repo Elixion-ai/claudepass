@@ -281,10 +281,12 @@ no outbound network connection anywhere — the only networking primitive in
 the whole binary is `internal/broker`'s own Unix domain socket to the local
 Broker process (loopback-only, machine-local, never a network address).
 Two things outside the `cpass` binary itself do touch the network, and
-neither is telemetry: `install.sh` fetches a release asset over HTTPS to
-install `cpass` in the first place, and `services/license/` is the separate
-hosted service that issues license tokens after a Stripe Checkout — the
-`cpass` binary you run afterwards never talks to it (see above).
+neither is telemetry: `install.sh` fetches a release archive and its
+`checksums.txt` over HTTPS from `claudepass.com` (verifying the archive's
+sha256 before installing it) to install `cpass` in the first place, and
+`services/license/` is the separate hosted service that issues license
+tokens after a Stripe Checkout — the `cpass` binary you run afterwards
+never talks to it (see above).
 
 ## Every `CPASS_*` environment variable
 
@@ -299,10 +301,9 @@ hosted service that issues license tokens after a Stripe Checkout — the
 | `CPASS_TEST_STDIN` | `cli.testStdin` | **Test-only** — compiled in only by binaries built with `-tags e2e`. Lets a non-terminal stdin satisfy `cpass add`/`cpass capture`'s terminal gate, so the e2e suite can drive prompts without a real TTY. A release binary has no way to read this variable at all. |
 | `CPASS_TEST_TTY` | `cli.testTTY` | **Test-only**, same `-tags e2e` gate as above. Forces `humanPresent()` true, for exercising `--unsafe-allow` and similar human-only paths from a test harness. |
 | `CPASS_TEST_LICENSE_PUBKEY` | `license.trustedPublicKey` | **Test-only**, same `-tags e2e` gate. Base64 of a throwaway 32-byte Ed25519 public key, so tests can mint and verify their own license tokens without the real signing key (which is not in this repository) or the real trusted key. |
-| `CPASS_REPO` | `install.sh` only | Not read by the compiled `cpass` binary. `owner/repo` to install from (default `gumruyanzh/claudepass`). |
-| `CPASS_VERSION` | `install.sh` only | Not read by the compiled `cpass` binary. `latest` (default) or an explicit release tag for the installer to fetch. |
+| `CPASS_VERSION` | `install.sh` only | Not read by the compiled `cpass` binary. `latest` (default) or an explicit release tag (e.g. `v0.1.2`) for the installer to fetch from `claudepass.com/dl/<version>/`. |
 | `CPASS_INSTALL_DIR` | `install.sh` only | Not read by the compiled `cpass` binary. Where the installer places the downloaded `cpass` binary. |
-| `CPASS_BASE_URL` | `install.sh` only | Not read by the compiled `cpass` binary. Overrides the download origin the installer fetches release assets from — for a private mirror or a test fixture server; requires `CPASS_VERSION` to be an explicit tag. |
+| `CPASS_BASE_URL` | `install.sh` only | Not read by the compiled `cpass` binary. Overrides the download origin the installer fetches the release archive and `checksums.txt` from (default `https://claudepass.com`) — for a mirror or a test fixture server. |
 
 ## Every path `cpass` touches on disk
 

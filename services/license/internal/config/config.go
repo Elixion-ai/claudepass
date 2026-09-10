@@ -35,7 +35,7 @@ type Config struct {
 	// Addr is the address http.ListenAndServe binds, e.g. ":8080".
 	Addr string
 	// BaseURL is this service's own public URL, no trailing slash (e.g.
-	// "https://license.claudepass.dev"). Used to build the Checkout
+	// "https://claudepass.com"). Used to build the Checkout
 	// success_url and the billing portal return_url.
 	BaseURL string
 	// DBPath is the SQLite file the store opens.

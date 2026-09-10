@@ -9,27 +9,27 @@ Developers working with AI coding agents constantly need the agent to run comman
 ## Install
 
 `gumruyanzh/claudepass` is a private repository (closed source, see
-[ADR-0006](docs/adr/0006-closed-source-paid.md)); both install paths below
-need read access to it.
+[ADR-0006](docs/adr/0006-closed-source-paid.md)) — but built binaries are
+published publicly at [claudepass.com](https://claudepass.com), so
+installing needs no GitHub credentials.
 
 **curl:**
 
 ```bash
-export GITHUB_TOKEN=$(gh auth token)   # or any token with read access to the repo
-curl -fsSL https://raw.githubusercontent.com/gumruyanzh/claudepass/main/install.sh | sh
+curl -fsSL https://claudepass.com/install.sh | sh
 ```
 
 **Homebrew** (from the owner's tap):
 
 ```bash
-export HOMEBREW_GITHUB_API_TOKEN=$(gh auth token)
-brew tap softorize/tap
-brew install cpass
+brew install softorize/tap/cpass
 ```
 
-Both installers, and the release pipeline that feeds them, are covered by
-`.goreleaser.yaml`, `.github/workflows/release.yml`, and `install.sh` at the
-repo root — see CLA-16.
+Both installers download a GoReleaser-built archive and its `checksums.txt`
+straight from claudepass.com (see [`deploy/`](deploy/) for how release
+binaries reach the site) and verify sha256 before installing. The release
+pipeline that produces them is `.goreleaser.yaml` and
+`.github/workflows/release.yml` at the repo root — see CLA-16.
 
 ## 60-second quickstart
 
