@@ -51,6 +51,7 @@
 html {
   background: var(--bg-void);
   scroll-behavior: smooth;
+  overflow-x: hidden;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -281,6 +282,7 @@ input:focus-visible,
   margin-top: 26px;
 }
 .cta-row.cta-center { justify-content: center; }
+.cta-row[hidden] { display: none; }
 
 /* ---------- Cabinet panels ---------- */
 
@@ -497,6 +499,7 @@ section + section { border-top: 2px solid var(--panel-edge-hi); }
   width: 100%;
 }
 .canvas-overlay-prompt:hover { background: rgba(10, 14, 10, 0.6); }
+.canvas-overlay-prompt[hidden] { display: none; }
 
 .crt-overlay {
   position: absolute;

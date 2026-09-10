@@ -6,6 +6,7 @@
 <title>ClaudePass — Vault Defense</title>
 <meta name="description" content="Defend the Vault. Your AI agent only ever sees a Handle — never the Secret. Play Vault Defense, then install ClaudePass in one command.">
 <link rel="preload" href="/fonts/press-start-2p-v15-latin-regular.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230a0e0a'/%3E%3Crect x='7' y='0' width='2' height='4' fill='%2333ff66'/%3E%3Crect x='6' y='4' width='4' height='1' fill='%2333ff66'/%3E%3Crect x='3' y='5' width='10' height='1' fill='%2333ff66'/%3E%3Crect x='0' y='6' width='3' height='8' fill='%2333ff66'/%3E%3Crect x='3' y='6' width='10' height='8' fill='%2333ff66'/%3E%3Crect x='13' y='6' width='3' height='8' fill='%2333ff66'/%3E%3Crect x='3' y='14' width='10' height='1' fill='%2333ff66'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/retro.css">
 </head>
 <body>
@@ -70,7 +71,7 @@
         </dl>
 
         <div class="touch-controls">
-          <div class="dpad" aria-hidden="true">
+          <div class="dpad">
             <button class="d-up" type="button" aria-label="Move up">▲</button>
             <button class="d-down" type="button" aria-label="Move down">▼</button>
             <button class="d-left" type="button" aria-label="Move left">◀</button>
@@ -221,7 +222,8 @@
             <li>Cancel anytime — your token keeps working through its grace period</li>
           </ul>
           <form class="checkout-form" method="POST" action="/checkout">
-            <input type="email" name="email" placeholder="you@example.com (optional)" autocomplete="email">
+            <label class="visually-hidden" for="pro-email">Email address (optional)</label>
+            <input id="pro-email" type="email" name="email" placeholder="you@example.com (optional)" autocomplete="email">
             <button class="btn btn-primary" type="submit">CONTINUE →</button>
           </form>
         </div>

@@ -383,8 +383,20 @@
       { x: cx - 16, y: cy + 16 }, { x: cx + 48, y: cy + 16 }
     ];
     ringTiles.forEach(function (t) {
-      if (t.x >= 0 && t.x <= FIELD_W - 16) walls.push({ x: t.x, y: t.y, w: 16, h: 16, hp: 2, type: "brick" });
+      if (t.x < 0 || t.x > FIELD_W - 16) return;
+      // A second Barricade pickup in the same wave re-runs this to
+      // repair any tiles already destroyed — it must not stack a
+      // duplicate, still-intact tile on top of one that's still there,
+      // which would silently double that spot's effective HP.
+      if (wallAt(t.x, t.y)) return;
+      walls.push({ x: t.x, y: t.y, w: 16, h: 16, hp: 2, type: "brick" });
     });
+  }
+  function wallAt(x, y) {
+    for (var i = 0; i < walls.length; i++) {
+      if (walls[i].x === x && walls[i].y === y) return true;
+    }
+    return false;
   }
   function placeSteelCorners() {
     walls.push({ x: 16, y: 16, w: 16, h: 16, type: "steel" });
@@ -447,9 +459,22 @@
   canvas.addEventListener("blur", function () { canvasFocused = false; });
 
   function hideOverlay() { if (overlayPrompt) overlayPrompt.hidden = true; }
+
+  // Shared by the canvas itself AND the "CLICK OR TAP TO PLAY" overlay
+  // button that sits on top of it before first focus: both must focus
+  // the canvas AND actually start/restart the run in one gesture, or a
+  // pointer user needs two separate clicks/taps to get into a game a
+  // keyboard user starts with one Space press.
+  function activatePointer(e) {
+    if (e && e.cancelable) e.preventDefault();
+    canvas.focus();
+    firstGesture();
+    if (state === STATE.ATTRACT) startGame();
+    else if (state === STATE.GAME_OVER) enterAttract();
+  }
   if (overlayPrompt) {
-    overlayPrompt.addEventListener("click", function () { canvas.focus(); });
-    overlayPrompt.addEventListener("touchstart", function (e) { e.preventDefault(); canvas.focus(); }, { passive: false });
+    overlayPrompt.addEventListener("click", activatePointer);
+    overlayPrompt.addEventListener("touchstart", activatePointer, { passive: false });
   }
 
   function firstGesture() {
@@ -469,8 +494,14 @@
     // typed into it or any other field on the page.
     if (isTypingTarget(e.target)) return;
     var k = e.key;
-    var isGameKey = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "w", "a", "s", "d", "W", "A", "S", "D"].indexOf(k) !== -1;
-    if (canvasFocused && state === STATE.PLAYING && isGameKey) e.preventDefault();
+    var isGameKey = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Enter", "w", "a", "s", "d", "W", "A", "S", "D"].indexOf(k) !== -1;
+    // Capture before the state-machine branches below run, not just
+    // while PLAYING — ATTRACT/GAME_OVER/ENTER_INITIALS all act on this
+    // same keydown (start, restart, initials entry), and a focused
+    // canvas should never let Space/Arrow/Enter fall through to the
+    // browser's native page scroll no matter which of those states it
+    // is currently in.
+    if (canvasFocused && isGameKey) e.preventDefault();
     firstGesture();
     if (k === "p" || k === "P" || k === "Escape") { togglePause(); return; }
     if (k === "m" || k === "M") { setMuted(!muted); return; }
@@ -497,19 +528,8 @@
     else if (left) lastPressedDir = "left"; else if (right) lastPressedDir = "right";
   }
 
-  canvas.addEventListener("click", function () {
-    canvas.focus();
-    firstGesture();
-    if (state === STATE.ATTRACT) startGame();
-    else if (state === STATE.GAME_OVER) enterAttract();
-  });
-  canvas.addEventListener("touchstart", function (e) {
-    e.preventDefault();
-    canvas.focus();
-    firstGesture();
-    if (state === STATE.ATTRACT) startGame();
-    else if (state === STATE.GAME_OVER) enterAttract();
-  }, { passive: false });
+  canvas.addEventListener("click", activatePointer);
+  canvas.addEventListener("touchstart", activatePointer, { passive: false });
 
   function bindHold(el, dirKey) {
     if (!el) return;
@@ -567,8 +587,16 @@
   document.addEventListener("visibilitychange", function () {
     if (document.hidden) {
       if (state === STATE.PLAYING) { state = STATE.PAUSED; pausedByVisibility = true; }
+      // The hi-score ticker's rotation timer has no other cleanup path;
+      // stop it while the tab is hidden instead of leaving it ticking
+      // against a text node nobody can see.
+      if (tickerLine && tickerLine.__vdInterval) {
+        clearInterval(tickerLine.__vdInterval);
+        tickerLine.__vdInterval = null;
+      }
     } else {
       if (state === STATE.PAUSED && pausedByVisibility) { pausedByVisibility = false; }
+      refreshHiscoreDom();
     }
   });
   window.addEventListener("blur", function () {
@@ -736,6 +764,7 @@
     }
     clampToField(iv);
     resolveWallCollision(iv);
+    if (iv.flash > 0) { iv.flash -= dt; if (iv.flash < 0) iv.flash = 0; }
     if (rectsOverlap(iv, VAULT)) breachVault(iv);
   }
   function dirToward(from, to) {
@@ -946,7 +975,13 @@
     if (gameOverCta) gameOverCta.hidden = false;
     if (qualifies && score > 0) {
       setTimeout(function () {
-        state = STATE.ENTER_INITIALS; initials = ["A", "A", "A"]; initialsSlot = 0;
+        // A player can mash a game-key within this delay to bounce
+        // GAME_OVER -> ATTRACT -> PLAYING (a fresh run) before this
+        // fires; only claim the state if we're still on the GAME_OVER
+        // screen this timeout was scheduled for.
+        if (state === STATE.GAME_OVER) {
+          state = STATE.ENTER_INITIALS; initials = ["A", "A", "A"]; initialsSlot = 0;
+        }
       }, 1600);
     }
   }
@@ -1026,7 +1061,6 @@
       if (!cache[name]) name = iv.type;
       var angle = DIR_ANGLE[iv.dir] || 0;
       drawSpriteRotated(name, iv.x + iv.w / 2, iv.y + iv.h / 2, angle, iv.flash > 0);
-      if (iv.flash > 0) iv.flash -= 1 / 60;
       if (iv.type === "shouter" && iv.telegraph > 0) {
         ctx.fillStyle = PAL.cyan;
         ctx.fillRect(iv.x + iv.w - 4, iv.y - 2, 4, 4);
@@ -1268,9 +1302,19 @@
   function rescale() {
     var frameEl = canvas.parentElement;
     var availW = frameEl ? frameEl.clientWidth : window.innerWidth;
-    var availH = Math.min(window.innerHeight * 0.6, 520);
+    // 0.7/560, not the old 0.6/520: that cap sat just below the 512px
+    // (2x CANVAS_H) a common ~850px-tall desktop window needs, so once
+    // the hard "always at least 2x" floor below is (correctly) removed
+    // for mobile's sake, ordinary desktop windows were sliding down to
+    // 1x too — this keeps 2x reachable on desktop while still leaving
+    // width (not height) as the real limiter on narrow phones.
+    var availH = Math.min(window.innerHeight * 0.7, 560);
     var scale = Math.floor(Math.min(availW / CANVAS_W, availH / CANVAS_H));
-    scale = Math.max(2, Math.min(4, scale || 2));
+    // Floor of 1, not 2: forcing a minimum of 2x (480px wide) regardless
+    // of how little width the cabinet actually has is what pushed the
+    // canvas past the viewport edge on phones under ~480px of available
+    // width — nearly all phones in portrait. 1x (240px) always fits.
+    scale = Math.max(1, Math.min(4, scale || 1));
     canvas.style.width = CANVAS_W * scale + "px";
     canvas.style.height = CANVAS_H * scale + "px";
   }
