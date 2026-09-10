@@ -27,11 +27,19 @@ claudepass.com {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
-		# 'unsafe-inline' on style-src only: every page's CSS is an inline
-		# <style> tag (no JS frameworks, per CLA-25's "keep it simple for
-		# now"); form-action 'self' is what lets /pricing's form POST to
+		# The retro arcade redesign (Vault Defense landing page): every
+		# script is now an external file under site/js or site/game, so
+		# script-src drops to 'self' with no 'unsafe-inline' — no inline
+		# <script> or inline event-handler attribute may ship anywhere
+		# under site/. style-src keeps 'unsafe-inline' only because a
+		# couple of existing pages still rely on it; no new page needs
+		# it (retro.css is the one shared, cacheable stylesheet). The
+		# Press Start 2P face is self-hosted under site/fonts, so
+		# font-src is 'self' with no webfont CDN. img-src adds data:
+		# for inline data-URI art without opening up remote images.
+		# form-action 'self' is still what lets /pricing's form POST to
 		# /checkout on the same origin.
-		Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'self'; frame-ancestors 'none'"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'self'; frame-ancestors 'none'"
 		-Server
 	}
 

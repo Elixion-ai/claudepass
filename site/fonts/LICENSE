@@ -1,0 +1,15 @@
+Press Start 2P
+Copyright 2012 The Press Start 2P Project Authors (cody@zone38.net)
+Licensed under the SIL Open Font License, Version 1.1 — see OFL.txt.
+
+press-start-2p-v15-latin-regular.woff2 in this directory is a subset of
+the upstream PressStart2P-Regular.ttf (google/fonts, ofl/pressstart2p),
+built with fonttools/pyftsubset and limited to the glyphs this site
+actually renders (basic ASCII plus em dash, right arrow, and the four
+triangle glyphs used by the d-pad and section markers). Subsetting is
+permitted by the OFL as a modification; this notice and OFL.txt travel
+with the font per section 3 of the license. No characters were added or
+redrawn — this is strictly a glyph-coverage reduction of the original.
+
+Self-hosted here (no runtime request to any font CDN) so the site's
+Content-Security-Policy can set font-src 'self'.

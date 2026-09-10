@@ -5,199 +5,43 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Checkout canceled — ClaudePass</title>
 <meta name="description" content="Checkout was canceled. No charge was made.">
-<style>
-    :root {
-      --bg: #ffffff;
-      --bg-alt: #f6f7f9;
-      --fg: #16181d;
-      --fg-muted: #55606e;
-      --border: #e2e5ea;
-      --accent: #1c6dd0;
-      --accent-fg: #ffffff;
-      --code-bg: #f0f2f5;
-      --code-fg: #1f2430;
-      --card-bg: #ffffff;
-      --danger: #b3261e;
-      color-scheme: light dark;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg: #0f1115;
-        --bg-alt: #161920;
-        --fg: #eef0f3;
-        --fg-muted: #9aa4b2;
-        --border: #262b33;
-        --accent: #5b9dff;
-        --accent-fg: #0b1220;
-        --code-bg: #1b1f27;
-        --code-fg: #d7dce3;
-        --card-bg: #14171d;
-        --danger: #ff8a80;
-      }
-    }
-    * { box-sizing: border-box; }
-    html { background: var(--bg); }
-    body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--fg);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      line-height: 1.55;
-      -webkit-font-smoothing: antialiased;
-    }
-    code, pre, kbd {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-      font-size: 0.92em;
-    }
-    a { color: var(--accent); text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    .wrap {
-      max-width: 880px;
-      margin: 0 auto;
-      padding: 0 24px;
-    }
-    header.site {
-      border-bottom: 1px solid var(--border);
-    }
-    header.site .wrap {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding-top: 18px;
-      padding-bottom: 18px;
-    }
-    .brand {
-      font-weight: 700;
-      font-size: 1.15rem;
-      color: var(--fg);
-      letter-spacing: -0.01em;
-    }
-    .brand:hover { text-decoration: none; opacity: 0.85; }
-    nav.site-nav a {
-      color: var(--fg-muted);
-      margin-left: 22px;
-      font-size: 0.95rem;
-    }
-    nav.site-nav a:hover { color: var(--fg); }
-    main { padding: 56px 0 72px; }
-    h1 { font-size: 2.3rem; line-height: 1.2; letter-spacing: -0.02em; margin: 0 0 18px; }
-    h2 { font-size: 1.5rem; letter-spacing: -0.01em; margin: 2.4em 0 0.7em; }
-    h2:first-child { margin-top: 0; }
-    h3 { font-size: 1.1rem; margin: 1.6em 0 0.5em; }
-    p { color: var(--fg); margin: 0.9em 0; }
-    .lede { font-size: 1.2rem; color: var(--fg-muted); max-width: 640px; }
-    .muted { color: var(--fg-muted); }
-    .hero { padding: 40px 0 8px; }
-    .cta-row { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 28px; }
-    .btn {
-      display: inline-block;
-      padding: 11px 20px;
-      border-radius: 8px;
-      font-weight: 600;
-      font-size: 0.98rem;
-      border: 1px solid transparent;
-    }
-    .btn-primary { background: var(--accent); color: var(--accent-fg); }
-    .btn-primary:hover { text-decoration: none; opacity: 0.92; }
-    .btn-secondary { background: transparent; color: var(--fg); border-color: var(--border); }
-    .btn-secondary:hover { text-decoration: none; border-color: var(--fg-muted); }
-    .grid3 {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 20px;
-      margin: 24px 0;
-    }
-    @media (max-width: 720px) { .grid3 { grid-template-columns: 1fr; } }
-    .card {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 22px;
-    }
-    .card h3 { margin-top: 0; }
-    .card p { color: var(--fg-muted); font-size: 0.95rem; }
-    pre {
-      background: var(--code-bg);
-      color: var(--code-fg);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 16px 18px;
-      overflow-x: auto;
-      margin: 1em 0;
-    }
-    code.inline, p code, li code {
-      background: var(--code-bg);
-      color: var(--code-fg);
-      padding: 0.15em 0.4em;
-      border-radius: 5px;
-    }
-    dl.term dt { font-weight: 700; margin-top: 1.1em; }
-    dl.term dd { margin: 0.2em 0 0 0; color: var(--fg-muted); }
-    ul, ol { padding-left: 1.3em; }
-    li { margin: 0.4em 0; }
-    table { border-collapse: collapse; width: 100%; margin: 1em 0; }
-    th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
-    th { color: var(--fg-muted); font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.02em; }
-    .pricing-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 32px 0; }
-    @media (max-width: 720px) { .pricing-grid { grid-template-columns: 1fr; } }
-    .plan { border: 1px solid var(--border); border-radius: 14px; padding: 28px; background: var(--card-bg); }
-    .plan.pro { border-color: var(--accent); }
-    .plan .price { font-size: 2.1rem; font-weight: 700; margin: 6px 0 2px; }
-    .plan .price small { font-size: 1rem; font-weight: 500; color: var(--fg-muted); }
-    .plan ul { list-style: none; padding: 0; margin: 18px 0 0; }
-    .plan li { padding-left: 1.5em; position: relative; }
-    .plan li::before { content: "\2713"; position: absolute; left: 0; color: var(--accent); font-weight: 700; }
-    form.checkout-form { margin-top: 20px; display: flex; flex-direction: column; gap: 10px; }
-    form.checkout-form input[type="email"] {
-      padding: 10px 12px;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      background: var(--bg);
-      color: var(--fg);
-      font-size: 0.95rem;
-    }
-    form.checkout-form button {
-      cursor: pointer;
-      font: inherit;
-    }
-    .callout {
-      border: 1px solid var(--border);
-      background: var(--bg-alt);
-      border-radius: 10px;
-      padding: 16px 18px;
-      margin: 1.4em 0;
-      font-size: 0.95rem;
-    }
-    .callout.warn { border-color: var(--danger); }
-    footer.site {
-      border-top: 1px solid var(--border);
-      margin-top: 40px;
-    }
-    footer.site .wrap { padding: 26px 24px 40px; }
-    footer.site nav a { margin-right: 18px; font-size: 0.88rem; color: var(--fg-muted); }
-    footer.site .legal {
-      margin-top: 14px;
-      font-size: 0.8rem;
-      color: var(--fg-muted);
-      max-width: 720px;
-    }
-    .status-404 h1 { font-size: 5rem; margin-bottom: 0; }
-</style>
+<link rel="stylesheet" href="/retro.css">
 </head>
-<body>
-  <header class="site">
-    <div class="wrap">
-      <a class="brand" href="/">ClaudePass</a>
-      <nav class="site-nav">
-      <a href="/install">Install</a>
-      <a href="/pricing">Pricing</a>
-      <a href="/docs">Docs</a>
-      <a href="/security">Security</a>
-      </nav>
+<body class="inner-page">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="arcade-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <svg class="brand-glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <rect x="7" y="0" width="2" height="4" fill="currentColor"/>
+        <rect x="6" y="4" width="4" height="1" fill="currentColor"/>
+        <rect x="3" y="5" width="10" height="1" fill="currentColor"/>
+        <rect x="0" y="6" width="3" height="8" fill="currentColor"/>
+        <rect x="3" y="6" width="10" height="8" fill="currentColor"/>
+        <rect x="13" y="6" width="3" height="8" fill="currentColor"/>
+        <rect x="3" y="14" width="10" height="1" fill="currentColor"/>
+      </svg>
+      CLAUDEPASS
+    </a>
+    <nav class="arcade-nav" aria-label="Primary">
+      <a href="/install">INSTALL</a>
+      <a href="/pricing">PRICING</a>
+      <a href="/docs">DOCS</a>
+      <a href="/security">SECURITY</a>
+    </nav>
+    <div class="header-tools">
+      <button id="mute-toggle" class="icon-btn" type="button" aria-pressed="false" aria-label="Unmute sound">🔇</button>
+      <button id="crt-toggle" class="icon-btn" type="button" aria-pressed="true" aria-label="Toggle CRT scanlines">≈</button>
     </div>
-  </header>
-  <main>
+  </div>
+</header>
+
+<main id="main">
+  <div class="content">
     <div class="wrap">
+
 
       <h1>Checkout canceled</h1>
       <p class="lede">No charge was made. Your account is still on the Free plan.</p>
@@ -207,23 +51,30 @@
         <a class="btn btn-secondary" href="/">Home</a>
       </div>
 
+    
     </div>
-  </main>
+  </div>
+  <div id="crt-overlay" class="crt-overlay page-wide" aria-hidden="true" hidden></div>
+</main>
 
-  <footer class="site">
-    <div class="wrap">
-      <nav>
-        <a href="/install">Install</a>
-        <a href="/pricing">Pricing</a>
-        <a href="/docs">Docs</a>
-        <a href="/security">Security</a>
-        <a href="/privacy">Privacy</a>
-        <a href="/terms">Terms</a>
-      </nav>
-      <p class="legal">
-        ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.
-      </p>
-    </div>
-  </footer>
+<footer class="arcade-footer">
+  <div class="wrap">
+    <nav aria-label="Footer">
+      <a href="/install">INSTALL</a>
+      <a href="/pricing">PRICING</a>
+      <a href="/docs">DOCS</a>
+      <a href="/security">SECURITY</a>
+      <a href="/privacy">PRIVACY</a>
+      <a href="/terms">TERMS</a>
+    </nav>
+    <p class="footer-legal">
+      ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.
+    </p>
+    <p class="footer-copyright">© 2026 ClaudePass. High scores live in your browser's localStorage only.</p>
+    <button id="crt-text-toggle" class="crt-text-toggle" type="button">CRT: ON</button>
+  </div>
+</footer>
+
+<script src="/js/site.js"></script>
 </body>
 </html>

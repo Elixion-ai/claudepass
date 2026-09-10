@@ -3,231 +3,154 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ClaudePass</title>
-<meta name="description" content="A secret manager for AI coding agents: the Agent sees a Handle, never the Secret value.">
-<style>
-    :root {
-      --bg: #ffffff;
-      --bg-alt: #f6f7f9;
-      --fg: #16181d;
-      --fg-muted: #55606e;
-      --border: #e2e5ea;
-      --accent: #1c6dd0;
-      --accent-fg: #ffffff;
-      --code-bg: #f0f2f5;
-      --code-fg: #1f2430;
-      --card-bg: #ffffff;
-      --danger: #b3261e;
-      color-scheme: light dark;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg: #0f1115;
-        --bg-alt: #161920;
-        --fg: #eef0f3;
-        --fg-muted: #9aa4b2;
-        --border: #262b33;
-        --accent: #5b9dff;
-        --accent-fg: #0b1220;
-        --code-bg: #1b1f27;
-        --code-fg: #d7dce3;
-        --card-bg: #14171d;
-        --danger: #ff8a80;
-      }
-    }
-    * { box-sizing: border-box; }
-    html { background: var(--bg); }
-    body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--fg);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      line-height: 1.55;
-      -webkit-font-smoothing: antialiased;
-    }
-    code, pre, kbd {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-      font-size: 0.92em;
-    }
-    a { color: var(--accent); text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    .wrap {
-      max-width: 880px;
-      margin: 0 auto;
-      padding: 0 24px;
-    }
-    header.site {
-      border-bottom: 1px solid var(--border);
-    }
-    header.site .wrap {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding-top: 18px;
-      padding-bottom: 18px;
-    }
-    .brand {
-      font-weight: 700;
-      font-size: 1.15rem;
-      color: var(--fg);
-      letter-spacing: -0.01em;
-    }
-    .brand:hover { text-decoration: none; opacity: 0.85; }
-    nav.site-nav a {
-      color: var(--fg-muted);
-      margin-left: 22px;
-      font-size: 0.95rem;
-    }
-    nav.site-nav a:hover { color: var(--fg); }
-    main { padding: 56px 0 72px; }
-    h1 { font-size: 2.3rem; line-height: 1.2; letter-spacing: -0.02em; margin: 0 0 18px; }
-    h2 { font-size: 1.5rem; letter-spacing: -0.01em; margin: 2.4em 0 0.7em; }
-    h2:first-child { margin-top: 0; }
-    h3 { font-size: 1.1rem; margin: 1.6em 0 0.5em; }
-    p { color: var(--fg); margin: 0.9em 0; }
-    .lede { font-size: 1.2rem; color: var(--fg-muted); max-width: 640px; }
-    .muted { color: var(--fg-muted); }
-    .hero { padding: 40px 0 8px; }
-    .cta-row { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 28px; }
-    .btn {
-      display: inline-block;
-      padding: 11px 20px;
-      border-radius: 8px;
-      font-weight: 600;
-      font-size: 0.98rem;
-      border: 1px solid transparent;
-    }
-    .btn-primary { background: var(--accent); color: var(--accent-fg); }
-    .btn-primary:hover { text-decoration: none; opacity: 0.92; }
-    .btn-secondary { background: transparent; color: var(--fg); border-color: var(--border); }
-    .btn-secondary:hover { text-decoration: none; border-color: var(--fg-muted); }
-    .grid3 {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 20px;
-      margin: 24px 0;
-    }
-    @media (max-width: 720px) { .grid3 { grid-template-columns: 1fr; } }
-    .card {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 22px;
-    }
-    .card h3 { margin-top: 0; }
-    .card p { color: var(--fg-muted); font-size: 0.95rem; }
-    pre {
-      background: var(--code-bg);
-      color: var(--code-fg);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 16px 18px;
-      overflow-x: auto;
-      margin: 1em 0;
-    }
-    code.inline, p code, li code {
-      background: var(--code-bg);
-      color: var(--code-fg);
-      padding: 0.15em 0.4em;
-      border-radius: 5px;
-    }
-    dl.term dt { font-weight: 700; margin-top: 1.1em; }
-    dl.term dd { margin: 0.2em 0 0 0; color: var(--fg-muted); }
-    ul, ol { padding-left: 1.3em; }
-    li { margin: 0.4em 0; }
-    table { border-collapse: collapse; width: 100%; margin: 1em 0; }
-    th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
-    th { color: var(--fg-muted); font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.02em; }
-    .pricing-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 32px 0; }
-    @media (max-width: 720px) { .pricing-grid { grid-template-columns: 1fr; } }
-    .plan { border: 1px solid var(--border); border-radius: 14px; padding: 28px; background: var(--card-bg); }
-    .plan.pro { border-color: var(--accent); }
-    .plan .price { font-size: 2.1rem; font-weight: 700; margin: 6px 0 2px; }
-    .plan .price small { font-size: 1rem; font-weight: 500; color: var(--fg-muted); }
-    .plan ul { list-style: none; padding: 0; margin: 18px 0 0; }
-    .plan li { padding-left: 1.5em; position: relative; }
-    .plan li::before { content: "\2713"; position: absolute; left: 0; color: var(--accent); font-weight: 700; }
-    form.checkout-form { margin-top: 20px; display: flex; flex-direction: column; gap: 10px; }
-    form.checkout-form input[type="email"] {
-      padding: 10px 12px;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      background: var(--bg);
-      color: var(--fg);
-      font-size: 0.95rem;
-    }
-    form.checkout-form button {
-      cursor: pointer;
-      font: inherit;
-    }
-    .callout {
-      border: 1px solid var(--border);
-      background: var(--bg-alt);
-      border-radius: 10px;
-      padding: 16px 18px;
-      margin: 1.4em 0;
-      font-size: 0.95rem;
-    }
-    .callout.warn { border-color: var(--danger); }
-    footer.site {
-      border-top: 1px solid var(--border);
-      margin-top: 40px;
-    }
-    footer.site .wrap { padding: 26px 24px 40px; }
-    footer.site nav a { margin-right: 18px; font-size: 0.88rem; color: var(--fg-muted); }
-    footer.site .legal {
-      margin-top: 14px;
-      font-size: 0.8rem;
-      color: var(--fg-muted);
-      max-width: 720px;
-    }
-    .status-404 h1 { font-size: 5rem; margin-bottom: 0; }
-</style>
+<title>ClaudePass — Vault Defense</title>
+<meta name="description" content="Defend the Vault. Your AI agent only ever sees a Handle — never the Secret. Play Vault Defense, then install ClaudePass in one command.">
+<link rel="preload" href="/fonts/press-start-2p-v15-latin-regular.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/retro.css">
 </head>
 <body>
-  <header class="site">
-    <div class="wrap">
-      <a class="brand" href="/">ClaudePass</a>
-      <nav class="site-nav">
-      <a href="/install">Install</a>
-      <a href="/pricing">Pricing</a>
-      <a href="/docs">Docs</a>
-      <a href="/security">Security</a>
-      </nav>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="arcade-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <svg class="brand-glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <rect x="7" y="0" width="2" height="4" fill="currentColor"/>
+        <rect x="6" y="4" width="4" height="1" fill="currentColor"/>
+        <rect x="3" y="5" width="10" height="1" fill="currentColor"/>
+        <rect x="0" y="6" width="3" height="8" fill="currentColor"/>
+        <rect x="3" y="6" width="10" height="8" fill="currentColor"/>
+        <rect x="13" y="6" width="3" height="8" fill="currentColor"/>
+        <rect x="3" y="14" width="10" height="1" fill="currentColor"/>
+      </svg>
+      CLAUDEPASS
+    </a>
+    <nav class="arcade-nav" aria-label="Primary">
+      <a href="/install">INSTALL</a>
+      <a href="/pricing">PRICING</a>
+      <a href="/docs">DOCS</a>
+      <a href="/security">SECURITY</a>
+    </nav>
+    <div class="header-tools">
+      <button id="mute-toggle" class="icon-btn" type="button" aria-pressed="false" aria-label="Unmute sound">🔇</button>
+      <button id="crt-toggle" class="icon-btn" type="button" aria-pressed="true" aria-label="Toggle CRT scanlines">≈</button>
     </div>
-  </header>
-  <main>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="hero">
     <div class="wrap">
+      <h1 class="visually-hidden">ClaudePass: your AI agent sees a Handle, never the Secret.</h1>
+      <span class="hero-eyebrow">CLAUDEPASS PRESENTS</span>
+      <p class="marquee" aria-hidden="true">VAULT<br>DEFENSE</p>
+      <p class="hero-lede">Your Handles are inside. The intruders only get the name — never the value.</p>
 
-      <section class="hero">
-        <h1>Your Agent sees a Handle. Never the Secret.</h1>
-        <p class="lede">
-          ClaudePass is a local secret manager built for AI coding agents.
-          A command gets the real value at the moment it runs, injected by
-          a local Broker into that one child process — the value never
-          enters your Agent's Context: not the prompt, not a tool result,
-          not a transcript.
-        </p>
-        <div class="cta-row">
-          <a class="btn btn-primary" href="/install">Install ClaudePass</a>
-          <a class="btn btn-secondary" href="/pricing">See pricing</a>
+      <div class="cabinet">
+        <span class="cabinet-bolt tl" aria-hidden="true"></span>
+        <span class="cabinet-bolt tr" aria-hidden="true"></span>
+        <span class="cabinet-bolt bl" aria-hidden="true"></span>
+        <span class="cabinet-bolt br" aria-hidden="true"></span>
+        <div class="canvas-frame">
+          <canvas id="vault-defense" width="240" height="256" tabindex="0" role="img"
+            aria-label="Vault Defense: an arcade game where your tank defends password Handles from leak-attempt intruders"></canvas>
+          <button id="play-overlay" class="canvas-overlay-prompt" type="button">CLICK OR TAP TO PLAY</button>
+          <div id="crt-overlay" class="crt-overlay" aria-hidden="true"></div>
         </div>
-      </section>
 
-      <h2>How it works</h2>
+        <dl class="hud">
+          <div class="hud-item"><dt>SCORE</dt><dd id="hud-score">000000</dd></div>
+          <div class="hud-item"><dt>WAVE</dt><dd id="hud-wave">1</dd></div>
+          <div class="hud-item"><dt>LIVES</dt><dd id="hud-lives" class="lives-icons">
+            <span class="life-icon"></span><span class="life-icon"></span><span class="life-icon"></span>
+          </dd></div>
+          <div class="hud-item"><dt>HI-SCORE</dt><dd id="hud-hiscore" class="hi-score">000000</dd></div>
+        </dl>
+
+        <div class="touch-controls">
+          <div class="dpad" aria-hidden="true">
+            <button class="d-up" type="button" aria-label="Move up">▲</button>
+            <button class="d-down" type="button" aria-label="Move down">▼</button>
+            <button class="d-left" type="button" aria-label="Move left">◀</button>
+            <button class="d-right" type="button" aria-label="Move right">▶</button>
+          </div>
+          <button class="fire-btn" type="button">FIRE</button>
+        </div>
+
+        <div class="cta-row cta-center game-over-cta" id="game-over-cta" hidden>
+          <a class="btn btn-primary" href="/install">CONTINUE? → INSTALL CLAUDEPASS</a>
+          <a class="btn btn-secondary" href="/pricing">UNLIMITED CONTINUES → SEE PRICING</a>
+        </div>
+      </div>
+
+      <noscript>
+        <div class="cabinet noscript-panel">
+          <p>
+            Vault Defense needs JavaScript to play — here's the idea: your
+            tank (green) defends the Vault from intruder tanks labelled
+            <code>env</code>, <code>cat .env</code>, <code>echo $KEY</code> and
+            <code>prompt-inject</code>. Destroy one and it pops
+            <code>[REDACTED]</code>; let one through and the Vault flashes
+            <code>[REDACTED:stripe/live]</code> and you lose a life — the
+            value is never shown, win or lose.
+          </p>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="/install">INSERT COIN → INSTALL CPASS</a>
+            <a class="btn btn-secondary" href="/pricing">VIEW PRICING</a>
+          </div>
+        </div>
+      </noscript>
+
+      <p class="hero-lede">
+        ClaudePass is a local secret manager for AI coding agents. Every
+        leak attempt — <code>env</code>, <code>cat .env</code>,
+        <code>echo $KEY</code>, a pasted key — is an intruder tank. The
+        Broker is what stops it before it reaches the Vault.
+      </p>
+
+      <div class="cta-row cta-center">
+        <a class="btn btn-primary" href="/install">INSERT COIN → INSTALL CPASS</a>
+        <a class="btn btn-secondary" href="/pricing">VIEW PRICING</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="hiscore-ticker">
+    <div class="wrap">
+      <div class="score-line" id="hiscore-ticker-line">HI-SCORE 000000</div>
+      <p class="caption">Local to this browser — nothing is sent anywhere. Ever.</p>
+      <table class="hiscore-table">
+        <caption class="visually-hidden">Top 10 local Vault Defense scores</caption>
+        <thead>
+          <tr><th scope="col">#</th><th scope="col">Initials</th><th scope="col">Wave</th><th scope="col">Score</th></tr>
+        </thead>
+        <tbody id="hiscore-table-body">
+          <tr><td colspan="4">NO SCORES YET — BE THE FIRST</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="how-it-works">
+    <div class="wrap">
+      <h2 class="section-h2"><span class="glyph">▶</span>HOW IT WORKS</h2>
       <div class="grid3">
-        <div class="card">
-          <h3>Claude Code</h3>
+        <div class="cab-panel">
+          <span class="cab-kicker">CABINET 01</span>
+          <h3>CLAUDE CODE</h3>
           <p>
             <code>cpass integrate claude</code> installs an Intercept hook
-            (catches a pasted Secret before the model ever sees it), a
-            Command Policy hook (blocks commands that only exist to reveal
-            a Secret), and a skill that teaches Claude Code to reach for a
+            that catches a pasted Secret before the model ever sees it, a
+            Command Policy hook that blocks commands built only to reveal
+            a Secret, and a skill that teaches Claude Code to reach for a
             Handle instead of asking you for a value.
           </p>
         </div>
-        <div class="card">
-          <h3>Codex</h3>
+        <div class="cab-panel">
+          <span class="cab-kicker">CABINET 02</span>
+          <h3>CODEX</h3>
           <p>
             <code>cpass integrate codex</code> writes a delimited section
             into <code>AGENTS.md</code>, so Codex learns the same Handles
@@ -235,7 +158,8 @@
             — no separate integration to maintain.
           </p>
         </div>
-        <div class="card">
+        <div class="cab-panel">
+          <span class="cab-kicker">CABINET 03</span>
           <h3>MCP</h3>
           <p>
             <code>cpass mcp</code> speaks the Model Context Protocol over
@@ -245,47 +169,109 @@
           </p>
         </div>
       </div>
-
-      <h2>Closed source. Documented like it isn't.</h2>
-      <p>
-        ClaudePass is closed-source software with a paid plan from day
-        one — the same model 1Password and LastPass use, not
-        open-core. Since you can't read the code yourself, trust has to
-        come from documentation instead: exactly what the Vault, the
-        Broker, both hooks, and the license check do and touch, every
-        environment variable and on-disk path, and a plain no-telemetry
-        statement beyond the license check.
-      </p>
-      <p><a href="/security">Read the full security breakdown &rarr;</a></p>
-
-      <h2>Free to try, simple to grow into</h2>
-      <p class="muted">
-        Free holds 3 Secrets — enough to wire up a real project end to
-        end. Pro is $9.99/month for unlimited Secrets, verified entirely
-        offline so a network blip never locks you out of a Secret you
-        already have.
-      </p>
-      <div class="cta-row">
-        <a class="btn btn-primary" href="/pricing">View pricing</a>
-      </div>
-
     </div>
-  </main>
+  </section>
 
-  <footer class="site">
+  <section id="install">
     <div class="wrap">
-      <nav>
-        <a href="/install">Install</a>
-        <a href="/pricing">Pricing</a>
-        <a href="/docs">Docs</a>
-        <a href="/security">Security</a>
-        <a href="/privacy">Privacy</a>
-        <a href="/terms">Terms</a>
-      </nav>
-      <p class="legal">
-        ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.
-      </p>
+      <span class="section-eyebrow">INSERT COIN</span>
+      <h2 class="section-h2"><span class="glyph">▶</span>INSTALL</h2>
+      <p class="section-lede">One command. No account required for Free.</p>
+      <div class="terminal">
+        <div class="terminal-line">
+          <code>brew install softorize/tap/cpass</code>
+          <button class="copy-btn" type="button">COPY</button>
+        </div>
+        <div class="terminal-line">
+          <code>curl -fsSL https://claudepass.com/install.sh | sh</code>
+          <button class="copy-btn" type="button">COPY</button>
+        </div>
+      </div>
     </div>
-  </footer>
+  </section>
+
+  <section id="pricing">
+    <div class="wrap">
+      <span class="section-eyebrow">CONTINUE?</span>
+      <h2 class="section-h2"><span class="glyph">▶</span>PRICING</h2>
+      <p class="section-lede">Start free. Upgrade when 3 Secrets isn't enough.</p>
+      <div class="pricing-grid">
+        <div class="plan cab-panel">
+          <div class="plan-accent"></div>
+          <h3>FREE — $0</h3>
+          <ul>
+            <li>Up to 3 Secrets</li>
+            <li>Env and file Bindings</li>
+            <li>Command Policy &amp; Redaction</li>
+            <li>Claude Code, Codex, and MCP integrations</li>
+            <li>Manifest, Capture, and Intercept</li>
+          </ul>
+          <div class="cta-row">
+            <a class="btn btn-secondary" href="/install">INSTALL FREE</a>
+          </div>
+        </div>
+        <div class="plan cab-panel pro">
+          <div class="plan-accent"></div>
+          <h3>PRO — $9.99/MO</h3>
+          <ul>
+            <li>Unlimited Secrets</li>
+            <li>Everything in Free</li>
+            <li>Ed25519-signed license, checked entirely offline</li>
+            <li>A network blip never locks your Vault</li>
+            <li>Cancel anytime — your token keeps working through its grace period</li>
+          </ul>
+          <form class="checkout-form" method="POST" action="/checkout">
+            <input type="email" name="email" placeholder="you@example.com (optional)" autocomplete="email">
+            <button class="btn btn-primary" type="submit">CONTINUE →</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="security">
+    <div class="wrap trust-panel">
+      <span class="section-eyebrow">OPERATOR MANUAL</span>
+      <h2 class="section-h2"><span class="glyph">▶</span>CLOSED SOURCE. NO TELEMETRY.</h2>
+      <p class="section-lede">
+        ClaudePass is closed-source software with a paid plan from day
+        one — the same model 1Password and LastPass use, not open-core.
+        Since you can't read the code yourself, trust has to come from
+        documentation instead: exactly what the Vault, the Broker, both
+        hooks, and the license check do and touch, every environment
+        variable and on-disk path, and a plain no-telemetry statement
+        beyond the license check.
+      </p>
+      <p><a href="/security">READ THE FULL SECURITY BREAKDOWN →</a></p>
+    </div>
+  </section>
+
+</main>
+
+<div id="mobile-install-bar" class="mobile-install-bar">
+  <span class="bar-score" id="mobile-bar-score"></span>
+  <a href="/install">INSTALL CLAUDEPASS →</a>
+</div>
+
+<footer class="arcade-footer">
+  <div class="wrap">
+    <nav aria-label="Footer">
+      <a href="/install">INSTALL</a>
+      <a href="/pricing">PRICING</a>
+      <a href="/docs">DOCS</a>
+      <a href="/security">SECURITY</a>
+      <a href="/privacy">PRIVACY</a>
+      <a href="/terms">TERMS</a>
+    </nav>
+    <p class="footer-legal">
+      ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.
+    </p>
+    <p class="footer-copyright">© 2026 ClaudePass. High scores live in your browser's localStorage only.</p>
+    <button id="crt-text-toggle" class="crt-text-toggle" type="button">CRT: ON</button>
+  </div>
+</footer>
+
+<script src="/js/site.js"></script>
+<script src="/game/game.js"></script>
 </body>
 </html>
