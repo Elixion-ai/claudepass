@@ -141,10 +141,10 @@
 
   // Palette
   var PAL = {
-    phosphor: "#33ff66", phosphorDim: "#1f9e44", cyan: "#4de8ff",
+    ember: "#ff8a1f", emberDim: "#b85a10" /* arcade amber, not Anthropic terracotta */, cyan: "#4de8ff",
     red: "#ff4d4d", redDim: "#b32424", yellow: "#ffe94d",
-    steel: "#6b7280", void_: "#0a0e0a", panel: "#10160f",
-    trackDark: "#0e4d1f", trackDarkRed: "#5c1a1a", white: "#e8f3ea"
+    steel: "#6b7280", void_: "#0e0a06", panel: "#17110b",
+    trackDark: "#4d2a0e", trackDarkRed: "#5c1a1a", white: "#f3ece4"
   };
 
   // Procedural sprites — string-array bitmaps, one facing ("up") per
@@ -174,7 +174,7 @@
   function rep(ch, n) { return n > 0 ? new Array(n + 1).join(ch) : ""; }
 
   var SPR = {
-    playerA: { rows: tankRows(16, 3), map: { H: PAL.phosphor, C: PAL.trackDark } },
+    playerA: { rows: tankRows(16, 3), map: { H: PAL.ember, C: PAL.trackDark } },
     playerB: null, // built below with tread offset
     scout: { rows: tankRows(14, 2), map: { H: PAL.red, C: PAL.trackDarkRed } },
     reader: { rows: tankRows(15, 2), map: { H: PAL.redDim, C: PAL.trackDarkRed } },
@@ -399,7 +399,7 @@
     if (cfg.walls) placeBrickRing();
     if (cfg.steel) placeSteelCorners();
     debugEvent("wave_start", { wave: idx });
-    popups.push({ text: "WAVE " + (idx + 1) + " — INCOMING", t: 0, dur: 1.4, y: FIELD_H / 2 - 20, color: PAL.phosphor });
+    popups.push({ text: "WAVE " + (idx + 1) + " — INCOMING", t: 0, dur: 1.4, y: FIELD_H / 2 - 20, color: PAL.ember });
   }
   function placeBrickRing() {
     var cx = VAULT.x, cy = VAULT.y;
@@ -1011,7 +1011,7 @@
   function playerHit() {
     if (state !== STATE.PLAYING) return;
     combo = 1; comboT = 0; perfectWave = false;
-    spawnParticles(player.x + player.w / 2, player.y + player.h / 2, PAL.phosphor);
+    spawnParticles(player.x + player.w / 2, player.y + player.h / 2, PAL.ember);
     lives = Math.max(0, lives - 1);
     updateHudLives();
     debugEvent("player_hit", { livesLeft: lives });
@@ -1084,7 +1084,7 @@
         }
       }, 900);
     }, 300);
-    popups.push({ text: "WAVE CLEAR", t: 0, dur: 1.4, y: FIELD_H / 2 - 30, color: PAL.phosphor });
+    popups.push({ text: "WAVE CLEAR", t: 0, dur: 1.4, y: FIELD_H / 2 - 30, color: PAL.ember });
     if (perfectWave) popups.push({ text: "PERFECT — COMMAND POLICY HELD", t: 0, dur: 1.6, y: FIELD_H / 2 - 10, color: PAL.cyan });
   }
 
@@ -1209,9 +1209,9 @@
       drawSpriteRotated(player.tread ? "playerB" : "playerA", player.x + 8, player.y + 8, DIR_ANGLE[player.dir] || 0);
     }
     // bullets
-    ctx.fillStyle = PAL.phosphor;
+    ctx.fillStyle = PAL.ember;
     bullets.forEach(function (b) {
-      ctx.fillStyle = b.isPlayer ? PAL.phosphor : PAL.red;
+      ctx.fillStyle = b.isPlayer ? PAL.ember : PAL.red;
       ctx.fillRect(b.x, b.y, b.w, b.h);
     });
     // particles
@@ -1238,7 +1238,7 @@
     popups.forEach(function (p) {
       var prog = p.t / p.dur;
       ctx.globalAlpha = Math.max(0, 1 - prog);
-      ctx.fillStyle = p.color || PAL.phosphor;
+      ctx.fillStyle = p.color || PAL.ember;
       ctx.font = "8px 'Press Start 2P', monospace";
       if (p.floaty) {
         var dy = motionOK ? -16 * prog : 0;
@@ -1257,7 +1257,7 @@
   function drawVault() {
     var inverted = vaultBreachT > 0;
     var steps = Math.floor((0.6 - Math.max(0, vaultBreachT)) / 0.15) % 2 === 0;
-    ctx.fillStyle = inverted && (!motionOK || steps) ? PAL.phosphor : PAL.steel;
+    ctx.fillStyle = inverted && (!motionOK || steps) ? PAL.ember : PAL.steel;
     ctx.fillRect(VAULT.x, VAULT.y, VAULT.w, VAULT.h);
     ctx.fillStyle = inverted && (!motionOK || steps) ? PAL.void_ : PAL.trackDark;
     ctx.fillRect(VAULT.x + 4, VAULT.y + 4, VAULT.w - 8, VAULT.h - 8);
@@ -1295,13 +1295,13 @@
       }
     } else if (state === STATE.PAUSED) {
       dimBox();
-      ctx.fillStyle = PAL.phosphor;
+      ctx.fillStyle = PAL.ember;
       ctx.fillText("PAUSED", CANVAS_W / 2, CANVAS_H / 2);
     } else if (state === STATE.GAME_OVER || state === STATE.ENTER_INITIALS) {
       dimBox();
       var blink = motionOK ? (Math.floor(stateT * 4) % 2 === 0) : true;
       if (blink) { ctx.fillStyle = PAL.red; ctx.fillText("GAME OVER", CANVAS_W / 2, CANVAS_H / 2 - 30); }
-      ctx.fillStyle = PAL.text_hi || "#e8f3ea";
+      ctx.fillStyle = PAL.text_hi || "#f3ece4";
       ctx.font = "6px 'Press Start 2P', monospace";
       ctx.fillText("SCORE " + pad(score, 6) + "   WAVE " + (wave + 1), CANVAS_W / 2, CANVAS_H / 2 - 12);
       if (state === STATE.ENTER_INITIALS) {
@@ -1311,7 +1311,7 @@
         var s = "";
         for (var i = 0; i < 3; i++) s += (i === initialsSlot && Math.floor(stateT * 4) % 2 === 0) ? "_" : initials[i];
         ctx.font = "10px 'Press Start 2P', monospace";
-        ctx.fillStyle = PAL.phosphor;
+        ctx.fillStyle = PAL.ember;
         ctx.fillText(s.split("").join(" "), CANVAS_W / 2, CANVAS_H / 2 + 26);
       } else {
         ctx.font = "6px 'Press Start 2P', monospace";
