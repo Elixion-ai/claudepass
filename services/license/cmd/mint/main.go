@@ -79,12 +79,12 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, no
 	fs := flag.NewFlagSet("mint", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: mint --sub <email> [--plan pro|free] --days <n>")
-		fmt.Fprintln(stderr)
-		fmt.Fprintln(stderr, "Mints an owner-issued ClaudePass license token (CLA-43) and prints it to")
-		fmt.Fprintln(stderr, "stdout. Requires "+config.EnvSigningKey+" in the environment — run this under")
-		fmt.Fprintln(stderr, "`cpass run --with license/signing-key --`, never with the key typed in by hand.")
-		fmt.Fprintln(stderr)
+		_, _ = fmt.Fprintln(stderr, "usage: mint --sub <email> [--plan pro|free] --days <n>")
+		_, _ = fmt.Fprintln(stderr)
+		_, _ = fmt.Fprintln(stderr, "Mints an owner-issued ClaudePass license token (CLA-43) and prints it to")
+		_, _ = fmt.Fprintln(stderr, "stdout. Requires "+config.EnvSigningKey+" in the environment — run this under")
+		_, _ = fmt.Fprintln(stderr, "`cpass run --with license/signing-key --`, never with the key typed in by hand.")
+		_, _ = fmt.Fprintln(stderr)
 		fs.PrintDefaults()
 	}
 	sub := fs.String("sub", "", "account email the token is issued to (required)")
@@ -97,32 +97,32 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, no
 		return exitUsage
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintf(stderr, "mint: unexpected extra arguments: %v\n", fs.Args())
+		_, _ = fmt.Fprintf(stderr, "mint: unexpected extra arguments: %v\n", fs.Args())
 		fs.Usage()
 		return exitUsage
 	}
 	if *sub == "" {
-		fmt.Fprintln(stderr, "mint: --sub is required")
+		_, _ = fmt.Fprintln(stderr, "mint: --sub is required")
 		fs.Usage()
 		return exitUsage
 	}
 	if *plan != license.PlanPro && *plan != license.PlanFree {
-		fmt.Fprintf(stderr, "mint: --plan must be %q or %q, got %q\n", license.PlanPro, license.PlanFree, *plan)
+		_, _ = fmt.Fprintf(stderr, "mint: --plan must be %q or %q, got %q\n", license.PlanPro, license.PlanFree, *plan)
 		return exitUsage
 	}
 	if *days <= 0 {
-		fmt.Fprintln(stderr, "mint: --days must be a positive integer")
+		_, _ = fmt.Fprintln(stderr, "mint: --days must be a positive integer")
 		return exitUsage
 	}
 
 	rawKey := getenv(config.EnvSigningKey)
 	if rawKey == "" {
-		fmt.Fprintf(stderr, "mint: %s is not set — run this under `cpass run --with license/signing-key --`\n", config.EnvSigningKey)
+		_, _ = fmt.Fprintf(stderr, "mint: %s is not set — run this under `cpass run --with license/signing-key --`\n", config.EnvSigningKey)
 		return exitError
 	}
 	keyBytes, err := base64.StdEncoding.DecodeString(rawKey)
 	if err != nil || len(keyBytes) != ed25519.PrivateKeySize {
-		fmt.Fprintf(stderr, "mint: %s must be base64 of a %d-byte Ed25519 private key (the output of internal/license/cmd/keygen)\n",
+		_, _ = fmt.Fprintf(stderr, "mint: %s must be base64 of a %d-byte Ed25519 private key (the output of internal/license/cmd/keygen)\n",
 			config.EnvSigningKey, ed25519.PrivateKeySize)
 		return exitError
 	}
@@ -132,7 +132,7 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, no
 	exp := t.Add(time.Duration(*days) * 24 * time.Hour)
 	jti, err := newJTI()
 	if err != nil {
-		fmt.Fprintf(stderr, "mint: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "mint: %v\n", err)
 		return exitError
 	}
 
@@ -144,7 +144,7 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, no
 		JTI:  jti,
 	})
 	if err != nil {
-		fmt.Fprintf(stderr, "mint: signing token: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "mint: signing token: %v\n", err)
 		return exitError
 	}
 
@@ -161,7 +161,7 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, no
 		Exp:  exp.UTC().Format(time.RFC3339),
 		JTI:  jti,
 	}); err != nil {
-		fmt.Fprintf(stderr, "mint: writing audit log %s: %v\n", auditPath, err)
+		_, _ = fmt.Fprintf(stderr, "mint: writing audit log %s: %v\n", auditPath, err)
 		return exitError
 	}
 
