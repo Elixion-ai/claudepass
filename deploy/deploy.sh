@@ -3,12 +3,20 @@
 # configured (key-only, logs in as root; see deploy/README.md).
 #
 # Builds the license service for linux/amd64, and rsyncs it plus the
-# static site, the Caddyfile, and the license.service systemd unit onto
-# the production droplet, then installs the config and restarts both
-# services. Safe to re-run: every step is idempotent, and this script
-# never reads, writes, or even looks at /etc/claudepass/license.env — the
-# real Stripe/signing-key secrets are provisioned separately (see
+# static site, install.sh (repo root, not part of site/ — see below), the
+# Caddyfile, and the license.service systemd unit onto the production
+# droplet, then installs the config and restarts both services. Safe to
+# re-run: every step is idempotent, and this script never reads, writes,
+# or even looks at /etc/claudepass/license.env — the real
+# Stripe/signing-key secrets are provisioned separately (see
 # deploy/README.md) so a deploy can never accidentally clobber them.
+#
+# install.sh lives at the repo root, not under site/, so that
+# internal/e2e/install_test.go can exercise the exact file a user's
+# `curl .../install.sh | sh` runs without a build step in between. This
+# script is what publishes that single source of truth to
+# https://claudepass.com/install.sh — it is not reachable any other way,
+# so skipping this step silently 404s the documented one-liner.
 #
 # It does NOT touch /srv/claudepass/site/dl/ — that's the public release
 # mirror install.sh and the Homebrew formula download from, populated by
@@ -44,6 +52,9 @@ ssh "$host" "chmod 0755 $remote_base/bin/license-service.new && mv $remote_base/
 
 echo "==> syncing the static site (never touches site/dl/ on the server)"
 rsync -az --delete --exclude 'dl/' --exclude 'dl' site/ "$host:$remote_base/site/"
+
+echo "==> syncing install.sh (repo root is the single source of truth — internal/e2e/install_test.go exercises it there; this is the only thing that publishes it to the site)"
+rsync -az install.sh "$host:$remote_base/site/install.sh"
 
 echo "==> syncing Caddyfile and the license.service unit"
 rsync -az deploy/Caddyfile "$host:/tmp/claudepass-Caddyfile"

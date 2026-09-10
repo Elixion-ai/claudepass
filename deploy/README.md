@@ -16,6 +16,7 @@ on `127.0.0.1:8080`.
 | `/etc/claudepass/license.env` | The license service's secrets (`LICENSE_SIGNING_KEY`, `LICENSE_STRIPE_SECRET_KEY`, etc. — see `services/license/README.md`'s environment variable table). **Never written by `deploy.sh`** — provisioned separately, see below. |
 | `/srv/claudepass/bin/license-service` | The `services/license` binary, built for `linux/amd64`. |
 | `/srv/claudepass/site/` | The static site (this repo's [`site/`](../site)), rsynced with `--delete` — except `site/dl/`, which `deploy.sh` never touches. |
+| `/srv/claudepass/site/install.sh` | This repo's [`install.sh`](../install.sh), rsynced verbatim by `deploy.sh` as its own step (the file lives at the repo root, not under `site/`, so `internal/e2e/install_test.go` can exercise it directly — this is the only step that publishes it, so skipping a deploy means `curl .../install.sh` 404s even though the file is right there in git). |
 | `/srv/claudepass/site/dl/` | The public release mirror `install.sh` and the Homebrew formula (`softorize/tap`) download `cpass_<os>_<arch>.tar.gz` and `checksums.txt` from, at `/dl/<version>/...` and `/dl/latest/...`. Populated by the release pipeline (GoReleaser's output, copied here), **not** by `deploy.sh` — the release stage owns this directory. |
 | `/srv/claudepass/data/` | The license service's SQLite file (`LICENSE_DB_PATH`), owned by the `license` system user. The only path `license.service`'s `ProtectSystem=strict` sandbox is allowed to write to (`ReadWritePaths`). |
 
@@ -44,7 +45,9 @@ alias. It:
 4. Rsyncs `site/` to `/srv/claudepass/site/` with `--delete`, excluding
    `dl/` — so a stale local `site/` never removes published release
    binaries, and this script never needs to know what's actually in `dl/`.
-5. Installs `deploy/Caddyfile` and `deploy/license.service`, then
+5. Rsyncs `install.sh` (repo root) to `/srv/claudepass/site/install.sh` —
+   its own step, since the canonical file lives outside `site/`.
+6. Installs `deploy/Caddyfile` and `deploy/license.service`, then
    `systemctl daemon-reload`, restarts `license.service`, and reloads (or,
    if that fails, restarts) `caddy`.
 
