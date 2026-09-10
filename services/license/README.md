@@ -22,6 +22,41 @@ Nothing outside these five routes is served by this process — point a
 reverse proxy or your marketing site at `/`, `/checkout/canceled`, and
 anything else.
 
+## `mint`: issuing tokens outside Stripe
+
+The **only** sanctioned way to issue a license token without going through
+Stripe Checkout — for the owner's own machines, testers, or support cases —
+is `services/license/cmd/mint` (CLA-43, a follow-up from CLA-42). It is
+kept out of the `cpass` binary entirely: `cpass` only ever verifies tokens
+(`internal/license`'s package doc comment), it never mints one, and
+`cmd/cpass`'s build graph does not include `services/license/cmd/mint` at
+all — `go list -deps claudepass/cmd/cpass` never names it, and
+`internal/e2e/license_mint_test.go` asserts exactly that, alongside `cpass`
+having no `mint` command at all.
+
+Run it with the signing key injected by `cpass` itself — the same
+`LICENSE_SIGNING_KEY` this service reads (see Environment variables below)
+— never typed or pasted in by hand, so it never touches a shell history or
+an Agent's Context:
+
+```sh
+# once: store the production signing key as a Secret, under the exact
+# Handle whose default Binding is LICENSE_SIGNING_KEY
+cpass add license/signing-key   # paste the base64 private key when prompted
+
+cpass license activate "$(cpass run --with license/signing-key -- \
+    go run ./services/license/cmd/mint --sub owner@example.com --days 365)"
+```
+
+`mint --sub <email> [--plan pro|free, default pro] --days <n>` writes the
+token to stdout and **only** the token — nothing else ever goes there — so
+it pipes straight into `cpass license activate "$(...)"` as above. Before
+it prints anything, it appends one audit line (timestamp, sub, plan, exp,
+jti — **never the token itself**) to `$LICENSE_MINT_AUDIT`, or
+`./mint-audit.log` if that is unset. The audit write happens first and
+`mint` fails closed on a write error, so a token that could not be
+recorded is never handed out.
+
 ## Design decisions worth knowing before you touch this
 
 - **No revocation list.** Per ADR-0006/CLA-15: a token's `exp` is the
@@ -138,6 +173,14 @@ flow at `POST /checkout` with a Stripe test card.
   acceptance bullet. A companion test proves a release build refuses a
   token signed with anything but the production key, and another repeats
   the cancellation-refuses-reissue path over a real socket.
+- `services/license/cmd/mint`: unit tests drive `mint`'s logic directly
+  (flag and signing-key validation, the audit-before-stdout ordering, the
+  fail-closed behaviour when the audit write fails). `internal/e2e`'s own
+  `license_mint_test.go` builds the real `mint` binary and runs it under a
+  real `cpass run --with license/signing-key --`, then activates the
+  result on the real built `cpass` binary — CLA-43's acceptance path —
+  and asserts `mint` is unreachable from `cpass` both at the CLI (`cpass
+  mint`, `cpass license mint`) and in the build graph.
 
 ## Deploy
 
@@ -207,7 +250,10 @@ an account, or a live-billing decision only the owner can supply:
    not and must never be in this repository. Put its base64 value into
    this service's `LICENSE_SIGNING_KEY` secret (e.g. `fly secrets set`),
    then delete the file. A mismatched key here signs tokens `cpass` will
-   silently refuse — there is no other symptom to debug by.
+   silently refuse — there is no other symptom to debug by. To issue
+   tokens outside Stripe (see "`mint`: issuing tokens outside Stripe"
+   above) the same value also needs to be `cpass add`ed locally as the
+   `license/signing-key` Secret on whatever machine runs `mint`.
 2. **A Stripe account** with: the $9.99/month recurring Price created,
    an API secret key (`LICENSE_STRIPE_SECRET_KEY`), and a webhook
    endpoint pointed at this service's `/webhook` once it has a public URL
