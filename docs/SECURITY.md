@@ -142,10 +142,18 @@ suggested alternative) a command that, at any nesting depth (pipelines,
 This hook never opens the Vault and makes no network call; it is a pure,
 static judgment over the command text (`internal/policy`).
 
-**Scope note**: this hook's file-glob and raw-literal checks
-(`EvaluateHook`) are stricter than the evaluator `cpass run` and the MCP
-server use directly (`Evaluate`, see below) — see `docs/THREATS.md` for
-exactly what that gap means in practice.
+**Scope note**: the secret-file-glob and raw-literal checks above are the
+same rule in `EvaluateHook` and the evaluator `cpass run` and the MCP
+server use directly (`Evaluate`, see below) — CLA-38 folded them into the
+shared evaluator. Two narrow differences remain: only the hook judges
+`cpass add`'s own inline-value usage, since only it inspects a raw Bash
+command line before `cpass` has parsed anything and neither `cpass run`
+nor the MCP server has a `cpass add` invocation to wrap; and the hook's
+raw-literal scan covers a command's entire text, including its own
+program path, while `Evaluate` deliberately excludes argv[0] from that
+scan (see the next section) since a real executable path routinely reads
+as high-entropy without being a Secret. See `docs/THREATS.md` for the full
+detail.
 
 ## What `cpass run` does to the child and its output
 
@@ -155,9 +163,17 @@ exactly what that gap means in practice.
 2. Unless `--unsafe-allow` is given (refused outright without a terminal —
    an Agent invoking `cpass run` itself can never set it), evaluates
    `policy.Evaluate` against the command's argv: it refuses the
-   environment-dump patterns above and any argument that literally names
-   the path of this invocation's own file-Binding temp directory (see
-   next point) passed to a reader program.
+   environment-dump patterns above; any argument that literally names the
+   path of this invocation's own file-Binding temp directory (see next
+   point) passed to a reader program; any argument naming a Secret-bearing
+   file by the same basename glob the PreToolUse hook matches (`.env*`,
+   `*.pem`, `id_rsa*`, `*.key`, `credentials*.json`, `.netrc`, `.npmrc`),
+   passed to the same reader programs or a shell `source`/`.` builtin; and
+   a raw Secret-shaped literal (the same detector Intercept and the hook
+   use) anywhere in the command's arguments — but not in argv[0], the
+   program itself, since a Secret value is never the thing being executed
+   and a real executable path can otherwise read as high-entropy without
+   being one.
 3. Builds the child's environment: `os.Environ()` plus one variable per
    env-bound Handle, set to its value. A file-bound Handle instead gets a
    fresh Secret file, mode `0600`, inside a per-invocation directory, mode

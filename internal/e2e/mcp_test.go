@@ -295,6 +295,40 @@ func TestMCPRunWithSecretsRefusesCommandPolicyViolation(t *testing.T) {
 	}
 }
 
+// TestMCPRunWithSecretsRefusesSecretFileRead is CLA-38's MCP proof that
+// run_with_secrets refuses reading a .env-style file directly, the same
+// rule `cpass policy --hook` already applied and cpass run now also
+// applies — see TestPolicyRunRefusesSecretFileReadsAndRawLiterals in
+// policy_test.go for the CLI side of this same parity fix.
+func TestMCPRunWithSecretsRefusesSecretFileRead(t *testing.T) {
+	ve := newVault(t)
+	ve.add("stripe/live", secret)
+	s := startMCP(t, ve)
+	s.initialize()
+	text, isError := s.callToolText("run_with_secrets", map[string]any{
+		"command": []string{"cat", ".env"},
+		"handles": []string{"stripe/live"},
+	})
+	if !isError {
+		t.Fatalf("want a Command Policy refusal, got success: %s", text)
+	}
+	if !strings.Contains(text, "refused") || !strings.Contains(text, "Secret-bearing file") {
+		t.Fatalf("refusal message should name the Secret-bearing file rule: %s", text)
+	}
+	if strings.Contains(text, secret) || strings.Contains(s.rawOut.String(), secret) {
+		t.Fatalf("refused command leaked the value: %s", text)
+	}
+
+	// Keep an ordinary, unrelated file read allowed.
+	text, isError = s.callToolText("run_with_secrets", map[string]any{
+		"command": []string{"cat", "/etc/hosts"},
+		"handles": []string{"stripe/live"},
+	})
+	if isError {
+		t.Fatalf("cat /etc/hosts should be allowed: %s", text)
+	}
+}
+
 func TestMCPCaptureThenListHandles(t *testing.T) {
 	ve := newVault(t)
 	s := startMCP(t, ve)

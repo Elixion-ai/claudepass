@@ -1,59 +1,34 @@
 package policy
 
 import (
-	"path/filepath"
 	"strings"
 
 	"claudepass/internal/detect"
 )
 
-// secretFileGlobs are basename patterns of files that hold Secret values on
-// disk rather than in the Vault. EvaluateHook refuses any command that
-// would read one directly: doing so bypasses the Vault, and the value
-// would land straight in the Agent's Context. Matched with filepath.Match
-// against the basename of each argument, so a path like "$HOME/.env" is
-// still caught.
-var secretFileGlobs = []string{
-	".env*", "*.pem", "id_rsa*", "*.key", "credentials*.json", ".netrc", ".npmrc",
-}
-
-// sourceBuiltins are shell builtins that execute a file's content in the
-// current shell — a second way to pull a Secret-bearing file's content into
-// output or environment besides an ordinary reader program.
-var sourceBuiltins = map[string]bool{"source": true, ".": true}
-
-func matchesSecretFile(arg string) bool {
-	if strings.HasPrefix(arg, "-") {
-		return false
-	}
-	base := filepath.Base(arg)
-	for _, g := range secretFileGlobs {
-		if ok, _ := filepath.Match(g, base); ok {
-			return true
-		}
-	}
-	return false
-}
-
 // EvaluateHook judges a raw Bash command string from Claude Code's
 // PreToolUse hook, run by `cpass policy --hook` before the command ever
-// executes and before cpass has bound anything. It refuses a command that:
+// executes and before cpass has bound anything. It refuses a command
+// that:
 //
 //   - reads a Secret-bearing file directly (.env*, *.pem, id_rsa*, *.key,
 //     credentials*.json, .netrc, .npmrc) via a reader program or a shell
 //     source/. builtin, at any depth (pipelines, nested shells, command
-//     substitutions, or arguments to `cpass run`'s own wrapped command);
-//   - carries a raw Secret-shaped literal (the CLA-10 detector);
-//   - gives `cpass add` an inline value instead of letting it prompt; or
+//     substitutions, or arguments to `cpass run`'s own wrapped command) —
+//     the same rule Evaluate applies (see the package doc comment),
+//     checked here too so it catches a wrapped `cpass run` invocation
+//     before that subprocess ever starts, not only once it does;
+//   - carries a raw Secret-shaped literal (the CLA-10 detector) — again
+//     the same rule Evaluate applies, checked here unconditionally for the
+//     same reason;
+//   - gives `cpass add` an inline value instead of letting it prompt — the
+//     one rule with no equivalent in Evaluate, since only the hook
+//     inspects a raw command line before cpass has parsed anything; or
 //   - trips one of the ordinary Bound-independent Command Policy rules
 //     (env/printenv/set/export dumps, /proc/*/environ, shell tracing) and
 //     is not itself a `cpass run` invocation — one that is will have those
 //     same rules applied again at execution time, with cpass run's actual
 //     Bound vars.
-//
-// Command Policy is otherwise identical in cpass run, this hook, and the
-// MCP server (see the package doc comment); this is the one entry point
-// that runs before any value exists to bind.
 func EvaluateHook(command string) error {
 	if strings.TrimSpace(command) == "" {
 		return nil
@@ -61,6 +36,10 @@ func EvaluateHook(command string) error {
 	if r := hookWalk(command, 0); r != nil {
 		return r
 	}
+	// Same raw-literal rule Evaluate applies (see the package doc
+	// comment), checked here unconditionally — including when command
+	// wraps a `cpass run` invocation, unlike the ordinary rules below —
+	// since no Bound var is needed to judge a literal.
 	if len(detect.Scan(command)) > 0 {
 		return &Refusal{
 			Rule:   "the command carries a raw Secret-shaped value",

@@ -31,6 +31,19 @@ func TestEvaluate(t *testing.T) {
 		{"grep unrelated", []string{"sh", "-c", "grep foo bar.txt"}, false},
 		{"timeout wrapper ok", []string{"timeout", "5", "true"}, false},
 		{"literal dollar in argv is not a shell", []string{"echo", "$STRIPE_LIVE"}, false},
+		// refused: secret-bearing file reads (CLA-38 — same rule EvaluateHook applies)
+		{"cat dotenv", []string{"cat", ".env"}, true},
+		{"cat dotenv via home var literal", []string{"cat", "$HOME/.env"}, true},
+		{"less pem file", []string{"less", "server.pem"}, true},
+		{"head id_rsa", []string{"head", "id_rsa"}, true},
+		{"cat credentials json", []string{"cat", "credentials.json"}, true},
+		{"cat dotenv in shell", []string{"sh", "-c", "cat .env"}, true},
+		{"source dotenv in shell", []string{"sh", "-c", "source .env"}, true},
+		{"dot source dotenv in shell", []string{"sh", "-c", ". .env"}, true},
+		{"cat dotenv in nested shell", []string{"sh", "-c", `bash -c "cat .env"`}, true},
+		// refused: raw Secret-shaped literal (CLA-38 — reuses internal/detect)
+		{"raw secret literal in argv", []string{"curl", "-H", "Authorization: Bearer sk_live_51H8xJ2eZvKYlo2CTargvVALUEabcdefgh"}, true},
+		{"raw secret literal in shell string", []string{"sh", "-c", `curl -H "Authorization: Bearer sk_live_51H8xJ2eZvKYlo2CTshellVALUEabcdefgh"`}, true},
 		// refused
 		{"printenv", []string{"printenv"}, true},
 		{"printenv var", []string{"printenv", "STRIPE_LIVE"}, true},
@@ -78,6 +91,20 @@ func TestEvaluate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestEvaluateDoesNotScanArgv0ForRawLiteral pins CLA-38's raw-literal check
+// to arguments only: argv[0] is the program being exec'd, never a value a
+// Handle could stand in for, and a real executable path (a build artifact
+// under a randomly named temp directory, a versioned tool under a hashed
+// store path) routinely reads as high-entropy to the same detector without
+// being a Secret — scanning it would make ordinary `cpass run` invocations
+// refuse for a reason that has nothing to do with what the command does.
+func TestEvaluateDoesNotScanArgv0ForRawLiteral(t *testing.T) {
+	argv := []string{"sk_live_51H8xJ2eZvKYlo2CTargvzeroVALUEabc"}
+	if err := Evaluate(Input{Argv: argv}); err != nil {
+		t.Fatalf("argv[0] must not be scanned for a raw literal: %v", err)
 	}
 }
 

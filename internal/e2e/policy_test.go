@@ -39,6 +39,53 @@ func TestPolicyRefusedAndAllowedPairs(t *testing.T) {
 	}
 }
 
+// TestPolicyRunRefusesSecretFileReadsAndRawLiterals is CLA-38's e2e proof
+// that cpass run applies the same secret-file-glob and raw-literal rules
+// the PreToolUse hook (cpass policy --hook) already applied — the parity
+// gap `docs/THREATS.md` and internal/policy's package doc comment used to
+// describe. It drives `cpass run` directly, not through sh -c, since the
+// gap was specifically that Evaluate (not EvaluateHook) skipped these
+// rules.
+func TestPolicyRunRefusesSecretFileReadsAndRawLiterals(t *testing.T) {
+	ve := leakVault(t)
+	pairs := []struct {
+		name    string
+		argv    []string
+		refused bool
+		want    string // substring cpass's stderr must contain when refused
+	}{
+		{"cat dotenv", []string{"cat", ".env"}, true, "Secret-bearing file"},
+		{"less pem file", []string{"less", "id_rsa.pem"}, true, "Secret-bearing file"},
+		{"cat credentials json", []string{"cat", "credentials.json"}, true, "Secret-bearing file"},
+		{"source dotenv via shell", []string{"sh", "-c", "source .env"}, true, "Secret-bearing file"},
+		{"raw secret literal", []string{"curl", "-H",
+			"Authorization: Bearer sk_live_51H8xJ2eZvKYlo2CTcpassrunliteralVALUEab"}, true, "Secret-shaped value"},
+		// Keep `cpass run -- cat /etc/hosts` allowed: an ordinary file
+		// read that doesn't match any Secret-bearing glob must not be
+		// refused just because cpass run now applies these rules too.
+		{"cat unrelated file", []string{"cat", "/etc/hosts"}, false, ""},
+	}
+	for _, p := range pairs {
+		t.Run(p.name, func(t *testing.T) {
+			args := append([]string{"run", "--with", "stripe/live", "--"}, p.argv...)
+			r := ve.run(nil, args...)
+			if p.refused {
+				if r.code != 3 || !strings.HasPrefix(r.stderr, "cpass: refused: ") {
+					t.Fatalf("want a Command Policy refusal: %s", r)
+				}
+				if !strings.Contains(r.stderr, p.want) {
+					t.Fatalf("stderr should mention %q: %s", p.want, r)
+				}
+			} else if r.code != 0 {
+				t.Fatalf("allowed case should run: %s", r)
+			}
+			if strings.Contains(r.stdout+r.stderr, leakVal) {
+				t.Fatalf("leaked: %s", r)
+			}
+		})
+	}
+}
+
 func TestPolicyProcEnviron(t *testing.T) {
 	ve := leakVault(t)
 	r := ve.run(nil, "run", "--with", "stripe/live", "--", "cat", "/proc/self/environ")
