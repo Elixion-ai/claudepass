@@ -34,9 +34,7 @@
   var fireBtn = document.querySelector(".fire-btn");
   var gameOverCta = document.getElementById("game-over-cta");
 
-  // ---------------------------------------------------------------
   // Storage (guarded — localStorage can throw in private/blocked contexts)
-  // ---------------------------------------------------------------
   var LS_MUTED = "vaultdefense.muted";
   var LS_SCORES = "vaultdefense.hiscores.v1";
 
@@ -61,9 +59,7 @@
     return s.length ? s[0].score : 0;
   }
 
-  // ---------------------------------------------------------------
   // Reduced motion
-  // ---------------------------------------------------------------
   var motionOK = true;
   var mq = null;
   try {
@@ -74,9 +70,7 @@
     else if (mq.addListener) mq.addListener(mqHandler);
   } catch (e) { motionOK = true; }
 
-  // ---------------------------------------------------------------
   // Audio — WebAudio square waves only, muted by default.
-  // ---------------------------------------------------------------
   var muted = lsGet(LS_MUTED) !== "0"; // default true unless explicitly unmuted before
   var audioCtx = null, masterGain = null;
   function ensureAudio() {
@@ -145,9 +139,7 @@
     beep(294, 0.16, "square", 0.32); beep(220, 0.24, "square", 0.48);
   }
 
-  // ---------------------------------------------------------------
   // Palette
-  // ---------------------------------------------------------------
   var PAL = {
     phosphor: "#33ff66", phosphorDim: "#1f9e44", cyan: "#4de8ff",
     red: "#ff4d4d", redDim: "#b32424", yellow: "#ffe94d",
@@ -155,11 +147,9 @@
     trackDark: "#0e4d1f", trackDarkRed: "#5c1a1a", white: "#e8f3ea"
   };
 
-  // ---------------------------------------------------------------
   // Procedural sprites — string-array bitmaps, one facing ("up") per
   // type; other facings are produced with ctx.rotate at draw time.
   // Rasterized once onto offscreen canvases at boot (sprite cache).
-  // ---------------------------------------------------------------
   function tankRows(w, trackW) {
     // Generic top-down tank silhouette, symmetric, parameterized by width.
     var rows = [];
@@ -278,11 +268,9 @@
   }
   var DIR_ANGLE = { up: 0, right: 90, down: 180, left: 270 };
 
-  // ---------------------------------------------------------------
   // Entities
-  // ---------------------------------------------------------------
   var TYPES = {
-    scout: { hp: 1, speed: 48, score: 100, w: 14, h: 14, sprite: "scout" },
+    scout: { hp: 1, speed: 36, score: 100, w: 14, h: 14, sprite: "scout" }, // speed -25% (CLA-44 balance)
     reader: { hp: 2, speed: 40, score: 150, w: 15, h: 15, sprite: "reader" },
     shouter: { hp: 2, speed: 32, score: 250, w: 16, h: 16, sprite: "shouter", fires: true },
     saboteur: { hp: 3, speed: 56, score: 500, w: 16, h: 16, sprite: "saboteur", erratic: true }
@@ -300,18 +288,11 @@
   var touchDirs = { up: false, down: false, left: false, right: false };
   var lastPressedDir = null;
 
-  // ---------------------------------------------------------------
-  // Debug instrumentation — read-only, zero effect on gameplay. Only
-  // active when the page URL has ?debug=1, in which case it exposes
-  // window.__vaultDefenseDebug() returning a live snapshot (state
-  // machine, score, wave, lives, input/focus flags, live bullet and
-  // intruder counts + types/hp, remaining spawn-queue length) plus the
-  // last 20 collision-ish events (bullet_hit, kill, player_hit,
-  // vault_breach, wave_start, wave_clear) with timestamps. Used by the
-  // play-test harness to read ground truth instead of screen-scraping
-  // the canvas. debugEvent() is a no-op unless DEBUG is true, and
-  // nothing here ever mutates game state — safe to leave shipped.
-  // ---------------------------------------------------------------
+  // Debug instrumentation — read-only, zero effect on gameplay. Active
+  // only with ?debug=1: exposes window.__vaultDefenseDebug() (state,
+  // score, wave, lives, entities, spawn-queue length) + last 20 events,
+  // for the play-test harness to read ground truth instead of
+  // screen-scraping. debugEvent() no-ops unless DEBUG — safe to ship.
   var DEBUG = false;
   try { DEBUG = /(?:^|[?&])debug=1(?:&|$)/.test(window.location.search); } catch (e) { DEBUG = false; }
   var debugLog = [];
@@ -329,8 +310,10 @@
         bulletCount: bullets.length,
         bullets: bullets.map(function (b) { return { x: Math.round(b.x), y: Math.round(b.y), isPlayer: b.isPlayer }; }),
         intruderCount: intruders.length,
-        intruders: intruders.map(function (iv) { return { type: iv.type, x: Math.round(iv.x), y: Math.round(iv.y), hp: iv.hp }; }),
+        intruders: intruders.map(function (iv) { return { id: iv.__id, type: iv.type, x: Math.round(iv.x), y: Math.round(iv.y), hp: iv.hp, dir: iv.dir, wallContactT: iv.wallContactT || 0, rawX: iv.x, rawY: iv.y }; }),
         spawnQueueRemaining: spawnQueue ? spawnQueue.length : 0,
+        running: running, pausedByVisibility: pausedByVisibility, visibilityOK: visibilityOK(),
+        walls: walls.map(function (w) { return { x: w.x, y: w.y, type: w.type, hp: w.hp }; }),
         events: debugLog.slice()
       };
     };
@@ -348,29 +331,14 @@
   resetRun();
   hi = topScore();
 
-  // ---------------------------------------------------------------
-  // Wave table
-  // ---------------------------------------------------------------
-  // Wave 1 must be unlosable-if-you-try: a player who does nothing but
-  // hold the default "up" facing and tap fire every ~300ms has to clear
-  // it without losing a life, so the [REDACTED] pop lands on the very
-  // first real attempt. That requires three things together, not just
-  // "make it slow" — steerToVault flies each intruder in a straight
-  // line from its spawn point to a fixed point just above the vault, so
-  // a corner spawn (old behavior, every wave) only crosses a stationary
-  // player's firing column in the last instant before reaching the
-  // vault, however slow it moves: there is no speed low enough to make
-  // that hittable. `spawnXRange` spawns wave 1-2 intruders in a band
-  // centered on the player's default column instead, so the whole
-  // straight-line path stays near that column. `speed` (a multiplier on
-  // each type's base TYPES[x].speed, itself now correctly normalized —
-  // see steerToVault) and `interval` (seconds between spawns, the real
-  // spawn gap since intruders spawn one at a time) then set how
-  // forgiving the encounter is. Waves 2-8 widen the spawn band back out
-  // and ramp speed/count/interval gently as the mix adds tougher types.
+  // Wave table — CLA-44 balance pass: wave 1 is 3-lives clearable by a
+  // human who moves to track intruders; wave 3 is reachable in ~60s.
+  // speed multiplies TYPES[x].speed (normalized, see steerToVault);
+  // interval is the real spawn gap; maxOnScreen caps live intruders
+  // (tick()'s spawn step), defaulting to 6 where omitted.
   var WAVES = [
-    { total: 5, mix: { scout: 5 }, interval: 2.5, speed: 0.55, walls: 0, spawnXRange: [88, 152] },
-    { total: 7, mix: { scout: 5, reader: 2 }, interval: 2.2, speed: 0.70, walls: 1, spawnXRange: [56, 184] },
+    { total: 5, mix: { scout: 5 }, interval: 3.0, speed: 0.55, walls: 0, spawnXRange: [48, 192], maxOnScreen: 1 },
+    { total: 6, mix: { scout: 4, reader: 2 }, interval: 2.5, speed: 0.70, walls: 1, spawnXRange: [56, 184], maxOnScreen: 2 },
     { total: 9, mix: { scout: 4, reader: 3, shouter: 2 }, interval: 2.0, speed: 0.80, walls: 1, steel: true },
     { total: 11, mix: { scout: 3, reader: 4, shouter: 3, saboteur: 1 }, interval: 1.8, speed: 0.90, walls: 1, steel: true },
     { total: 13, mix: { scout: 2, reader: 4, shouter: 4, saboteur: 3 }, interval: 1.6, speed: 1.00, walls: 1, steel: true },
@@ -457,13 +425,13 @@
     return false;
   }
   function placeSteelCorners() {
+    // Indestructible + far from VAULT: never adjacent to the brick ring,
+    // so steel can never trap an intruder with no tile left to chew.
     walls.push({ x: 16, y: 16, w: 16, h: 16, type: "steel" });
     walls.push({ x: FIELD_W - 32, y: 16, w: 16, h: 16, type: "steel" });
   }
 
-  // ---------------------------------------------------------------
   // State machine
-  // ---------------------------------------------------------------
   var STATE = { BOOT: "BOOT", ATTRACT: "ATTRACT", PLAYING: "PLAYING", PAUSED: "PAUSED",
     WAVE_CLEAR: "WAVE_CLEAR", GAME_OVER: "GAME_OVER", ENTER_INITIALS: "ENTER_INITIALS" };
   state = STATE.BOOT; stateT = 0; idleT = 0;
@@ -489,13 +457,16 @@
     intruders.push(mkIntruder("scout", 40, 20));
     if (gameOverCta) gameOverCta.hidden = true;
   }
+  var nextIntruderId = 1; // debug-only identity tag, see __vaultDefenseDebug
   function mkIntruder(type, x, y, hardened) {
     var def = TYPES[type];
-    return {
+    var iv = {
       type: type, x: x, y: y, w: def.w, h: def.h, hp: hardened ? def.hp + 1 : def.hp,
       speed: def.speed * waveSpeedMul, dir: "down", fireCd: 2 + Math.random(),
       erraticT: 0.5, hardened: !!hardened, telegraph: 0, flash: 0
     };
+    if (DEBUG) iv.__id = nextIntruderId++;
+    return iv;
   }
 
   function startGame() {
@@ -506,12 +477,10 @@
   }
   function togglePause() {
     if (state === STATE.PLAYING) { state = STATE.PAUSED; }
-    else if (state === STATE.PAUSED && !pausedByVisibility) { state = STATE.PLAYING; }
+    else if (state === STATE.PAUSED && !pausedByVisibility) { enterPlayingIfVisible(); }
   }
 
-  // ---------------------------------------------------------------
   // Input
-  // ---------------------------------------------------------------
   var canvasFocused = false;
   canvas.addEventListener("focus", function () { canvasFocused = true; hideOverlay(); });
   canvas.addEventListener("blur", function () { canvasFocused = false; });
@@ -553,29 +522,15 @@
     if (isTypingTarget(e.target)) return;
     var k = e.key;
     var isGameKey = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Enter", "w", "a", "s", "d", "W", "A", "S", "D"].indexOf(k) !== -1;
-    // A keyboard-only player who has never clicked/tapped the canvas
-    // has no DOM focus on anything in particular — document.activeElement
-    // is <body>, so e.target here is <body> too. Previously every branch
-    // below was gated on canvasFocused, which is only ever set true by
-    // the canvas's own "focus" event, which in turn only ever fired from
-    // a pointer handler (activatePointer) — so Enter/Space/arrows did
-    // nothing at all until the player clicked or tapped first, even
-    // though the canvas is focusable (tabindex="0") and PRESS START is
-    // on screen inviting exactly this. Route this one case through the
-    // same canvas.focus() a real click takes (synchronous — its "focus"
-    // listener flips canvasFocused and hides the overlay before the
-    // next line runs) so a bare Enter/Space/arrow genuinely starts the
-    // game. Anything with its own DOM focus (a link, a button, an
-    // input — already excluded above) keeps its native key handling.
+    // A keyboard-only player who never clicked/tapped has e.target===body
+    // and canvasFocused false; route through canvas.focus() (synchronous)
+    // so a bare Enter/Space/arrow still starts the game via PRESS START.
     if (!canvasFocused && isGameKey && e.target === document.body) {
       canvas.focus();
     }
-    // Capture before the state-machine branches below run, not just
-    // while PLAYING — ATTRACT/GAME_OVER/ENTER_INITIALS all act on this
-    // same keydown (start, restart, initials entry), and a focused
-    // canvas should never let Space/Arrow/Enter fall through to the
-    // browser's native page scroll no matter which of those states it
-    // is currently in.
+    // Before the state-machine branches below, not just while PLAYING —
+    // ATTRACT/GAME_OVER/ENTER_INITIALS all act on this keydown too, and
+    // must never let Space/Arrow/Enter fall through to native scroll.
     if (canvasFocused && isGameKey) e.preventDefault();
     firstGesture();
     if (k === "p" || k === "P" || k === "Escape") { togglePause(); return; }
@@ -659,52 +614,71 @@
     isMuted: function () { return muted; }
   };
 
-  document.addEventListener("visibilitychange", function () {
-    if (document.hidden) {
-      if (state === STATE.PLAYING) { state = STATE.PAUSED; pausedByVisibility = true; }
-      // The hi-score ticker's rotation timer has no other cleanup path;
-      // stop it while the tab is hidden instead of leaving it ticking
-      // against a text node nobody can see.
-      if (tickerLine && tickerLine.__vdInterval) {
-        clearInterval(tickerLine.__vdInterval);
-        tickerLine.__vdInterval = null;
-      }
-    } else {
-      if (state === STATE.PAUSED && pausedByVisibility) { pausedByVisibility = false; }
-      refreshHiscoreDom();
-    }
-  });
-  window.addEventListener("blur", function () {
-    if (state === STATE.PLAYING) { state = STATE.PAUSED; pausedByVisibility = true; }
-  });
-
-  // Visibility of the canvas gates the simulation. Scrolling the game out
-  // of view pauses it exactly like a hidden tab does (a real PAUSED state
-  // with the overlay, never a silent stall), and frame() re-checks the
-  // geometry every few frames so a missed observer callback can never
-  // strand a run with running=false and state=PLAYING.
+  // visibilityOK() is the ONE source of truth every caller below defers
+  // to — never trust a stale IO entry or a bare state check in a timer.
   var running = true, visCheck = 0;
-  function setRunning(v) {
-    if (v === running) return;
-    running = v;
-    last = null;
-    if (!v && state === STATE.PLAYING) { state = STATE.PAUSED; pausedByVisibility = true; }
-  }
   function canvasInView() {
     var r = canvas.getBoundingClientRect();
     return r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 &&
       r.top < (window.innerHeight || 1e9) && r.left < (window.innerWidth || 1e9);
   }
+  function visibilityOK() {
+    return canvasInView() && !document.hidden;
+  }
+  // Guard for every deferred landing in PLAYING (togglePause, wave-clear
+  // timer): never assign STATE.PLAYING directly from a callback.
+  function enterPlayingIfVisible() {
+    if (visibilityOK()) { state = STATE.PLAYING; }
+    else { state = STATE.PAUSED; pausedByVisibility = true; }
+  }
+  // Pauses from PLAYING AND WAVE_CLEAR alike (running=false freezes
+  // tick() either way). Never auto-resumes state on v=true — only
+  // clears the flag blocking a deliberate resume (P, or the wave timer).
+  function setRunning(v) {
+    if (v === running) return;
+    running = v;
+    last = null;
+    if (!v) {
+      if (state === STATE.PLAYING || state === STATE.WAVE_CLEAR) { state = STATE.PAUSED; }
+      pausedByVisibility = true;
+    } else if (pausedByVisibility) {
+      pausedByVisibility = false;
+    }
+  }
+  document.addEventListener("visibilitychange", function () {
+    setRunning(visibilityOK());
+    if (document.hidden) {
+      // Ticker rotation has no other cleanup path; stop it while hidden.
+      if (tickerLine && tickerLine.__vdInterval) {
+        clearInterval(tickerLine.__vdInterval);
+        tickerLine.__vdInterval = null;
+      }
+    } else {
+      refreshHiscoreDom();
+    }
+  });
+  // Blur doesn't reliably flip document.hidden, so visibilityOK() can't
+  // see it — force the pause directly (setRunning would no-op: `running`
+  // never changed since the canvas is still technically in view).
+  window.addEventListener("blur", function () {
+    if (state === STATE.PLAYING || state === STATE.WAVE_CLEAR) {
+      state = STATE.PAUSED;
+      pausedByVisibility = true;
+    }
+  });
+  window.addEventListener("focus", function () {
+    if (pausedByVisibility && visibilityOK()) pausedByVisibility = false;
+  });
   if ("IntersectionObserver" in window) {
-    var io = new IntersectionObserver(function (entries) {
-      setRunning(entries[0].isIntersecting || canvasInView());
+    // Ignore `entries` — a batched callback only guarantees entries[0]
+    // reflects SOME change, not the current one; re-derive fresh instead.
+    var io = new IntersectionObserver(function () {
+      setRunning(visibilityOK());
     }, { threshold: 0.01 });
     io.observe(canvas);
   }
 
-  // ---------------------------------------------------------------
   // Initials entry
-  // ---------------------------------------------------------------
   var initials = ["A", "A", "A"], initialsSlot = 0, pendingScore = 0;
   function handleInitialsKey(k) {
     var letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -729,9 +703,7 @@
     enterAttract();
   }
 
-  // ---------------------------------------------------------------
   // Fixed-timestep simulation
-  // ---------------------------------------------------------------
   function tick(dt) {
     stateT += dt;
     if (hitstop > 0) { hitstop -= dt; return; }
@@ -760,7 +732,7 @@
     if (player.cooldown > 0) player.cooldown -= dt;
     if (input.fire && player.cooldown <= 0) {
       spawnBullet(player.x + player.w / 2, player.y + player.h / 2, player.dir, true);
-      player.cooldown = 0.3;
+      player.cooldown = 0.25; // ~250ms, CLA-44 balance pass (was 0.3)
       sfxShot();
     }
 
@@ -768,7 +740,7 @@
     spawnTimer -= dt;
     var cfg = waveConfig(wave);
     var liveCount = intruders.length;
-    if (spawnQueue.length && liveCount < 6 && spawnTimer <= 0) {
+    if (spawnQueue.length && liveCount < (cfg.maxOnScreen || 6) && spawnTimer <= 0) {
       var t = spawnQueue.shift();
       var corner = pickSpawnX(cfg);
       var hardened = cfg.hardened && (t === "reader" || t === "shouter") && Math.random() < 0.3;
@@ -810,22 +782,47 @@
   function rectsOverlap(a, b) {
     return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
   }
-  function resolveWallCollision(e) {
-    for (var i = 0; i < walls.length; i++) {
-      var w = walls[i];
-      if (rectsOverlap(e, w)) {
-        var dx1 = (e.x + e.w) - w.x, dx2 = (w.x + w.w) - e.x;
-        var dy1 = (e.y + e.h) - w.y, dy2 = (w.y + w.h) - e.y;
-        var min = Math.min(dx1, dx2, dy1, dy2);
-        if (min === dx1) e.x -= dx1; else if (min === dx2) e.x += dx2;
-        else if (min === dy1) e.y -= dy1; else e.y += dy2;
+  // Returns the index of the brick wall `e` is touching (last one found),
+  // or -1. The chew-through timer below is kept per-INTRUDER, not
+  // per-wall: an intruder drifting sideways along a multi-tile wall face
+  // (the drift fix in updateIntruderAI) touches a new tile every few
+  // frames, and a per-wall timer resets to 0 on every such handoff,
+  // letting it creep along forever without any single tile ever
+  // accumulating 0.5s of contact. Per-intruder, the clock keeps running
+  // across that handoff since it only cares whether SOME brick is
+  // touched each tick, so it still breaks through in 0.5s.
+  function resolveWallCollision(e, isIntruder) {
+    var touched = -1;
+    // steerToVault aims every intruder at x=VAULT.x+16 — exactly the seam
+    // between two of the top ring's tiles — so straddling two adjacent
+    // brick tiles at once is the COMMON case, not an edge case. A single
+    // pass resolves against whichever tile came first in `walls` and can
+    // leave the entity still overlapping its neighbor; re-checking for a
+    // few passes converges to a position clear of both instead of one
+    // tick alternating which neighbor it's shoved back into forever.
+    for (var pass = 0; pass < 3; pass++) {
+      var any = false;
+      for (var i = 0; i < walls.length; i++) {
+        var w = walls[i];
+        if (rectsOverlap(e, w)) {
+          any = true;
+          var dx1 = (e.x + e.w) - w.x, dx2 = (w.x + w.w) - e.x;
+          var dy1 = (e.y + e.h) - w.y, dy2 = (w.y + w.h) - e.y;
+          var min = Math.min(dx1, dx2, dy1, dy2);
+          if (min === dx1) e.x -= dx1; else if (min === dx2) e.x += dx2;
+          else if (min === dy1) e.y -= dy1; else e.y += dy2;
+          if (isIntruder && w.type === "brick") touched = i;
+        }
       }
+      if (!any) break;
     }
+    return touched;
   }
 
   function updateIntruderAI(iv, dt) {
     var def = TYPES[iv.type];
     var speed = def.speed * waveSpeedMul * dt;
+    var preX = iv.x, preY = iv.y;
     if (def.erratic) {
       iv.erraticT -= dt;
       if (iv.erraticT <= 0) {
@@ -854,7 +851,28 @@
       steerToVault(iv, speed);
     }
     clampToField(iv);
-    resolveWallCollision(iv);
+    var touched = resolveWallCollision(iv, true);
+    // Blocked (displacement collapsed near zero)? Drift sideways toward
+    // open ground instead of sitting in the bounce equilibrium — the
+    // wall it's jammed against is also being chewed on its own timer.
+    if (Math.abs(iv.x - preX) + Math.abs(iv.y - preY) < speed * 0.3) {
+      var driftDir = (iv.x + iv.w / 2) < (VAULT.x + VAULT.w / 2) ? -1 : 1;
+      iv.x += driftDir * speed * 0.6;
+      clampToField(iv);
+      var touched2 = resolveWallCollision(iv, true);
+      if (touched2 >= 0) touched = touched2;
+    }
+    if (touched >= 0) {
+      iv.wallContactT = (iv.wallContactT || 0) + dt;
+      if (iv.wallContactT >= 0.5) {
+        var tw = walls[touched];
+        spawnParticles(tw.x + 8, tw.y + 8, PAL.steel);
+        walls.splice(touched, 1);
+        iv.wallContactT = 0;
+      }
+    } else {
+      iv.wallContactT = 0;
+    }
     if (iv.flash > 0) { iv.flash -= dt; if (iv.flash < 0) iv.flash = 0; }
     if (rectsOverlap(iv, VAULT)) breachVault(iv);
   }
@@ -866,15 +884,9 @@
   function steerToVault(iv, speed) {
     var tx = VAULT.x + VAULT.w / 2, ty = VAULT.y;
     var dx = tx - (iv.x + iv.w / 2), dy = ty - (iv.y + iv.h / 2);
-    // Bias the heading toward "fall" rather than "turn" by weighting dy
-    // before normalizing, not after: the old code normalized (dx,dy) to
-    // a unit vector first and only THEN multiplied the y component by
-    // 1.3, which does not renormalize — the resultant vector's magnitude
-    // silently exceeds `speed` by up to 30% on a mostly-vertical
-    // approach, so intruders moved measurably faster than the wave
-    // table's `speed` said they should. Weighting dy first and
-    // normalizing the biased vector keeps the true speed at exactly
-    // `speed` while keeping the same "prefers falling" character.
+    // Weight dy BEFORE normalizing (not after, which doesn't renormalize
+    // and used to let the resultant exceed `speed` by up to 30%) so the
+    // true speed stays exactly `speed` — the wave table stays truthful.
     var by = dy * 1.3;
     var blen = Math.sqrt(dx * dx + by * by) || 1;
     iv.x += (dx / blen) * speed;
@@ -883,7 +895,7 @@
   }
 
   function spawnBullet(x, y, dir, isPlayer) {
-    var vx = 0, vy = 0, sp = 220;
+    var vx = 0, vy = 0, sp = isPlayer ? 286 : 220; // player +30% (CLA-44)
     if (dir === "up") vy = -sp; else if (dir === "down") vy = sp;
     else if (dir === "left") vx = -sp; else vx = sp;
     bullets.push({ x: x - 1, y: y - 2, w: 2, h: 4, vx: vx, vy: vy, isPlayer: isPlayer });
@@ -1063,9 +1075,12 @@
       updateHudScore();
       var next = wave + 1;
       setTimeout(function () {
-        if (state === STATE.WAVE_CLEAR) {
-          state = STATE.PLAYING;
+        // Also accept PAUSED-by-visibility (setRunning may have already
+        // flipped WAVE_CLEAR there mid-celebration); either way set up
+        // the next wave, then let enterPlayingIfVisible() land it.
+        if (state === STATE.WAVE_CLEAR || (state === STATE.PAUSED && pausedByVisibility)) {
           startWave(next);
+          enterPlayingIfVisible();
         }
       }, 900);
     }, 300);
@@ -1137,9 +1152,7 @@
     }
   }
 
-  // ---------------------------------------------------------------
   // Render
-  // ---------------------------------------------------------------
   function render() {
     ctx.fillStyle = PAL.void_;
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
@@ -1317,9 +1330,7 @@
     return s;
   }
 
-  // ---------------------------------------------------------------
   // HUD (DOM)
-  // ---------------------------------------------------------------
   function updateHudScore() {
     if (hudScore) hudScore.textContent = pad(score, 6);
     if (score > hi) { hi = score; if (hudHi) hudHi.textContent = pad(hi, 6); }
@@ -1381,17 +1392,17 @@
     });
   }
 
-  // ---------------------------------------------------------------
   // Main loop
-  // ---------------------------------------------------------------
   var acc = 0, last = null;
   function frame(ts) {
     requestAnimationFrame(frame);
+    // Periodic fallback, both directions, in case IO misses a transition.
+    visCheck = (visCheck + 1) % 15;
+    if (visCheck === 0) setRunning(visibilityOK());
     if (!running) {
       last = null;
-      visCheck = (visCheck + 1) % 15;
-      if (visCheck !== 0 || !canvasInView()) return;
-      setRunning(true);
+      render(); // keep the PAUSED overlay drawn even while off-screen
+      return;
     }
     if (last == null) last = ts;
     var delta = ts - last;
@@ -1409,9 +1420,7 @@
     render();
   }
 
-  // ---------------------------------------------------------------
   // Canvas scaling
-  // ---------------------------------------------------------------
   function rescale() {
     var frameEl = canvas.parentElement;
     var availW = frameEl ? frameEl.clientWidth : window.innerWidth;
@@ -1438,9 +1447,7 @@
   canvas.width = CANVAS_W;
   canvas.height = CANVAS_H;
 
-  // ---------------------------------------------------------------
   // Boot
-  // ---------------------------------------------------------------
   var booted = false;
   function boot() {
     if (booted) return;
