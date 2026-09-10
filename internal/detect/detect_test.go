@@ -43,6 +43,10 @@ var positiveCorpus = []struct {
 	{"random token trailing punctuation", "leaked: Xk4Qp9Lm2Rt7Vy1Zc3Bd8Fg0Jn5Hs7Kp2Lm9Qw!", ""},
 	{"random token with slash", "creds/aB3xQ9mK2pL7vN4zR8tY1wU6sD0fG5hJ3kM/prod", ""},
 	{"aws secret access key", "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", ""},
+	// CLA-30: a Secret genuinely embedded in a URL query string must still
+	// be caught by the generic entropy path — the query string sits past
+	// urlPathRanges' cutoff at "?", so only the ordinary path is excluded.
+	{"secret in url query string", "GET https://api.example.com/v1/upload?token=aB3xQ9mK2pL7vN4zR8tY1wU6sD0fG5hJ3kM HTTP/1.1", ""},
 }
 
 // Negative corpus: none of these ordinary code/prose lines may produce a
@@ -81,6 +85,13 @@ var negativeCorpus = []string{
 	"claudepass-v1.4.2-beta.3-release-candidate-build",
 	"the AKIA acronym stands for access key ID, not a value on its own",
 	"a token named sk in this codebase refers to a syntax kind, not a Secret",
+	// CLA-30: ordinary REST call URLs whose path has a numbered or
+	// hex-ish segment, straight from the issue report.
+	"https://api.stripe.com/v1/charges",
+	"GET https://api.example.com/users/507f1f77bcf86cd799439011 returned 200",
+	`curl https://api.github.com/repos/anthropics/claude-code/issues/1234`,
+	"https://storage.googleapis.com/my-bucket/uploads/20240115/a1b2c3d4e5f6789012345678",
+	`cpass run --with stripe/live -- curl -H "Authorization: Bearer $STRIPE_LIVE" https://api.stripe.com/v1/charges/ch_3Oq5x2AbCdEfGh011`,
 }
 
 func TestPositiveCorpus(t *testing.T) {

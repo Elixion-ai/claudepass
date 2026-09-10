@@ -65,6 +65,16 @@ var pemRe = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?----
 // that otherwise has enough character-class diversity to look entropic.
 var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
+// urlRe finds an absolute URL by its scheme, so Scan can treat its host and
+// path as ordinary structure rather than a candidate Secret: an ordinary
+// REST endpoint's path segments (a version like "/v1/", a numeric or
+// hex-ish resource id) mix character classes and run long enough to look
+// entropic on their own, but are not plausible Secrets. A query string or
+// fragment can still carry a genuine Secret — its own "="-delimited token,
+// or a known prefix — so only the span up to the first "?" or "#" counts
+// as path; urlPathRanges stops there.
+var urlRe = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.\-]*://[^\s"'<>]+`)
+
 // Scan finds every Secret-shaped value in s. Order is not significant.
 func Scan(s string) []Match {
 	var out []Match
@@ -83,9 +93,18 @@ func Scan(s string) []Match {
 		}, m)
 	})
 
-	for _, tok := range tokenRe.FindAllString(s, -1) {
+	urlPaths := urlPathRanges(s)
+	for _, loc := range tokenRe.FindAllStringIndex(s, -1) {
+		tok := s[loc[0]:loc[1]]
 		if m, ok := matchPrefix(tok); ok {
 			out = append(out, m)
+			continue
+		}
+		// A token that is part of a URL path (not a known-prefix Secret,
+		// checked above) doesn't go through the generic entropy path: a
+		// REST call's path segments routinely mix character classes and
+		// run long, without ever being a plausible Secret.
+		if withinAnyRange(urlPaths, loc[0], loc[1]) {
 			continue
 		}
 		if isHighEntropy(tok) {
@@ -93,6 +112,33 @@ func Scan(s string) []Match {
 		}
 	}
 	return out
+}
+
+// urlPathRanges returns the byte range of every URL's host+path found in
+// s, stopping each range before its query string or fragment (the first
+// "?" or "#"), so a Secret placed there is still visible to the generic
+// entropy pass below.
+func urlPathRanges(s string) [][2]int {
+	var ranges [][2]int
+	for _, loc := range urlRe.FindAllStringIndex(s, -1) {
+		start, end := loc[0], loc[1]
+		if i := strings.IndexAny(s[start:end], "?#"); i >= 0 {
+			end = start + i
+		}
+		ranges = append(ranges, [2]int{start, end})
+	}
+	return ranges
+}
+
+// withinAnyRange reports whether [start, end) falls entirely inside one of
+// ranges.
+func withinAnyRange(ranges [][2]int, start, end int) bool {
+	for _, r := range ranges {
+		if start >= r[0] && end <= r[1] {
+			return true
+		}
+	}
+	return false
 }
 
 func matchPrefix(tok string) (Match, bool) {
@@ -109,9 +155,15 @@ func matchPrefix(tok string) (Match, bool) {
 // classes the way random tokens do; minEntropy is a Shannon-entropy floor in
 // bits/char; wordFraction rejects tokens that decompose mostly into
 // dictionary words (compound identifiers), which can otherwise clear the
-// entropy floor once they mix case and a version digit.
+// entropy floor once they mix case and a version digit. isHighEntropy ANDs
+// minClasses with minTokenLen rather than accepting either alone: an
+// ordinary URL path segment can clear one on its own (digits+letters, or
+// just length), but real unprefixed secrets clear both at once, and 24
+// keeps every entropy-path entry in the positive corpus (30+ chars) well
+// clear while cutting off the shorter path segments that used to pass at
+// 20 (CLA-30).
 const (
-	minTokenLen  = 20
+	minTokenLen  = 24
 	maxTokenLen  = 100
 	minClasses   = 3
 	minEntropy   = 3.6

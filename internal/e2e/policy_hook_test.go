@@ -44,6 +44,10 @@ func TestPolicyHookAcceptanceFixtures(t *testing.T) {
 		{"cpass run wrapping a secret file read", "cpass run -- cat .env", true, "Secret-bearing file"},
 		{"raw bearer token literal", `curl -H "Authorization: Bearer sk_live_51H8xJ2eZvKYlo2CThookfixtureVALUEabc"`, true, "Secret-shaped value"},
 		{"cpass run with a Handle is allowed", `cpass run --with stripe/live -- curl -H "Authorization: Bearer $STRIPE_LIVE" https://api.example.com`, false, ""},
+		// CLA-30: an ordinary REST call's URL path (a version segment, a
+		// numeric/hex resource id) must not itself look like a raw
+		// Secret-shaped literal and trip the hook.
+		{"ordinary REST call with a versioned/hex URL path is allowed", `cpass run --with stripe/live -- curl -H "Authorization: Bearer $STRIPE_LIVE" https://api.stripe.com/v1/charges/ch_3Oq5x2AbCdEfGh011`, false, ""},
 		{"plain ls is allowed", "ls", false, ""},
 	}
 	for _, c := range cases {
