@@ -42,7 +42,7 @@ func Open(path string) (*Store, error) {
 	db.SetMaxOpenConns(1)
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
-		db.Close()
+		_ = db.Close() // best-effort: the migration error above is what we report
 		return nil, err
 	}
 	return s, nil
@@ -147,7 +147,7 @@ func (s *Store) IssueForCheckout(ctx context.Context, it IssuedToken) error {
 	if err != nil {
 		return fmt.Errorf("store: issue for checkout: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }() // no-op once Commit succeeds (sql.ErrTxDone); the standard defer-Rollback idiom
 
 	if err := markEventProcessed(ctx, tx, it.EventID, it.Now); err != nil {
 		return err // ErrAlreadyProcessed or a real error; either way, nothing to commit
@@ -202,7 +202,7 @@ func (s *Store) RecordIssuedToken(ctx context.Context, jti, customerID string, i
 	if err != nil {
 		return fmt.Errorf("store: record issued token: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }() // no-op once Commit succeeds (sql.ErrTxDone); the standard defer-Rollback idiom
 	if err := recordIssuedToken(ctx, tx, jti, customerID, issuedAt, exp); err != nil {
 		return fmt.Errorf("store: record issued token: %w", err)
 	}
@@ -269,7 +269,7 @@ func (s *Store) UpdateSubscription(ctx context.Context, eventID, customerID, sub
 	if err != nil {
 		return fmt.Errorf("store: update subscription: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }() // no-op once Commit succeeds (sql.ErrTxDone); the standard defer-Rollback idiom
 
 	if err := markEventProcessed(ctx, tx, eventID, now); err != nil {
 		return err
@@ -299,7 +299,7 @@ func (s *Store) MarkEventProcessed(ctx context.Context, eventID string, now int6
 	if err != nil {
 		return fmt.Errorf("store: mark event processed: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }() // no-op once Commit succeeds (sql.ErrTxDone); the standard defer-Rollback idiom
 	if err := markEventProcessed(ctx, tx, eventID, now); err != nil {
 		return err
 	}

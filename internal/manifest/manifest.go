@@ -65,7 +65,7 @@ func Load(path string) (*Manifest, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read handle: nothing buffered to lose on Close
 	m := &Manifest{Path: path}
 	sc := bufio.NewScanner(f)
 	section := ""

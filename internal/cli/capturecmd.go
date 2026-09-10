@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"flag"
-	"fmt"
 	"strings"
 
 	"claudepass/internal/broker"
@@ -95,7 +94,7 @@ func cmdCapture(e *env) int {
 	if err := v.Save(); err != nil {
 		return e.failErr(err)
 	}
-	fmt.Fprintln(e.stdout, entry.Handle)
+	fprintln(e.stdout, entry.Handle)
 	return ExitOK
 }
 

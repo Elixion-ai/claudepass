@@ -32,7 +32,11 @@ func main() {
 		log.Error("open store", "error", err)
 		os.Exit(1)
 	}
-	defer st.Close()
+	defer func() {
+		if err := st.Close(); err != nil {
+			log.Error("close store", "error", err)
+		}
+	}()
 
 	stripeClient := stripeapi.New(cfg.StripeSecretKey, cfg.StripePriceID, cfg.BaseURL)
 

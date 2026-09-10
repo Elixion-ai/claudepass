@@ -42,10 +42,10 @@ func TestInstallShInstallsIntoTempPrefix(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/dl/"+tag+"/"+asset, func(w http.ResponseWriter, r *http.Request) {
-		w.Write(archive)
+		_, _ = w.Write(archive) // best-effort: a failed write makes the test client fail downstream anyway
 	})
 	mux.HandleFunc("/dl/"+tag+"/checksums.txt", func(w http.ResponseWriter, r *http.Request) {
-		w.Write(checksums)
+		_, _ = w.Write(checksums) // best-effort, see above
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -102,10 +102,10 @@ func TestInstallShFailsOnChecksumMismatch(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/dl/"+tag+"/"+asset, func(w http.ResponseWriter, r *http.Request) {
-		w.Write(archive)
+		_, _ = w.Write(archive) // best-effort, see above
 	})
 	mux.HandleFunc("/dl/"+tag+"/checksums.txt", func(w http.ResponseWriter, r *http.Request) {
-		w.Write(badChecksums)
+		_, _ = w.Write(badChecksums) // best-effort, see above
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()

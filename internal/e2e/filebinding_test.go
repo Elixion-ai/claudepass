@@ -99,9 +99,15 @@ func TestFileBindingCleanedAfterSignalDeath(t *testing.T) {
 func TestStaleRunDirSwept(t *testing.T) {
 	ve := fileVault(t)
 	stale := filepath.Join(ve.home, "run", "deadbeefdeadbeef")
-	os.MkdirAll(stale, 0o700)
-	os.WriteFile(filepath.Join(stale, ".pid"), []byte("999999"), 0o600)
-	os.WriteFile(filepath.Join(stale, "gcp-sa"), []byte("leftover"), 0o600)
+	if err := os.MkdirAll(stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, ".pid"), []byte("999999"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "gcp-sa"), []byte("leftover"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	r := ve.run(nil, "run", "--with", "gcp/sa", "--", "true")
 	if r.code != 0 {
 		t.Fatalf("run: %s", r)
@@ -114,7 +120,9 @@ func TestStaleRunDirSwept(t *testing.T) {
 func TestManifestFileBindingInjectsPath(t *testing.T) {
 	ve := fileVault(t)
 	repo := t.TempDir()
-	os.WriteFile(filepath.Join(repo, ".claudepass.toml"), []byte("[secrets]\n\"gcp/sa\" = { binding = \"GCP_KEY_FILE\", kind = \"file\" }\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(repo, ".claudepass.toml"), []byte("[secrets]\n\"gcp/sa\" = { binding = \"GCP_KEY_FILE\", kind = \"file\" }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	out := filepath.Join(t.TempDir(), "env.txt")
 	r := ve.runIn(repo, []string{"HELPER_OUT=" + out}, "run", "--", helperBin)
 	if r.code != 0 {

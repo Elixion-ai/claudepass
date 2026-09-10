@@ -2,7 +2,6 @@ package cli
 
 import (
 	"flag"
-	"fmt"
 
 	"claudepass/internal/integrate"
 )
@@ -27,6 +26,6 @@ func integrateMCP(e *env, args []string) int {
 	if fs.NArg() != 0 {
 		return e.fail(ExitUsage, "usage: cpass integrate mcp")
 	}
-	fmt.Fprint(e.stdout, integrate.MCPSnippet)
+	fprint(e.stdout, integrate.MCPSnippet)
 	return ExitOK
 }

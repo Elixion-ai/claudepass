@@ -77,7 +77,7 @@ func cmdIntercept(e *env) int {
 	}
 	// Claude Code's UserPromptSubmit hook protocol: exit 2 blocks the
 	// submission and shows this stderr text to the human, who resubmits.
-	fmt.Fprintf(e.stderr, "cpass: stored %s; resubmit using the Handle, or prefix with !! to send anyway\n",
+	fprintf(e.stderr, "cpass: stored %s; resubmit using the Handle, or prefix with !! to send anyway\n",
 		joinWithAnd(stored))
 	return ExitUsage
 }
@@ -108,7 +108,7 @@ func interceptBypass(e *env, matches []detect.Match) {
 	if err := v.Save(); err != nil {
 		return
 	}
-	fmt.Fprintf(e.stderr, "cpass: bypass — stored and flagged Exposed: %s\n", strings.Join(stored, ", "))
+	fprintf(e.stderr, "cpass: bypass — stored and flagged Exposed: %s\n", strings.Join(stored, ", "))
 }
 
 // inferredOrInbox returns the Match's inferred Handle, or an inbox/<timestamp>

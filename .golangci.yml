@@ -1,11 +1,13 @@
 # Small, deliberately unopinionated golangci-lint config for CLA-18.
 #
 # linters.default: standard enables golangci-lint's own default set:
-# govet, ineffassign, staticcheck, unused, errcheck. errcheck is disabled
-# here because it currently flags ~80 pre-existing `fmt.Fprint*` and
-# deferred `Close` calls across the CLI package (idiomatic for a small CLI
-# writing to its own stdout/stderr) — enabling it is tracked separately
-# so it doesn't block wiring up CI in the first place; see CLA-4 follow-up.
+# govet, ineffassign, staticcheck, unused, errcheck. errcheck was disabled
+# at first (~80 pre-existing findings; see CLA-18) and re-enabled by
+# CLA-37, which checked or explicitly ignored every finding — an ignored
+# one is always a `_ = expr` (or `_, _ = expr`) with a short comment
+# explaining why the error is genuinely irrelevant there (e.g. a
+# best-effort write to the CLI's own stdout/stderr, or the standard
+# defer-Rollback-after-Commit idiom), never a blanket linter suppression.
 #
 # yaml-language-server: $schema=https://golangci-lint.run/jsonschema/golangci.jsonschema.json
 version: "2"
@@ -20,8 +22,6 @@ run:
 
 linters:
   default: standard
-  disable:
-    - errcheck
 
 issues:
   max-issues-per-linter: 0

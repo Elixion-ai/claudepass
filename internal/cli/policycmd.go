@@ -3,7 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"flag"
-	"fmt"
 	"io"
 	"strings"
 
@@ -58,7 +57,7 @@ func cmdPolicy(e *env) int {
 	if err := policy.EvaluateHook(in.ToolInput.Command); err != nil {
 		// Claude Code's PreToolUse hook protocol: exit 2 blocks the tool
 		// call and shows this stderr text to the human.
-		fmt.Fprintf(e.stderr, "cpass: %v\n", err)
+		fprintf(e.stderr, "cpass: %v\n", err)
 		return ExitUsage
 	}
 	return ExitOK

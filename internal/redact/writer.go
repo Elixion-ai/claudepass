@@ -207,8 +207,12 @@ func (l *Log) Record(e Event) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
-	fmt.Fprintf(f, "%s handle=%s encoding=%s stream=%s cmd=%s\n",
+	// Record has no error to report to its caller (redaction must never
+	// block on the audit log), and openAppend failing above is already
+	// swallowed the same way: a lost or truncated log line never blocks
+	// redaction, so Close and the write are best-effort too.
+	defer func() { _ = f.Close() }()
+	_, _ = fmt.Fprintf(f, "%s handle=%s encoding=%s stream=%s cmd=%s\n",
 		time.Now().UTC().Format(time.RFC3339), e.Handle, e.Encoding, e.Stream, l.cmd)
 }
 

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"flag"
-	"fmt"
 	"time"
 )
 
@@ -34,10 +33,10 @@ func cmdExposed(e *env) int {
 			reason = last.Reason
 			at = last.At.Format(time.RFC3339)
 		}
-		fmt.Fprintf(e.stdout, "%-30s %-20s reason=%s\n", en.Handle, at, reason)
+		fprintf(e.stdout, "%-30s %-20s reason=%s\n", en.Handle, at, reason)
 	}
 	if !any {
-		fmt.Fprintln(e.stdout, "no Exposed Secrets")
+		fprintln(e.stdout, "no Exposed Secrets")
 	}
 	return ExitOK
 }
@@ -62,7 +61,7 @@ func cmdRotateDone(e *env) int {
 	if err := v.Save(); err != nil {
 		return e.failErr(err)
 	}
-	fmt.Fprintf(e.stdout, "%s is no longer Exposed\n", handle)
+	fprintf(e.stdout, "%s is no longer Exposed\n", handle)
 	return ExitOK
 }
 
@@ -88,6 +87,6 @@ func cmdMarkExposed(e *env) int {
 	if err := v.Save(); err != nil {
 		return e.failErr(err)
 	}
-	fmt.Fprintf(e.stdout, "%s marked Exposed (%s)\n", handle, *reason)
+	fprintf(e.stdout, "%s marked Exposed (%s)\n", handle, *reason)
 	return ExitOK
 }

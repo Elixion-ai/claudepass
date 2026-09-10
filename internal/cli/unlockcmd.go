@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"strings"
 
@@ -48,7 +47,7 @@ func cmdUnlock(e *env) int {
 	if err := broker.StartBroker(key, *timeout); err != nil {
 		return e.failErr(err)
 	}
-	fmt.Fprintf(e.stdout, "unlocked (idle timeout %s)\n", timeout.String())
+	fprintf(e.stdout, "unlocked (idle timeout %s)\n", timeout.String())
 	return ExitOK
 }
 
@@ -64,7 +63,7 @@ func cmdLock(e *env) int {
 	if err := broker.StopBroker(); err != nil {
 		return e.failErr(err)
 	}
-	fmt.Fprintln(e.stdout, "locked")
+	fprintln(e.stdout, "locked")
 	return ExitOK
 }
 

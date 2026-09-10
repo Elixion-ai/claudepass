@@ -137,7 +137,7 @@ func newTestService(t *testing.T) *testServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() }) // best-effort cleanup
 
 	logBuf := newSyncBuf()
 	mail := newRecordingMailer()
@@ -178,7 +178,7 @@ func (ts *testServer) getLicensePage(t *testing.T, sessionID string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() // best-effort cleanup
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatal(err)
@@ -278,7 +278,7 @@ func TestReleaseCpassRefusesE2EIssuedToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) }) // best-effort cleanup
 	releaseBin := filepath.Join(dir, "cpass-release")
 	cmd := exec.Command("go", "build", "-o", releaseBin, "claudepass/cmd/cpass")
 	cmd.Stderr = os.Stderr
@@ -346,7 +346,7 @@ func TestSubscriptionCanceledThenReissueRefusedOverHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() // best-effort cleanup
 	b, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusPaymentRequired {
 		t.Fatalf("reissue after cancellation: status %d body %s", resp.StatusCode, b)

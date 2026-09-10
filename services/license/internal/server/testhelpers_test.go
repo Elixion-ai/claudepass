@@ -110,7 +110,7 @@ func newTestServer(t *testing.T) (*Server, *testDeps) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() }) // best-effort cleanup
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

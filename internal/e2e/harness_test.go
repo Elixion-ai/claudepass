@@ -38,7 +38,7 @@ func TestMain(m *testing.M) {
 		}
 	}
 	code := m.Run()
-	os.RemoveAll(dir)
+	_ = os.RemoveAll(dir) // best-effort: process is exiting either way
 	os.Exit(code)
 }
 
@@ -163,6 +163,6 @@ func shortTempDir(t *testing.T) string {
 	if err := os.MkdirAll(d, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(d) })
+	t.Cleanup(func() { _ = os.RemoveAll(d) }) // best-effort cleanup
 	return d
 }

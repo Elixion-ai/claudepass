@@ -66,8 +66,8 @@ func RequestKey() ([]byte, error) {
 	if err != nil {
 		return nil, ErrLocked
 	}
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(dialTimeout))
+	defer func() { _ = conn.Close() }() // best-effort: conn is already fully used by the time we get here
+	_ = conn.SetDeadline(time.Now().Add(dialTimeout))
 	if _, err := conn.Write([]byte("RESOLVE\n")); err != nil {
 		return nil, ErrLocked
 	}
@@ -95,13 +95,13 @@ func StopBroker() error {
 	}
 	conn, err := net.DialTimeout("unix", path, dialTimeout)
 	if err != nil {
-		os.Remove(path) // clear a stale socket file left by a killed Broker
+		_ = os.Remove(path) // best-effort: clear a stale socket file left by a killed Broker
 		return nil
 	}
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(dialTimeout))
-	conn.Write([]byte("LOCK\n"))
-	bufio.NewReader(conn).ReadString('\n') // wait for the ack; its content doesn't matter
+	defer func() { _ = conn.Close() }() // best-effort: conn is already fully used by the time we get here
+	_ = conn.SetDeadline(time.Now().Add(dialTimeout))
+	_, _ = conn.Write([]byte("LOCK\n"))           // best-effort: StopBroker is idempotent either way
+	_, _ = bufio.NewReader(conn).ReadString('\n') // wait for the ack; its content doesn't matter
 	return nil
 }
 
@@ -130,13 +130,13 @@ func StartBroker(key []byte, timeout time.Duration) error {
 	cmd.Env = os.Environ()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
-		r.Close()
-		w.Close()
+		_ = r.Close()
+		_ = w.Close()
 		return fmt.Errorf("broker: start: %w", err)
 	}
-	r.Close()
+	_ = r.Close() // parent doesn't read from its end
 	_, werr := w.Write([]byte(base64.StdEncoding.EncodeToString(key) + "\n"))
-	w.Close()
+	_ = w.Close() // Write already reported any failure above; Close on a pipe has nothing left to flush
 	if werr != nil {
 		return fmt.Errorf("broker: hand off key: %w", werr)
 	}
@@ -146,7 +146,7 @@ func StartBroker(key []byte, timeout time.Duration) error {
 	for time.Now().Before(deadline) {
 		c, err := net.DialTimeout("unix", path, 100*time.Millisecond)
 		if err == nil {
-			c.Close()
+			_ = c.Close() // just probing whether the Broker is listening yet
 			return nil
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -159,7 +159,7 @@ func StartBroker(key []byte, timeout time.Duration) error {
 // idle for timeout with no requests. Started by StartBroker via
 // cpass broker-serve; not for direct use.
 func Serve(socketPath string, key []byte, timeout time.Duration) error {
-	os.Remove(socketPath) // clear a stale socket left by a crashed Broker
+	_ = os.Remove(socketPath) // best-effort: clear a stale socket left by a crashed Broker
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
 		return err
 	}
@@ -172,13 +172,13 @@ func Serve(socketPath string, key []byte, timeout time.Duration) error {
 		return fmt.Errorf("broker: listen on %s: %w", socketPath, err)
 	}
 	if err := os.Chmod(socketPath, 0o600); err != nil {
-		l.Close()
-		os.Remove(socketPath)
+		_ = l.Close()
+		_ = os.Remove(socketPath)
 		return err
 	}
 	defer func() {
-		l.Close()
-		os.Remove(socketPath)
+		_ = l.Close()
+		_ = os.Remove(socketPath)
 	}()
 	for {
 		if err := l.SetDeadline(time.Now().Add(timeout)); err != nil {
@@ -195,7 +195,7 @@ func Serve(socketPath string, key []byte, timeout time.Duration) error {
 			return err
 		}
 		stop := serveConn(conn, key)
-		conn.Close()
+		_ = conn.Close() // best-effort: conn is already fully used by the time we get here
 		if stop {
 			return nil
 		}
@@ -203,19 +203,22 @@ func Serve(socketPath string, key []byte, timeout time.Duration) error {
 }
 
 func serveConn(conn net.Conn, key []byte) (stop bool) {
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	line, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil {
 		return false
 	}
+	// Replies are best-effort: the client is about to read or has already
+	// gone away, and conn.Close() right after serveConn returns is what
+	// actually ends the exchange either way.
 	switch strings.TrimSpace(line) {
 	case "RESOLVE":
-		fmt.Fprintf(conn, "KEY %s\n", base64.StdEncoding.EncodeToString(key))
+		_, _ = fmt.Fprintf(conn, "KEY %s\n", base64.StdEncoding.EncodeToString(key))
 	case "LOCK":
-		fmt.Fprintln(conn, "OK")
+		_, _ = fmt.Fprintln(conn, "OK")
 		return true
 	default:
-		fmt.Fprintln(conn, "ERR unknown command")
+		_, _ = fmt.Fprintln(conn, "ERR unknown command")
 	}
 	return false
 }

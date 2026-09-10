@@ -39,6 +39,16 @@ var commands = map[string]command{}
 
 func register(c command) { commands[c.name] = c }
 
+// fprintf, fprintln and fprint write best-effort to a CLI output stream
+// (the process's own stdout/stderr, or occasionally an Agent's). Their
+// error is never actionable here: the command is already finishing,
+// successfully or not, and there is nothing more useful to do with a
+// broken stdout/stderr than what happens anyway — the process exits. The
+// return values are intentionally discarded rather than propagated.
+func fprintf(w io.Writer, format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
+func fprintln(w io.Writer, a ...any)               { _, _ = fmt.Fprintln(w, a...) }
+func fprint(w io.Writer, a ...any)                 { _, _ = fmt.Fprint(w, a...) }
+
 // Main runs cpass with the given arguments and returns the exit code.
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	e := &env{args: args, stdin: stdin, stdout: stdout, stderr: stderr}
@@ -47,12 +57,12 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return ExitOK
 	}
 	if args[0] == "version" || args[0] == "--version" {
-		fmt.Fprintln(stdout, "cpass", Version)
+		fprintln(stdout, "cpass", Version)
 		return ExitOK
 	}
 	c, ok := commands[args[0]]
 	if !ok {
-		fmt.Fprintf(stderr, "cpass: unknown command %q\n", args[0])
+		fprintf(stderr, "cpass: unknown command %q\n", args[0])
 		usage(stderr)
 		return ExitUsage
 	}
@@ -61,19 +71,19 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "cpass — secrets for AI coding agents. Agents see Handles, never values.")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Usage: cpass <command> [flags]")
-	fmt.Fprintln(w)
+	fprintln(w, "cpass — secrets for AI coding agents. Agents see Handles, never values.")
+	fprintln(w)
+	fprintln(w, "Usage: cpass <command> [flags]")
+	fprintln(w)
 	names := make([]string, 0, len(commands))
 	for n := range commands {
 		names = append(names, n)
 	}
 	sort.Strings(names)
 	for _, n := range names {
-		fmt.Fprintf(w, "  %-10s %s\n", n, commands[n].summary)
+		fprintf(w, "  %-10s %s\n", n, commands[n].summary)
 	}
-	fmt.Fprintf(w, "  %-10s %s\n", "version", "print the version")
+	fprintf(w, "  %-10s %s\n", "version", "print the version")
 }
 
 // parseInterspersed parses flags that may appear before or after positional
@@ -96,7 +106,7 @@ func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
 // fail prints a one-line error and returns the exit code.
 func (e *env) fail(code int, format string, a ...any) int {
 	msg := fmt.Sprintf(format, a...)
-	fmt.Fprintln(e.stderr, "cpass: "+strings.TrimSuffix(msg, "\n"))
+	fprintln(e.stderr, "cpass: "+strings.TrimSuffix(msg, "\n"))
 	return code
 }
 

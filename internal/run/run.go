@@ -91,7 +91,10 @@ func Run(spec Spec) (int, error) {
 			if !s.ExposedAt.IsZero() {
 				since = s.ExposedAt.Format("2006-01-02")
 			}
-			fmt.Fprintf(spec.Warn, "cpass: %s is Exposed since %s, rotate it\n", s.Handle, since)
+			// Best-effort, like every other human-facing notice cpass prints: a
+			// broken Warn stream isn't actionable here and the run proceeds
+			// either way.
+			_, _ = fmt.Fprintf(spec.Warn, "cpass: %s is Exposed since %s, rotate it\n", s.Handle, since)
 		}
 	}
 	logPath := ""
@@ -118,8 +121,12 @@ func Run(spec Spec) (int, error) {
 	err = cmd.Wait()
 	stop()
 	dir.destroy()
-	stdout.Close()
-	stderr.Close()
+	// Best-effort: the child has already exited, there is nothing left to
+	// do with a broken stdout/stderr (e.g. a downstream reader that closed
+	// its pipe early) than what happens anyway — cpass returns the child's
+	// exit code below, same as if the write had gone through.
+	_ = stdout.Close()
+	_ = stderr.Close()
 	if spec.Warn != nil {
 		counts := rlog.Counts()
 		handles := make([]string, 0, len(counts))
@@ -128,7 +135,7 @@ func Run(spec Spec) (int, error) {
 		}
 		sort.Strings(handles)
 		for _, h := range handles {
-			fmt.Fprintf(spec.Warn, "cpass: redacted %s from output (%d×); the Agent must use the value, not print it\n", h, counts[h])
+			_, _ = fmt.Fprintf(spec.Warn, "cpass: redacted %s from output (%d×); the Agent must use the value, not print it\n", h, counts[h]) // best-effort, see above
 		}
 	}
 	return exitCode(err), nil

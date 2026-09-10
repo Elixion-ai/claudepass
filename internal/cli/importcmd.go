@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"flag"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,7 +96,7 @@ func cmdImport(e *env) int {
 		}
 	}
 
-	fmt.Fprintf(e.stdout, "imported %d handle(s) from %s into %s\n", len(items), path, m.Path)
+	fprintf(e.stdout, "imported %d handle(s) from %s into %s\n", len(items), path, m.Path)
 	return ExitOK
 }
 
@@ -135,11 +134,11 @@ func shredFile(path string) error {
 			return err
 		}
 		if _, err := f.Write(make([]byte, st.Size())); err != nil {
-			f.Close()
+			_ = f.Close() // best-effort: the Write error above is what we report
 			return err
 		}
 		if err := f.Sync(); err != nil {
-			f.Close()
+			_ = f.Close() // best-effort: the Sync error above is what we report
 			return err
 		}
 		if err := f.Close(); err != nil {

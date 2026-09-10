@@ -68,7 +68,9 @@ func TestTamperedVaultIsRefused(t *testing.T) {
 	} else {
 		b[i] = 'A'
 	}
-	os.WriteFile(ve.vaultPath(), b, 0o600)
+	if err := os.WriteFile(ve.vaultPath(), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	r := ve.run(nil, "ls")
 	if r.code == 0 || !strings.Contains(r.stderr, "tampered") {
 		t.Fatalf("want tamper error: %s", r)
