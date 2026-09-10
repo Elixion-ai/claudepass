@@ -43,16 +43,16 @@ func storeKeychainKey(e *env, key []byte, touchID bool) error {
 		if err := broker.SetKeychainKeyUserPresence(key); err != nil {
 			return err
 		}
-		fmt.Fprintf(e.stderr, "cpass: stored the Vault key in the macOS Keychain (service %q), requiring Touch ID or the device passcode to read it\n", broker.KeychainService())
+		fprintf(e.stderr, "cpass: stored the Vault key in the macOS Keychain (service %q), requiring Touch ID or the device passcode to read it\n", broker.KeychainService())
 		return nil
 	}
 	if touchID {
-		fmt.Fprintln(e.stderr, "cpass: --touch-id needs a cpass binary built with -tags touchid on macOS with cgo enabled (CGO_ENABLED=1); storing the key without Touch ID for now — see docs/SECURITY.md, or run `cpass keychain upgrade --touch-id` after rebuilding")
+		fprintln(e.stderr, "cpass: --touch-id needs a cpass binary built with -tags touchid on macOS with cgo enabled (CGO_ENABLED=1); storing the key without Touch ID for now — see docs/SECURITY.md, or run `cpass keychain upgrade --touch-id` after rebuilding")
 	}
 	if err := broker.SetKeychainKey(key); err != nil {
 		return err
 	}
-	fmt.Fprintf(e.stderr, "cpass: stored the Vault key in the macOS Keychain (service %q)\n", broker.KeychainService())
+	fprintf(e.stderr, "cpass: stored the Vault key in the macOS Keychain (service %q)\n", broker.KeychainService())
 	return nil
 }
 
@@ -85,7 +85,7 @@ func cmdInit(e *env) int {
 			}
 		default:
 			if *touchID {
-				fmt.Fprintln(e.stderr, "cpass: --touch-id only applies to the macOS Keychain unlock source; ignoring it")
+				fprintln(e.stderr, "cpass: --touch-id only applies to the macOS Keychain unlock source; ignoring it")
 			}
 			passphrase, err := e.readSecret("master passphrase: ",
 				"cpass init needs a terminal to type a master passphrase into, or set CPASS_KEY for CI")

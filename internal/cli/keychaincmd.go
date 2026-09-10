@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"flag"
-	"fmt"
 	"runtime"
 
 	"claudepass/internal/broker"
@@ -62,6 +61,6 @@ func cmdKeychainUpgrade(e *env) int {
 	if err := broker.SetKeychainKeyUserPresence(key); err != nil {
 		return e.failErr(err)
 	}
-	fmt.Fprintf(e.stdout, "upgraded the Keychain item (service %q) to require Touch ID or the device passcode\n", broker.KeychainService())
+	fprintf(e.stdout, "upgraded the Keychain item (service %q) to require Touch ID or the device passcode\n", broker.KeychainService())
 	return ExitOK
 }
