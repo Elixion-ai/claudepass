@@ -199,8 +199,26 @@ built and checked on a Mac with the full Xcode toolchain installed
 (`xcode-select -p` resolves), so the `touchid`-tagged code was compiled
 and exercised, not just written:
 
-- `go build -tags touchid ./...` and `go vet -tags touchid ./internal/broker/...`
-  both succeed.
+- `go build -tags touchid ./...` succeeds. `go vet -tags touchid
+  ./internal/broker/...` does **not** come back clean: it flags one line,
+  `internal/broker/touchid_darwin.go:47:53: possible misuse of
+  unsafe.Pointer`, on `cfPtr`'s `unsafe.Pointer(uintptr(x))` conversion.
+  That finding is a false positive for this exact pattern, not a bug —
+  see `cfPtr`'s own doc comment in `touchid_darwin.go` for the full
+  argument, in short: cgo represents every Objective-C-bridged CF opaque
+  type this file touches (`CFTypeRef`, `CFStringRef`, `CFDictionaryRef`,
+  `SecAccessControlRef`, and friends) as a plain `uintptr` rather than a
+  Go pointer type, deliberately, so the garbage collector never mistakes
+  a Core Foundation object address for a Go heap pointer; bridging one
+  back to `unsafe.Pointer` to hand it to `CFDictionaryCreate` is the
+  intended, necessary way to call these APIs from cgo, not arithmetic on
+  a Go-managed allocation — the distinction `go vet`'s unsafeptr
+  heuristic cannot make, so it fires on sight regardless. This finding
+  does not gate anything: the project's actual quality bar (`go vet -tags
+  e2e ./...`, `golangci-lint run`) never runs against the `touchid` tag —
+  `.golangci.yml` pins `build-tags` to `e2e` only — so it never reaches
+  CI or a release build; it is called out here, correctly, rather than
+  claimed as a clean pass that does not occur.
 - `internal/broker/touchid_darwin_test.go` (`go test -tags touchid
   ./internal/broker/ -run TestTouchIDUserPresence -v`) mechanically proves
   the access-control mechanism itself — see that file's doc comment —
