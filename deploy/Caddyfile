@@ -11,18 +11,21 @@
 # No ACME `email` directive: Caddy's automatic HTTPS works without one,
 # it only forgoes renewal-problem notices. See deploy/README.md for how
 # this file reaches the server and gets reloaded.
-
-www.claudepass.com {
-	redir https://claudepass.com{uri} permanent
-}
-
-claudepass.com {
-	log {
-		output file /var/log/caddy/access.log
-	}
-
-	encode gzip
-
+#
+# security_headers is a snippet, not a directive written inline on the
+# main route: a `header` block placed only inside claudepass.com's
+# ordinary route decorates responses that come out of THAT route's
+# handler chain. handle_errors below is a separate chain Caddy invokes
+# when the primary one ends in an error (an unknown path 404s, a
+# proxied backend 5xx, ...) — it does not inherit headers set in the
+# route it replaced, so a `header` block written once at the top of
+# claudepass.com never reached 404s or any other Caddy-generated error
+# response, including this site's HSTS/CSP/nosniff/referrer headers.
+# Defining the block once here and `import`ing it in both places (the
+# main route and handle_errors) applies the same headers to normal and
+# error responses alike without duplicating — and risking drift on —
+# the CSP string itself.
+(security_headers) {
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
@@ -42,6 +45,20 @@ claudepass.com {
 		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'self'; frame-ancestors 'none'"
 		-Server
 	}
+}
+
+www.claudepass.com {
+	redir https://claudepass.com{uri} permanent
+}
+
+claudepass.com {
+	log {
+		output file /var/log/caddy/access.log
+	}
+
+	encode gzip
+
+	import security_headers
 
 	root * /srv/claudepass/site
 
@@ -77,6 +94,7 @@ claudepass.com {
 	}
 
 	handle_errors {
+		import security_headers
 		@404 expression `{http.error.status_code} == 404`
 		rewrite @404 /404.html
 		file_server

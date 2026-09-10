@@ -300,6 +300,42 @@
   var touchDirs = { up: false, down: false, left: false, right: false };
   var lastPressedDir = null;
 
+  // ---------------------------------------------------------------
+  // Debug instrumentation — read-only, zero effect on gameplay. Only
+  // active when the page URL has ?debug=1, in which case it exposes
+  // window.__vaultDefenseDebug() returning a live snapshot (state
+  // machine, score, wave, lives, input/focus flags, live bullet and
+  // intruder counts + types/hp, remaining spawn-queue length) plus the
+  // last 20 collision-ish events (bullet_hit, kill, player_hit,
+  // vault_breach, wave_start, wave_clear) with timestamps. Used by the
+  // play-test harness to read ground truth instead of screen-scraping
+  // the canvas. debugEvent() is a no-op unless DEBUG is true, and
+  // nothing here ever mutates game state — safe to leave shipped.
+  // ---------------------------------------------------------------
+  var DEBUG = false;
+  try { DEBUG = /(?:^|[?&])debug=1(?:&|$)/.test(window.location.search); } catch (e) { DEBUG = false; }
+  var debugLog = [];
+  function debugEvent(type, detail) {
+    if (!DEBUG) return;
+    debugLog.push({ t: Math.round(performance.now()), type: type, detail: detail });
+    if (debugLog.length > 20) debugLog.shift();
+  }
+  if (DEBUG) {
+    window.__vaultDefenseDebug = function () {
+      return {
+        state: state, stateT: stateT, wave: wave, score: score, hi: hi, lives: lives,
+        canvasFocused: canvasFocused, input: { up: input.up, down: input.down, left: input.left, right: input.right, fire: input.fire },
+        player: player ? { x: Math.round(player.x), y: Math.round(player.y), dir: player.dir, cooldown: player.cooldown } : null,
+        bulletCount: bullets.length,
+        bullets: bullets.map(function (b) { return { x: Math.round(b.x), y: Math.round(b.y), isPlayer: b.isPlayer }; }),
+        intruderCount: intruders.length,
+        intruders: intruders.map(function (iv) { return { type: iv.type, x: Math.round(iv.x), y: Math.round(iv.y), hp: iv.hp }; }),
+        spawnQueueRemaining: spawnQueue ? spawnQueue.length : 0,
+        events: debugLog.slice()
+      };
+    };
+  }
+
   function resetRun() {
     player = { x: FIELD_W / 2 - 8, y: FIELD_H - 24, w: 16, h: 16, dir: "up", cooldown: 0, queuedShot: false,
       invuln: 0, shieldT: 0, tread: 0, treadT: 0, alive: true };
@@ -315,15 +351,32 @@
   // ---------------------------------------------------------------
   // Wave table
   // ---------------------------------------------------------------
+  // Wave 1 must be unlosable-if-you-try: a player who does nothing but
+  // hold the default "up" facing and tap fire every ~300ms has to clear
+  // it without losing a life, so the [REDACTED] pop lands on the very
+  // first real attempt. That requires three things together, not just
+  // "make it slow" — steerToVault flies each intruder in a straight
+  // line from its spawn point to a fixed point just above the vault, so
+  // a corner spawn (old behavior, every wave) only crosses a stationary
+  // player's firing column in the last instant before reaching the
+  // vault, however slow it moves: there is no speed low enough to make
+  // that hittable. `spawnXRange` spawns wave 1-2 intruders in a band
+  // centered on the player's default column instead, so the whole
+  // straight-line path stays near that column. `speed` (a multiplier on
+  // each type's base TYPES[x].speed, itself now correctly normalized —
+  // see steerToVault) and `interval` (seconds between spawns, the real
+  // spawn gap since intruders spawn one at a time) then set how
+  // forgiving the encounter is. Waves 2-8 widen the spawn band back out
+  // and ramp speed/count/interval gently as the mix adds tougher types.
   var WAVES = [
-    { total: 6, mix: { scout: 6 }, interval: 2.4, speed: 1.00, walls: 0 },
-    { total: 8, mix: { scout: 5, reader: 3 }, interval: 2.2, speed: 1.05, walls: 1 },
-    { total: 10, mix: { scout: 4, reader: 4, shouter: 2 }, interval: 2.0, speed: 1.10, walls: 1, steel: true },
-    { total: 12, mix: { scout: 3, reader: 4, shouter: 3, saboteur: 2 }, interval: 1.8, speed: 1.15, walls: 1, steel: true },
-    { total: 14, mix: { scout: 2, reader: 4, shouter: 4, saboteur: 4 }, interval: 1.6, speed: 1.20, walls: 1, steel: true },
-    { total: 16, mix: { scout: 1, reader: 4, shouter: 5, saboteur: 6 }, interval: 1.4, speed: 1.25, walls: 1, steel: true },
-    { total: 18, mix: { scout: 1, reader: 3, shouter: 6, saboteur: 8 }, interval: 1.2, speed: 1.30, walls: 1, steel: true },
-    { total: 20, mix: { scout: 0, reader: 4, shouter: 6, saboteur: 10 }, interval: 1.1, speed: 1.35, walls: 1, steel: true }
+    { total: 5, mix: { scout: 5 }, interval: 2.5, speed: 0.55, walls: 0, spawnXRange: [88, 152] },
+    { total: 7, mix: { scout: 5, reader: 2 }, interval: 2.2, speed: 0.70, walls: 1, spawnXRange: [56, 184] },
+    { total: 9, mix: { scout: 4, reader: 3, shouter: 2 }, interval: 2.0, speed: 0.80, walls: 1, steel: true },
+    { total: 11, mix: { scout: 3, reader: 4, shouter: 3, saboteur: 1 }, interval: 1.8, speed: 0.90, walls: 1, steel: true },
+    { total: 13, mix: { scout: 2, reader: 4, shouter: 4, saboteur: 3 }, interval: 1.6, speed: 1.00, walls: 1, steel: true },
+    { total: 15, mix: { scout: 1, reader: 4, shouter: 5, saboteur: 5 }, interval: 1.4, speed: 1.10, walls: 1, steel: true },
+    { total: 17, mix: { scout: 1, reader: 3, shouter: 6, saboteur: 7 }, interval: 1.25, speed: 1.20, walls: 1, steel: true },
+    { total: 19, mix: { scout: 0, reader: 4, shouter: 6, saboteur: 9 }, interval: 1.15, speed: 1.30, walls: 1, steel: true }
   ];
 
   function buildQueue(waveIdx) {
@@ -344,6 +397,10 @@
       }
     }
     return shuffle(list);
+  }
+  function pickSpawnX(cfg) {
+    if (cfg.spawnXRange) return cfg.spawnXRange[0] + Math.random() * (cfg.spawnXRange[1] - cfg.spawnXRange[0]);
+    return Math.random() < 0.5 ? 8 : FIELD_W - 24;
   }
   function shuffle(arr) {
     for (var i = arr.length - 1; i > 0; i--) {
@@ -373,6 +430,7 @@
     walls = [];
     if (cfg.walls) placeBrickRing();
     if (cfg.steel) placeSteelCorners();
+    debugEvent("wave_start", { wave: idx });
     popups.push({ text: "WAVE " + (idx + 1) + " — INCOMING", t: 0, dur: 1.4, y: FIELD_H / 2 - 20, color: PAL.phosphor });
   }
   function placeBrickRing() {
@@ -495,6 +553,23 @@
     if (isTypingTarget(e.target)) return;
     var k = e.key;
     var isGameKey = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Enter", "w", "a", "s", "d", "W", "A", "S", "D"].indexOf(k) !== -1;
+    // A keyboard-only player who has never clicked/tapped the canvas
+    // has no DOM focus on anything in particular — document.activeElement
+    // is <body>, so e.target here is <body> too. Previously every branch
+    // below was gated on canvasFocused, which is only ever set true by
+    // the canvas's own "focus" event, which in turn only ever fired from
+    // a pointer handler (activatePointer) — so Enter/Space/arrows did
+    // nothing at all until the player clicked or tapped first, even
+    // though the canvas is focusable (tabindex="0") and PRESS START is
+    // on screen inviting exactly this. Route this one case through the
+    // same canvas.focus() a real click takes (synchronous — its "focus"
+    // listener flips canvasFocused and hides the overlay before the
+    // next line runs) so a bare Enter/Space/arrow genuinely starts the
+    // game. Anything with its own DOM focus (a link, a button, an
+    // input — already excluded above) keeps its native key handling.
+    if (!canvasFocused && isGameKey && e.target === document.body) {
+      canvas.focus();
+    }
     // Capture before the state-machine branches below run, not just
     // while PLAYING — ATTRACT/GAME_OVER/ENTER_INITIALS all act on this
     // same keydown (start, restart, initials entry), and a focused
@@ -679,7 +754,7 @@
     var liveCount = intruders.length;
     if (spawnQueue.length && liveCount < 6 && spawnTimer <= 0) {
       var t = spawnQueue.shift();
-      var corner = Math.random() < 0.5 ? 8 : FIELD_W - 24;
+      var corner = pickSpawnX(cfg);
       var hardened = cfg.hardened && (t === "reader" || t === "shouter") && Math.random() < 0.3;
       intruders.push(mkIntruder(t, corner, 8, hardened));
       spawnTimer = cfg.interval;
@@ -775,9 +850,19 @@
   function steerToVault(iv, speed) {
     var tx = VAULT.x + VAULT.w / 2, ty = VAULT.y;
     var dx = tx - (iv.x + iv.w / 2), dy = ty - (iv.y + iv.h / 2);
-    var len = Math.sqrt(dx * dx + dy * dy) || 1;
-    iv.x += (dx / len) * speed;
-    iv.y += (dy / len) * speed * 1.3;
+    // Bias the heading toward "fall" rather than "turn" by weighting dy
+    // before normalizing, not after: the old code normalized (dx,dy) to
+    // a unit vector first and only THEN multiplied the y component by
+    // 1.3, which does not renormalize — the resultant vector's magnitude
+    // silently exceeds `speed` by up to 30% on a mostly-vertical
+    // approach, so intruders moved measurably faster than the wave
+    // table's `speed` said they should. Weighting dy first and
+    // normalizing the biased vector keeps the true speed at exactly
+    // `speed` while keeping the same "prefers falling" character.
+    var by = dy * 1.3;
+    var blen = Math.sqrt(dx * dx + by * by) || 1;
+    iv.x += (dx / blen) * speed;
+    iv.y += (by / blen) * speed;
     iv.dir = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up");
   }
 
@@ -820,6 +905,7 @@
             iv.hp--;
             iv.flash = 0.08;
             sfxHit();
+            debugEvent("bullet_hit", { type: iv.type, hpLeft: iv.hp });
             if (iv.hp <= 0) killIntruder(iv, j);
             break;
           }
@@ -847,6 +933,7 @@
     comboT = 1.5;
     var pts = Math.round(base * combo);
     score += pts;
+    debugEvent("kill", { type: iv.type, pts: pts, score: score });
     checkExtraLife();
     spawnParticles(iv.x + iv.w / 2, iv.y + iv.h / 2, PAL.red);
     spawnRedactedPop(iv.x + iv.w / 2, iv.y);
@@ -898,6 +985,7 @@
     spawnParticles(player.x + player.w / 2, player.y + player.h / 2, PAL.phosphor);
     lives--;
     updateHudLives();
+    debugEvent("player_hit", { livesLeft: lives });
     shake = motionOK ? 0.18 : 0;
     if (lives <= 0) { onGameOver(); return; }
     player.x = FIELD_W / 2 - 8; player.y = FIELD_H - 24;
@@ -912,6 +1000,7 @@
     vaultBreachHandle = HANDLES[vaultLabelIdx % HANDLES.length];
     lives--;
     updateHudLives();
+    debugEvent("vault_breach", { handle: vaultBreachHandle, livesLeft: lives });
     shake = motionOK ? 0.2 : 0;
     sfxBreach();
     if (lives <= 0) { onGameOver(); }
@@ -948,6 +1037,7 @@
     state = STATE.WAVE_CLEAR; stateT = 0;
     var bonus = 200 * (wave + 1);
     var perfect = perfectWave;
+    debugEvent("wave_clear", { wave: wave, perfect: perfect });
     sfxWaveClear();
     setTimeout(function () {
       score += bonus;
