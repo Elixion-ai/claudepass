@@ -678,10 +678,26 @@
     if (state === STATE.PLAYING) { state = STATE.PAUSED; pausedByVisibility = true; }
   });
 
-  var running = true;
+  // Visibility of the canvas gates the simulation. Scrolling the game out
+  // of view pauses it exactly like a hidden tab does (a real PAUSED state
+  // with the overlay, never a silent stall), and frame() re-checks the
+  // geometry every few frames so a missed observer callback can never
+  // strand a run with running=false and state=PLAYING.
+  var running = true, visCheck = 0;
+  function setRunning(v) {
+    if (v === running) return;
+    running = v;
+    last = null;
+    if (!v && state === STATE.PLAYING) { state = STATE.PAUSED; pausedByVisibility = true; }
+  }
+  function canvasInView() {
+    var r = canvas.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 &&
+      r.top < (window.innerHeight || 1e9) && r.left < (window.innerWidth || 1e9);
+  }
   if ("IntersectionObserver" in window) {
     var io = new IntersectionObserver(function (entries) {
-      running = entries[0].isIntersecting;
+      setRunning(entries[0].isIntersecting || canvasInView());
     }, { threshold: 0.01 });
     io.observe(canvas);
   }
@@ -981,9 +997,10 @@
   }
 
   function playerHit() {
+    if (state !== STATE.PLAYING) return;
     combo = 1; comboT = 0; perfectWave = false;
     spawnParticles(player.x + player.w / 2, player.y + player.h / 2, PAL.phosphor);
-    lives--;
+    lives = Math.max(0, lives - 1);
     updateHudLives();
     debugEvent("player_hit", { livesLeft: lives });
     shake = motionOK ? 0.18 : 0;
@@ -995,10 +1012,11 @@
   function breachVault(iv) {
     var idx = intruders.indexOf(iv);
     if (idx >= 0) intruders.splice(idx, 1);
+    if (state !== STATE.PLAYING) return;
     perfectWave = false;
     vaultBreachT = 0.6;
     vaultBreachHandle = HANDLES[vaultLabelIdx % HANDLES.length];
-    lives--;
+    lives = Math.max(0, lives - 1);
     updateHudLives();
     debugEvent("vault_breach", { handle: vaultBreachHandle, livesLeft: lives });
     shake = motionOK ? 0.2 : 0;
@@ -1369,7 +1387,12 @@
   var acc = 0, last = null;
   function frame(ts) {
     requestAnimationFrame(frame);
-    if (!running) { last = null; return; }
+    if (!running) {
+      last = null;
+      visCheck = (visCheck + 1) % 15;
+      if (visCheck !== 0 || !canvasInView()) return;
+      setRunning(true);
+    }
     if (last == null) last = ts;
     var delta = ts - last;
     last = ts;
