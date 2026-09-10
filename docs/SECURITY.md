@@ -61,8 +61,9 @@ Vault (`broker.UnlockKey`):
    password, unlike a fully hardened Keychain item; any process running as
    the same macOS user that knows the service and account name can read it
    directly with `security find-generic-password -w`. This is a known,
-   current limitation of the v1 unlock model (a cgo-based, ACL'd item is
-   follow-up work), not a hidden one.
+   current limitation of the default unlock model, not a hidden one — an
+   opt-in that removes it exists (`--touch-id`, a special build only,
+   never the default) and is documented in full below.
 3. **Linux, CI, or macOS with `CPASS_UNLOCK=socket`**: a Broker process.
    `cpass unlock` prompts for a master passphrase on a real terminal,
    derives the key with **scrypt** (`N=2^15, r=8, p=1`, a random 16-byte
@@ -81,6 +82,176 @@ Vault (`broker.UnlockKey`):
 4. Windows is untested beyond building; the Broker process is not
    implemented there yet (`broker.StartBroker` returns an explicit "not
    supported" error), so only `CPASS_KEY` works.
+
+## Opting into Touch ID / user-presence Keychain protection (CLA-23)
+
+Everything in point 2 above is what `cpass` does by **default**, in every
+release binary, unaffected by anything on this page: no reader change, no
+new dependency, no new prompt. This section documents a separate, opt-in
+capability — a real user has to ask for it twice (once at build time, once
+per Vault) before anything about their Keychain item changes.
+
+**What it needs, and why it doesn't ship by default.** Requiring Touch ID
+or the device passcode to read a Keychain item is a Security-framework
+capability (`SecAccessControlCreateWithFlags` with
+`kSecAccessControlUserPresence`, applied via `SecItemAdd`) that the
+`security` command-line tool has no flag for — reaching it needs cgo, which
+links the Security framework directly. ADR-0007 and CLAUDE.md commit
+`cpass` to building as a single, portable, `CGO_ENABLED=0` binary for every
+release and every CI run, and that does not change: this capability lives
+entirely behind a `touchid` Go build tag (`internal/broker/touchid_darwin.go`,
+guarded `//go:build darwin && touchid && cgo`) that is never part of an
+ordinary `go build ./cmd/cpass` — only `go build -tags touchid ./cmd/cpass`
+compiles it in, and only on darwin with cgo enabled. Every other build
+configuration — which is every release, and every `go test`/`go vet`/CI
+invocation this repository runs — compiles `touchid_stub.go` instead: a
+few lines with no cgo and no Security-framework dependency at all, so
+nothing about the default build's dependency graph, binary size, or
+startup cost changes. `broker.TouchIDAvailable()` reports which one is
+compiled in.
+
+**Turning it on.** Two commands opt in, both refusing with a clear
+explanation rather than doing something unexpected when Touch ID support
+isn't actually available:
+
+- `cpass init --touch-id` — for a brand-new Vault. If this binary has
+  Touch ID support compiled in, the Keychain item it creates carries the
+  access control from the first paragraph above, and `cpass init` says so.
+  If it doesn't (the common case: an ordinary release binary, or a local
+  `go build` without `-tags touchid`), it still creates a fully working
+  Vault — falling back to the plain, no-ACL item from point 2, exactly as
+  if `--touch-id` had not been given — while printing a clear warning that
+  Touch ID was requested but unavailable and how to get it. A Vault must
+  always be creatable from a single portable binary; a missing optional
+  hardening feature must never be the reason `cpass init` fails outright.
+- `cpass keychain upgrade --touch-id` — for a Vault that already exists.
+  It reads the current key (through the same `broker.UnlockKey()` every
+  other command uses, whatever this Vault's unlock source currently is)
+  and re-stores it under this Vault's existing Keychain identity, this
+  time with the access control. Unlike `init`, it refuses outright
+  (exit code 1, nothing changed) rather than falling back when Touch ID
+  support is unavailable — there is no new Vault to bring into existence
+  here to justify a silent downgrade, only an existing Keychain item to
+  leave alone or deliberately upgrade.
+
+Either way, the item this creates is read back by exactly the same,
+unchanged `security`-CLI-based reader every `cpass` invocation already
+uses (`broker.UnlockKey` → `keychainGet`, keychain_darwin.go) — the code
+path this page has always described. **Nothing about that reader
+changes.** It is the Keychain itself, not `cpass`, that then prompts for
+Touch ID or the device passcode the next time anything reads that item —
+`cpass ls`, `cpass run`, the next `cpass keychain upgrade`, or literally
+`security find-generic-password -w` typed by hand — because the access
+control is a property the OS enforces on the item for any reader, not
+logic `cpass` applies itself.
+
+**The one real deployment requirement this surfaces: code signing.**
+macOS only enforces `kSecAccessControlUserPresence` on an item stored in
+the modern Data Protection Keychain (the default `SecItemAdd` target on
+every supported macOS version) — not on the legacy, file-based keychain,
+which was confirmed, non-interactively, to accept a `SecAccessControl`
+attribute on an item without ever enforcing it (see
+`internal/broker/touchid_darwin_test.go`'s package doc comment for exactly
+how). Creating an *access-controlled* item in the Data Protection
+Keychain, in turn, requires the calling binary to be code-signed with a
+`keychain-access-groups` entitlement matching a real, Apple-issued Team
+ID; a plain, unsigned, or ad hoc-signed binary — which is what a local
+`go build -tags touchid ./cmd/cpass` produces — gets refused outright by
+the OS (`SecItemAdd` returns `errSecMissingEntitlement`, OSStatus
+`-34018`), and `cpass` surfaces that as a specific, actionable error
+naming the requirement rather than a bare OSStatus number. **This is not
+an additional requirement `cpass` invents** — a real release binary
+already needs a Developer ID signature (and, for un-sandboxed
+distribution, notarization) to avoid a Gatekeeper warning on first launch;
+adding a `keychain-access-groups` entitlement to that existing signing
+step is the only extra piece. A minimal entitlements file:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>keychain-access-groups</key>
+    <array>
+        <string>$(AppIdentifierPrefix)com.claudepass.cpass</string>
+    </array>
+</dict>
+</plist>
+```
+
+```sh
+go build -tags touchid -o cpass ./cmd/cpass
+codesign --force --options runtime \
+  --sign "Developer ID Application: <Org> (<TEAMID>)" \
+  --entitlements entitlements.plist \
+  cpass
+```
+
+Until a binary is signed this way, `--touch-id` on either command above
+behaves exactly as if this binary had no Touch ID support compiled in at
+all (`cpass init --touch-id` falls back with a warning; `cpass keychain
+upgrade --touch-id` refuses) — the signing requirement fails closed to the
+existing, unhardened-but-working behaviour, never open to an item that
+looks protected but silently isn't.
+
+**What was verified for CLA-23, and what could not be, here.** This was
+built and checked on a Mac with the full Xcode toolchain installed
+(`xcode-select -p` resolves), so the `touchid`-tagged code was compiled
+and exercised, not just written:
+
+- `go build -tags touchid ./...` succeeds. `go vet -tags touchid
+  ./internal/broker/...` does **not** come back clean: it flags one line,
+  `internal/broker/touchid_darwin.go:47:53: possible misuse of
+  unsafe.Pointer`, on `cfPtr`'s `unsafe.Pointer(uintptr(x))` conversion.
+  That finding is a false positive for this exact pattern, not a bug —
+  see `cfPtr`'s own doc comment in `touchid_darwin.go` for the full
+  argument, in short: cgo represents every Objective-C-bridged CF opaque
+  type this file touches (`CFTypeRef`, `CFStringRef`, `CFDictionaryRef`,
+  `SecAccessControlRef`, and friends) as a plain `uintptr` rather than a
+  Go pointer type, deliberately, so the garbage collector never mistakes
+  a Core Foundation object address for a Go heap pointer; bridging one
+  back to `unsafe.Pointer` to hand it to `CFDictionaryCreate` is the
+  intended, necessary way to call these APIs from cgo, not arithmetic on
+  a Go-managed allocation — the distinction `go vet`'s unsafeptr
+  heuristic cannot make, so it fires on sight regardless. This finding
+  does not gate anything: the project's actual quality bar (`go vet -tags
+  e2e ./...`, `golangci-lint run`) never runs against the `touchid` tag —
+  `.golangci.yml` pins `build-tags` to `e2e` only — so it never reaches
+  CI or a release build; it is called out here, correctly, rather than
+  claimed as a clean pass that does not occur.
+- `internal/broker/touchid_darwin_test.go` (`go test -tags touchid
+  ./internal/broker/ -run TestTouchIDUserPresence -v`) mechanically proves
+  the access-control mechanism itself — see that file's doc comment —
+  entirely non-interactively, using `kSecUseAuthenticationUISkip` to prove
+  enforcement without ever displaying the real prompt.
+- What it could not prove, on this machine, and why: `go test`'s own
+  output binary is unsigned, so even `SecItemAdd` of the access-controlled
+  item is refused by the OS before Touch ID ever enters the picture (see
+  the code-signing paragraph above) — the test detects exactly that
+  condition and skips with an explanation rather than failing or
+  papering over it. Signing a build the way the paragraph above describes
+  requires an Apple Developer Program Team ID and certificate, which this
+  environment does not have and which only a human on the ClaudePass team
+  can provide. Completing the check from there — confirming the real
+  Touch ID / password prompt actually appears on `cpass ls` after `cpass
+  init --touch-id`, and that Cancel leaves the Vault locked — additionally
+  needs a human physically present at that signed build's keyboard, for
+  the same reason no automated test in this repository is allowed to
+  trigger that prompt (see the constraint carried forward from CLA-8).
+- One specific link in the chain was confirmed only by inference, not
+  direct measurement, for the same reason: that `security find-generic-password`
+  (`keychain_darwin.go`'s unchanged reader) correctly locates and decodes
+  an access-controlled item in the Data Protection Keychain specifically.
+  What was measured directly is that it does so for a **plain** item
+  stored there, and that it locates an **access-controlled** item stored
+  in the legacy keychain (metadata only, no `-w`, so no prompt) — creating
+  an access-controlled item in the Data Protection Keychain itself needs
+  the signed binary this environment cannot produce. `security` is an
+  Apple-signed system binary already entitled for ordinary keychain
+  access, and Apple's own documentation describes it operating against
+  the Data Protection Keychain by default on current macOS, so this is
+  expected to hold — the same signed-build manual check above closes this
+  gap too, and is the way to confirm it directly.
 
 ## What the Intercept hook reads and where it writes
 
