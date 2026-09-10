@@ -1,7 +1,13 @@
 // Package policy decides whether a command an Agent wants to run may
 // proceed: it refuses commands that would reveal a Secret rather than use
-// it. The same evaluator serves cpass run, the Claude Code PreToolUse hook,
-// and the MCP server, so behaviour is identical everywhere.
+// it, read a Secret-bearing file directly, or carry a raw Secret-shaped
+// literal. The same evaluator (Evaluate) serves cpass run, the MCP
+// server's run_with_secrets/capture tools, and — via EvaluateHook, which
+// applies Evaluate's rules plus one more before any value exists to bind —
+// the Claude Code PreToolUse hook, so these rules are identical
+// everywhere. The one exception is EvaluateHook's refusal of `cpass add`
+// given an inline value: it has no equivalent in Evaluate, since only the
+// hook inspects a raw Bash command line before cpass has parsed anything.
 package policy
 
 import (
@@ -10,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 
+	"claudepass/internal/detect"
 	"claudepass/internal/vault"
 )
 
@@ -39,6 +46,20 @@ func (r *Refusal) Error() string { return "refused: " + r.Rule + " — " + r.Adv
 
 // Evaluate returns nil when the command may run, or a *Refusal.
 func Evaluate(in Input) error {
+	// Scan every argument but not argv[0] itself: argv[0] is the program
+	// being exec'd, never a value a Handle could stand in for, and real
+	// executable paths (a build artifact under a randomly-named temp
+	// directory, a versioned tool under a hashed store path) routinely
+	// read as high-entropy to the same heuristic that must stay sensitive
+	// enough to catch a literal in an argument.
+	if len(in.Argv) > 1 {
+		if len(detect.Scan(strings.Join(in.Argv[1:], " "))) > 0 {
+			return &Refusal{
+				Rule:   "the command carries a raw Secret-shaped value",
+				Advice: "store it first (`cpass capture`, or paste it so it's Intercepted) and reference it by Handle",
+			}
+		}
+	}
 	ev := &evaluator{bound: map[string]vault.BindingKind{}, tainted: map[string]bool{}, protected: in.ProtectedDirs}
 	for _, v := range in.Bound {
 		ev.bound[v.Name] = v.Kind
@@ -79,6 +100,47 @@ var (
 	assignment  = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)=(.*)$`)
 )
 
+// secretFileGlobs are basename patterns of files that hold Secret values on
+// disk rather than in the Vault. Evaluate (and so cpass run, the MCP
+// server, and — via EvaluateHook — the PreToolUse hook) refuses any
+// command that would read one directly: doing so bypasses the Vault, and
+// the value would land straight in the Agent's Context. Matched with
+// filepath.Match against the basename of each argument, so a path like
+// "$HOME/.env" is still caught.
+var secretFileGlobs = []string{
+	".env*", "*.pem", "id_rsa*", "*.key", "credentials*.json", ".netrc", ".npmrc",
+}
+
+// sourceBuiltins are shell builtins that execute a file's content in the
+// current shell — a second way to pull a Secret-bearing file's content into
+// output or environment besides an ordinary reader program. Only
+// meaningful inside a shell string (simple), since neither is a real
+// argv[0] a subprocess could exec.
+var sourceBuiltins = map[string]bool{"source": true, ".": true}
+
+func matchesSecretFile(arg string) bool {
+	if strings.HasPrefix(arg, "-") {
+		return false
+	}
+	b := filepath.Base(arg)
+	for _, g := range secretFileGlobs {
+		if ok, _ := filepath.Match(g, b); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func secretFileRefusal(prog, arg string) *Refusal {
+	if !matchesSecretFile(arg) {
+		return nil
+	}
+	return &Refusal{
+		Rule:   prog + " would read " + arg + ", a Secret-bearing file",
+		Advice: "use `cpass run` (or the Manifest) instead of reading the file directly",
+	}
+}
+
 func base(s string) string { return filepath.Base(s) }
 
 // argv judges a command given as an argument vector (no shell involved,
@@ -97,6 +159,9 @@ func (ev *evaluator) argv(argv []string, depth int) error {
 		for _, w := range argv[1:] {
 			if ev.underProtected(w) {
 				return &Refusal{Rule: prog + " would print a Secret file", Advice: "pass the path to the tool that needs the file instead"}
+			}
+			if r := secretFileRefusal(prog, w); r != nil {
+				return r
 			}
 		}
 	}
@@ -257,6 +322,15 @@ func (ev *evaluator) simple(words []word, depth int) error {
 			}
 			if ev.underProtected(a.raw) {
 				return &Refusal{Rule: prog + " would print a Secret file", Advice: "pass the path to the tool that needs the file instead"}
+			}
+			if r := secretFileRefusal(prog, a.raw); r != nil {
+				return r
+			}
+		}
+	case sourceBuiltins[prog]:
+		for _, a := range args {
+			if r := secretFileRefusal(prog, a.raw); r != nil {
+				return r
 			}
 		}
 	}
