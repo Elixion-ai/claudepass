@@ -46,7 +46,7 @@ func cmdIntercept(e *env) int {
 	}
 
 	bypass := strings.HasPrefix(in.Prompt, bypassPrefix)
-	matches := detect.Scan(in.Prompt)
+	matches := detect.ScanStrict(in.Prompt)
 	if len(matches) == 0 {
 		return ExitOK
 	}

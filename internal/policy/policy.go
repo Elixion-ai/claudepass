@@ -53,7 +53,7 @@ func Evaluate(in Input) error {
 	// read as high-entropy to the same heuristic that must stay sensitive
 	// enough to catch a literal in an argument.
 	if len(in.Argv) > 1 {
-		if len(detect.Scan(strings.Join(in.Argv[1:], " "))) > 0 {
+		if len(detect.ScanStrict(strings.Join(in.Argv[1:], " "))) > 0 {
 			return &Refusal{
 				Rule:   "the command carries a raw Secret-shaped value",
 				Advice: "store it first (`cpass capture`, or paste it so it's Intercepted) and reference it by Handle",

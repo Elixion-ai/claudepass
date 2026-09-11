@@ -40,7 +40,7 @@ func EvaluateHook(command string) error {
 	// comment), checked here unconditionally — including when command
 	// wraps a `cpass run` invocation, unlike the ordinary rules below —
 	// since no Bound var is needed to judge a literal.
-	if len(detect.Scan(command)) > 0 {
+	if len(detect.ScanStrict(command)) > 0 {
 		return &Refusal{
 			Rule:   "the command carries a raw Secret-shaped value",
 			Advice: "store it first (`cpass capture`, or paste it so it's Intercepted) and reference it by Handle",

@@ -161,16 +161,63 @@ func TestInterceptMultipleHitsInOnePrompt(t *testing.T) {
 	}
 }
 
-func TestInterceptGenericHighEntropyFallsBackToInbox(t *testing.T) {
+// Blocking on generic entropy stops the user's work on every prompt that
+// carries an ordinary high-entropy token (a tool-call id, a UUID, a git
+// SHA, a base64 blob, an automated <task-notification>), so Intercept
+// blocks ONLY on high-confidence provider-key prefixes and PEM blocks. A
+// generic high-entropy value with no known prefix now passes through and is
+// not stored — the honest trade recorded in docs/THREATS.md.
+func TestInterceptGenericHighEntropyPassesThrough(t *testing.T) {
 	ve := newVault(t)
 	prompt := "temp value " + interceptEntropy + " was pasted by mistake, sorry"
 	r := ve.run(hookJSON(prompt), "intercept")
-	if r.code != 2 {
-		t.Fatalf("want exit 2: %s", r)
+	if r.code != 0 {
+		t.Fatalf("generic high-entropy value must pass through, got exit %d: %s", r.code, r)
 	}
-	ls := ve.run(nil, "ls")
-	if !regexp.MustCompile(`inbox/\d{8}-\d{6}`).MatchString(ls.stdout) {
-		t.Fatalf("want an inbox/<timestamp> handle: %s", ls)
+	if ls := ve.run(nil, "ls"); regexp.MustCompile(`inbox/`).MatchString(ls.stdout) {
+		t.Fatalf("nothing should be stored: %s", ls)
+	}
+}
+
+// Regression for the false positive seen in a live weedvader session: an
+// automated <task-notification> whose tool-use id / UUID path hash tripped
+// the entropy heuristic and blocked the prompt.
+func TestInterceptDoesNotBlockAgentEnvelopes(t *testing.T) {
+	ve := newVault(t)
+	cases := map[string]string{
+		"task-notification": `<task-notification><task-id>b1zq8tvq2</task-id>` +
+			`<tool-use-id>toolu_016otzT3s4YhS1rGaRRijw3b</tool-use-id>` +
+			`<output-file>/private/tmp/claude-501/-Users-elix-projects-weedvader/` +
+			`2016568e-289d-45d5-9b92-bf0a21087bc4/tasks/b1zq8tvq2.output</output-file>` +
+			`<status>completed</status></task-notification>`,
+		"tool id":     "the call toolu_016otzT3s4YhS1rGaRRijw3b returned",
+		"uuid":        "run 2016568e-289d-45d5-9b92-bf0a21087bc4 finished",
+		"git sha":     "reverting to commit a7c4221af93f7cf9f9343b2023c648f2fbc0996b now",
+		"base64 blob": "payload eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9aGVsbG8gd29ybGQ",
+		"container":   "docker image sha256:9f2e4c1b8a7d6e5f0c3b2a1908d7e6f5c4b3a29180706f5e4d3c2b1a09876543",
+	}
+	for name, prompt := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := ve.run(hookJSON(prompt), "intercept")
+			if r.code != 0 {
+				t.Fatalf("%s must pass through, got exit %d: %s", name, r.code, r)
+			}
+		})
+	}
+	if ls := ve.run(nil, "ls"); strings.TrimSpace(ls.stdout) != "" {
+		t.Fatalf("no envelope should have stored anything: %s", ls)
+	}
+}
+
+// Known-prefix secrets and PEM blocks still block, even inside an envelope.
+func TestInterceptStillBlocksKnownSecrets(t *testing.T) {
+	ve := newVault(t)
+	r := ve.run(hookJSON("here is the key sk_live_51ABCdefGHIjklMNOpqrSTUvwx00 for prod"), "intercept")
+	if r.code != 2 {
+		t.Fatalf("a real Stripe key must block, got exit %d: %s", r.code, r)
+	}
+	if ls := ve.run(nil, "ls"); !strings.Contains(ls.stdout, "stripe/live") {
+		t.Fatalf("want stripe/live stored: %s", ls)
 	}
 }
 

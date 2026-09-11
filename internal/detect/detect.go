@@ -114,6 +114,31 @@ func Scan(s string) []Match {
 	return out
 }
 
+// ScanStrict finds only high-confidence Secrets: known provider-key
+// prefixes (Stripe, GitHub, AWS, OpenAI, Anthropic, Google, Slack, ...) and
+// PEM private-key blocks. It deliberately OMITS the generic entropy pass.
+//
+// A caller that BLOCKS on a match — the prompt Intercept hook and Command
+// Policy — must not fire on the high-entropy non-secrets that fill ordinary
+// agent traffic: tool-call ids (toolu_...), UUIDs, git object hashes, base64
+// blobs, session tokens in a <task-notification>. Entropy cannot tell those
+// apart from an unprefixed pasted key, and a false block stops the user's
+// work, so blocking paths use ScanStrict. Use Scan (which adds the entropy
+// pass) only where the extra recall is worth its false positives and the
+// result merely advises, never blocks.
+func ScanStrict(s string) []Match {
+	var out []Match
+	for _, pem := range pemRe.FindAllString(s, -1) {
+		out = append(out, Match{Value: pem, Handle: "pem/key", Kind: "PEM private key"})
+	}
+	for _, tok := range tokenRe.FindAllString(s, -1) {
+		if m, ok := matchPrefix(tok); ok {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 // urlPathRanges returns the byte range of every URL's host+path found in
 // s, stopping each range before its query string or fragment (the first
 // "?" or "#"), so a Secret placed there is still visible to the generic

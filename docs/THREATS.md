@@ -176,3 +176,7 @@ value can still end up somewhere it shouldn't, today:
    A full pty allocated by something other than an interactive shell would
    satisfy that check; a Unix process has no stronger signal available to
    it that a human, specifically, is on the other end.
+
+## Intercept precision (v0.1.4)
+
+The prompt Intercept hook and Command Policy block only on high-confidence Secrets: known provider-key prefixes (Stripe, GitHub, AWS, OpenAI, Anthropic, Google, Slack, ...) and PEM private-key blocks. They do NOT block on generic entropy, because ordinary agent traffic is full of high-entropy non-secrets (tool-call ids, UUIDs, git SHAs, base64 blobs, automated task notifications) and a false block stops the user's work. The honest trade: an unprefixed pasted secret is not auto-caught by Intercept; store it with `cpass add`, after which Redaction protects it. `detect.Scan` still offers the entropy heuristic for advisory, non-blocking uses.
