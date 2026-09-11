@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,12 +19,12 @@ func init() {
 
 func cmdImport(e *env) int {
 	fs := flag.NewFlagSet("import", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	prefix := fs.String("prefix", "", "Handle prefix for every imported entry (e.g. myapp/)")
 	keep := fs.Bool("keep", false, "leave the source file in place instead of shredding it")
 	pos, err := parseInterspersed(fs, e.args)
 	if err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass import <path> [--prefix P] [--keep]")
 	}
 	if len(pos) != 1 {
 		return e.fail(ExitUsage, "usage: cpass import <path> [--prefix P] [--keep]")

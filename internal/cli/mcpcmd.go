@@ -2,6 +2,7 @@ package cli
 
 import (
 	"flag"
+	"io"
 
 	"claudepass/internal/mcp"
 )
@@ -12,9 +13,9 @@ func init() {
 
 func cmdMCP(e *env) int {
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	if err := fs.Parse(e.args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass mcp")
 	}
 	if fs.NArg() != 0 {
 		return e.fail(ExitUsage, "usage: cpass mcp")

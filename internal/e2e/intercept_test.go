@@ -155,6 +155,13 @@ func TestInterceptMultipleHitsInOnePrompt(t *testing.T) {
 	if !strings.Contains(r.stderr, "stripe/live") || !strings.Contains(r.stderr, "github/token") {
 		t.Fatalf("stderr should name both handles: %s", r)
 	}
+	// docs/CLI-STYLE.md's Intercept row: multiple items are plain
+	// comma-joined ("<kind> as <handle>, <kind> as <handle>"), not "a and b".
+	want := "cpass: stored Stripe live key as stripe/live, GitHub token as github/token; " +
+		"resubmit using the Handle, or prefix with !! to send anyway\n"
+	if r.stderr != want {
+		t.Fatalf("stderr grammar = %q, want %q", r.stderr, want)
+	}
 	ls := ve.run(nil, "ls")
 	if !strings.Contains(ls.stdout, "stripe/live") || !strings.Contains(ls.stdout, "github/token") {
 		t.Fatalf("vault should gain both handles: %s", ls)

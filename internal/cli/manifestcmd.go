@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -33,9 +34,9 @@ func cmdManifest(e *env) int {
 
 func manifestInit(e *env, args []string) int {
 	fs := flag.NewFlagSet("manifest init", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass manifest init")
 	}
 	p := filepath.Join(".", manifest.FileName)
 	if _, err := os.Stat(p); err == nil {
@@ -51,12 +52,12 @@ func manifestInit(e *env, args []string) int {
 
 func manifestAdd(e *env, args []string) int {
 	fs := flag.NewFlagSet("manifest add", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	binding := fs.String("binding", "", "environment variable name (default derived from the Handle)")
 	file := fs.Bool("file", false, "file Binding: the variable holds a path to a temp file")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass manifest add <handle> [--binding NAME] [--file]")
 	}
 	if len(pos) != 1 {
 		return e.fail(ExitUsage, "usage: cpass manifest add <handle> [--binding NAME] [--file]")
@@ -83,9 +84,9 @@ func manifestAdd(e *env, args []string) int {
 
 func manifestCheck(e *env, args []string) int {
 	fs := flag.NewFlagSet("manifest check", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass manifest check")
 	}
 	m, code := loadManifest(e)
 	if code != ExitOK {
@@ -118,7 +119,7 @@ func reportMissing(e *env, m *manifest.Manifest, missing []string) int {
 		fprintf(e.stdout, "ok: all %d handles in %s are available\n", len(m.Entries), m.Path)
 		return ExitOK
 	}
-	fprintf(e.stderr, "cpass: %d missing handle(s):\n", len(missing))
+	e.notice("%d missing handle(s):", len(missing))
 	for _, h := range missing {
 		fprintf(e.stderr, "  %s\n", h)
 	}

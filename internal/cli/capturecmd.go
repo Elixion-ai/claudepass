@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"io"
 	"strings"
 
 	"claudepass/internal/broker"
@@ -22,7 +23,7 @@ func cmdCapture(e *env) int {
 	head, argv, hasDoubleDash := splitDoubleDash(e.args)
 
 	fs := flag.NewFlagSet("capture", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	var with multiFlag
 	fs.Var(&with, "with", "another Handle to inject into the command, optionally with a Binding override (handle:VAR); repeatable")
 	binding := fs.String("binding", "", "environment variable name for the captured Secret's default Binding")
@@ -30,7 +31,7 @@ func cmdCapture(e *env) int {
 	unsafe := fs.Bool("unsafe-allow", false, "skip Command Policy (humans only; refused without a terminal)")
 	pos, err := parseInterspersed(fs, head)
 	if err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass capture <handle> [--with handle[:VAR]]... [--binding NAME] [--file] [--unsafe-allow] -- <command> [args]")
 	}
 	if !hasDoubleDash || len(pos) != 1 || len(argv) == 0 {
 		return e.fail(ExitUsage, captureUsage)
@@ -58,13 +59,18 @@ func cmdCapture(e *env) int {
 	}
 
 	if *unsafe && !e.humanPresent() {
-		return e.fail(ExitRefused, "--unsafe-allow needs a terminal: only a human may skip Command Policy")
+		return e.refuse("--unsafe-allow needs a terminal", "only a human may skip Command Policy")
 	}
 
 	var stdout bytes.Buffer
 	exitCode, err := run.Run(run.Spec{
 		Refs: refs, Argv: argv, UnsafeAllow: *unsafe, RawStdout: true,
 		Stdin: e.stdin, Stdout: &stdout, Stderr: e.stderr, Warn: e.stderr,
+		// Stdout is captured raw (RawStdout above) into the new Secret's
+		// value, never shown to anyone, so it needs no marker colour;
+		// stderr is still a real destination a human may be watching.
+		DecorateStderrMarker: markerDecorator(e.errMode),
+		FormatExposed:        e.exposed,
 	})
 	if err != nil {
 		if errors.Is(err, run.ErrNoCommand) {
@@ -72,7 +78,7 @@ func cmdCapture(e *env) int {
 		}
 		var ref *policy.Refusal
 		if errors.As(err, &ref) {
-			return e.fail(ExitRefused, "%v", err)
+			return e.refuse(ref.Rule, ref.Advice)
 		}
 		return e.failErr(err)
 	}

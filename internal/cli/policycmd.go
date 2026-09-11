@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"io"
 	"strings"
@@ -27,10 +28,10 @@ type preToolUseInput struct {
 
 func cmdPolicy(e *env) int {
 	fs := flag.NewFlagSet("policy", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	hook := fs.Bool("hook", false, "read a Claude Code PreToolUse Bash event from stdin and apply Command Policy")
 	if _, err := parseInterspersed(fs, e.args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass policy --hook")
 	}
 	if !*hook {
 		return e.fail(ExitUsage, "usage: cpass policy --hook")
@@ -56,8 +57,23 @@ func cmdPolicy(e *env) int {
 
 	if err := policy.EvaluateHook(in.ToolInput.Command); err != nil {
 		// Claude Code's PreToolUse hook protocol: exit 2 blocks the tool
-		// call and shows this stderr text to the human.
-		fprintf(e.stderr, "cpass: %v\n", err)
+		// call and shows this stderr text to the human — refuse always
+		// returns ExitRefused (3), which the hook protocol does not use,
+		// so this renders the same "cpass: refused: …" grammar via
+		// refusalText directly and returns ExitUsage (2) itself.
+		var ref *policy.Refusal
+		if errors.As(err, &ref) {
+			// Always plain: this text is Claude Code's PreToolUse block
+			// message, re-displayed to the human by the hook harness, not
+			// printed to a terminal cpass itself controls — it must never
+			// carry escapes, regardless of whether this process's stderr
+			// fd happens to report as a TTY (e.g. a supervisor that gives
+			// the hook subprocess a pty, or a developer piping a hook
+			// payload by hand in an interactive shell).
+			fprintln(e.stderr, refusalTextForMode(colorNone, ref.Rule, ref.Advice))
+		} else {
+			e.notice("%v", err)
+		}
 		return ExitUsage
 	}
 	return ExitOK

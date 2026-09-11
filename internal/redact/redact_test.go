@@ -297,6 +297,147 @@ func TestThroughputMeetsBar(t *testing.T) {
 	}
 }
 
+// --- WithMarkerDecorator ---
+//
+// These tests cover the option itself directly, independent of any
+// specific caller (internal/cli/ansi.go's markerDecorator colours the
+// marker red for a TTY; internal/mcp never sets the option at all). See
+// ansi_test.go (package cli) for the colouring behaviour that consumes
+// this option, and internal/e2e/mcp_test.go for the end-to-end proof that
+// the MCP stdio surface never applies it.
+
+// TestNoDecoratorOptionLeavesMarkerUnchanged covers WithMarkerDecorator (a):
+// with no option at all, the marker bytes written are Marker(handle),
+// byte-for-byte — today's behaviour, unchanged.
+func TestNoDecoratorOptionLeavesMarkerUnchanged(t *testing.T) {
+	out, _ := collect(t, Variants("stripe/live", val), "token="+val+" ok\n")
+	want := "token=" + string(Marker("stripe/live")) + " ok\n"
+	if out != want {
+		t.Fatalf("got %q, want %q", out, want)
+	}
+}
+
+// TestNilDecoratorLeavesMarkerUnchanged covers WithMarkerDecorator (a) for
+// the other "no decoration" spelling: WithMarkerDecorator(nil) — exactly
+// what internal/cli/ansi.go's markerDecorator returns for colorNone — must
+// behave identically to the option being omitted entirely.
+func TestNilDecoratorLeavesMarkerUnchanged(t *testing.T) {
+	var out bytes.Buffer
+	w := NewWriter(&out, "stdout", Variants("stripe/live", val), nil, WithMarkerDecorator(nil))
+	if _, err := w.Write([]byte("token=" + val + " ok\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	want := "token=" + string(Marker("stripe/live")) + " ok\n"
+	if out.String() != want {
+		t.Fatalf("got %q, want %q", out.String(), want)
+	}
+}
+
+// TestDecoratorReplacesEachMatchExactlyOnce covers WithMarkerDecorator (b):
+// the decorated bytes it returns replace Marker(handle) exactly once per
+// match, and the decorator always receives the plain marker (never an
+// already-decorated one) and the matched Pattern's Handle.
+func TestDecoratorReplacesEachMatchExactlyOnce(t *testing.T) {
+	pats := Variants("stripe/live", val)
+	var calls int
+	var handles []string
+	var markers []string
+	decorate := func(handle string, marker []byte) []byte {
+		calls++
+		handles = append(handles, handle)
+		markers = append(markers, string(marker))
+		return []byte("<<" + string(marker) + ">>")
+	}
+	var out bytes.Buffer
+	w := NewWriter(&out, "stdout", pats, nil, WithMarkerDecorator(decorate))
+	if _, err := w.Write([]byte("a=" + val + " b=" + val + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("decorator called %d times, want 2 (one per match)", calls)
+	}
+	for i, h := range handles {
+		if h != "stripe/live" {
+			t.Fatalf("call %d: decorator handle = %q, want stripe/live", i, h)
+		}
+	}
+	plainMarker := string(Marker("stripe/live"))
+	for i, m := range markers {
+		if m != plainMarker {
+			t.Fatalf("call %d: decorator received %q, want the plain marker %q", i, m, plainMarker)
+		}
+	}
+	want := "a=<<" + plainMarker + ">> b=<<" + plainMarker + ">>\n"
+	if out.String() != want {
+		t.Fatalf("got %q, want %q", out.String(), want)
+	}
+}
+
+// TestDecoratorAppliesToMatchSplitAcrossWrites covers WithMarkerDecorator
+// (b)'s "including a match split across two Write calls" case: the
+// decorator must still be invoked exactly once for a match that only
+// completes once bytes from a second Write are appended to the first
+// Write's held suffix.
+func TestDecoratorAppliesToMatchSplitAcrossWrites(t *testing.T) {
+	pats := Variants("h", val)
+	var calls int
+	decorate := func(handle string, marker []byte) []byte {
+		calls++
+		return []byte("[[" + handle + "]]")
+	}
+	var out bytes.Buffer
+	w := NewWriter(&out, "stdout", pats, nil, WithMarkerDecorator(decorate))
+	cut := len(val) / 2
+	if _, err := w.Write([]byte("x" + val[:cut])); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(val[cut:] + "y")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("decorator called %d times across the split write, want exactly 1", calls)
+	}
+	if out.String() != "x[[h]]y" {
+		t.Fatalf("got %q", out.String())
+	}
+}
+
+// TestDecoratorNeverCalledForNonMatchingOutput covers WithMarkerDecorator
+// (c): ordinary output that never matches a Pattern must never invoke the
+// decorator at all.
+func TestDecoratorNeverCalledForNonMatchingOutput(t *testing.T) {
+	pats := Variants("h", val)
+	called := false
+	decorate := func(handle string, marker []byte) []byte {
+		called = true
+		return marker
+	}
+	var out bytes.Buffer
+	w := NewWriter(&out, "stdout", pats, nil, WithMarkerDecorator(decorate))
+	const plain = "nothing secret here, just ordinary output\n"
+	if _, err := w.Write([]byte(plain)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("decorator must not be called when nothing matches")
+	}
+	if out.String() != plain {
+		t.Fatalf("got %q, want %q", out.String(), plain)
+	}
+}
+
 type discard struct{}
 
 func (discard) Write(p []byte) (int, error) { return len(p), nil }

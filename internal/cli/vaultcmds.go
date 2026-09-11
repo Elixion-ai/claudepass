@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"strings"
 
 	"claudepass/internal/broker"
@@ -23,7 +24,8 @@ func openVault(e *env) (*vault.Vault, int) {
 	v, err := broker.OpenVault()
 	if err != nil {
 		if errors.Is(err, broker.ErrLocked) {
-			return nil, e.fail(ExitError, "%v", err)
+			fprintln(e.stderr, e.locked())
+			return nil, ExitError
 		}
 		return nil, e.fail(ExitError, "%v", err)
 	}
@@ -43,26 +45,26 @@ func storeKeychainKey(e *env, key []byte, touchID bool) error {
 		if err := broker.SetKeychainKeyUserPresence(key); err != nil {
 			return err
 		}
-		fprintf(e.stderr, "cpass: stored the Vault key in the macOS Keychain (service %q), requiring Touch ID or the device passcode to read it\n", broker.KeychainService())
+		e.notice("stored the Vault key in the macOS Keychain (service %q), requiring Touch ID or the device passcode to read it", broker.KeychainService())
 		return nil
 	}
 	if touchID {
-		fprintln(e.stderr, "cpass: --touch-id needs a cpass binary built with -tags touchid on macOS with cgo enabled (CGO_ENABLED=1); storing the key without Touch ID for now — see docs/SECURITY.md, or run `cpass keychain upgrade --touch-id` after rebuilding")
+		e.notice("--touch-id needs a cpass binary built with -tags touchid on macOS with cgo enabled (CGO_ENABLED=1); storing the key without Touch ID for now — see docs/SECURITY.md, or run `cpass keychain upgrade --touch-id` after rebuilding")
 	}
 	if err := broker.SetKeychainKey(key); err != nil {
 		return err
 	}
-	fprintf(e.stderr, "cpass: stored the Vault key in the macOS Keychain (service %q)\n", broker.KeychainService())
+	e.notice("stored the Vault key in the macOS Keychain (service %q)", broker.KeychainService())
 	return nil
 }
 
 func cmdInit(e *env) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	touchID := fs.Bool("touch-id", false,
 		"require Touch ID or the device passcode to read the Vault key from the macOS Keychain (needs a cpass binary built with -tags touchid)")
 	if err := fs.Parse(e.args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass init [--touch-id]")
 	}
 	path, err := broker.VaultPath()
 	if err != nil {
@@ -85,7 +87,7 @@ func cmdInit(e *env) int {
 			}
 		default:
 			if *touchID {
-				fprintln(e.stderr, "cpass: --touch-id only applies to the macOS Keychain unlock source; ignoring it")
+				e.notice("--touch-id only applies to the macOS Keychain unlock source; ignoring it")
 			}
 			passphrase, err := e.readSecret("master passphrase: ",
 				"cpass init needs a terminal to type a master passphrase into, or set CPASS_KEY for CI")
@@ -99,7 +101,7 @@ func cmdInit(e *env) int {
 			if err != nil {
 				return e.failErr(err)
 			}
-			fprintln(e.stderr, "cpass: run `cpass unlock` before using the Vault from an Agent session")
+			e.notice("run `cpass unlock` before using the Vault from an Agent session")
 		}
 	} else if err != nil {
 		return e.failErr(err)
@@ -113,13 +115,13 @@ func cmdInit(e *env) int {
 
 func cmdAdd(e *env) int {
 	fs := flag.NewFlagSet("add", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	binding := fs.String("binding", "", "environment variable name (default derived from the Handle)")
 	file := fs.Bool("file", false, "bind as a temp file whose path is placed in the variable")
 	exposed := fs.Bool("exposed", false, "the value has already been seen by an Agent; store it flagged for rotation")
 	pos, err := parseInterspersed(fs, e.args)
 	if err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass add <handle> [--binding NAME] [--file] [--exposed]")
 	}
 	if len(pos) != 1 {
 		return e.fail(ExitUsage, "usage: cpass add <handle> [--binding NAME] [--file] [--exposed]")
@@ -155,17 +157,24 @@ func cmdAdd(e *env) int {
 	if err := v.Save(); err != nil {
 		return e.failErr(err)
 	}
-	fprintf(e.stdout, "stored %s (%s %s)\n", entry.Handle, entry.Binding.Kind, entry.Binding.Name)
+	// docs/CLI-STYLE.md "Stored a Secret (cpass add)": ember Handle, dim
+	// Binding detail, coloured by outMode since this confirmation is
+	// written to stdout — never errMode, which belongs to stderr
+	// diagnostics (refuse/notice/exposed/locked). Plain-mode bytes are
+	// unchanged from before colour existed here.
+	fprintf(e.stdout, "stored %s %s\n",
+		e.paintOut(roleEmber, entry.Handle),
+		e.paintOut(roleDim, fmt.Sprintf("(%s %s)", entry.Binding.Kind, entry.Binding.Name)))
 	return ExitOK
 }
 
 func cmdLs(e *env) int {
 	fs := flag.NewFlagSet("ls", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	long := fs.Bool("l", false, "show Binding and Exposed state")
 	onlyExposed := fs.Bool("exposed", false, "only Exposed Secrets")
 	if err := fs.Parse(e.args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass ls [prefix] [-l] [--exposed]")
 	}
 	prefix := ""
 	if fs.NArg() > 0 {
@@ -194,9 +203,9 @@ func cmdLs(e *env) int {
 
 func cmdRm(e *env) int {
 	fs := flag.NewFlagSet("rm", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	if err := fs.Parse(e.args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass rm <handle>...")
 	}
 	if fs.NArg() < 1 {
 		return e.fail(ExitUsage, "usage: cpass rm <handle>...")
@@ -219,9 +228,9 @@ func cmdRm(e *env) int {
 
 func cmdMv(e *env) int {
 	fs := flag.NewFlagSet("mv", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	if err := fs.Parse(e.args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass mv <from> <to>")
 	}
 	if fs.NArg() != 2 {
 		return e.fail(ExitUsage, "usage: cpass mv <from> <to>")

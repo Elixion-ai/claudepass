@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"flag"
+	"io"
 	"runtime"
 
 	"claudepass/internal/broker"
@@ -36,11 +37,11 @@ func cmdKeychain(e *env) int {
 // than silently doing nothing while claiming success.
 func cmdKeychainUpgrade(e *env) int {
 	fs := flag.NewFlagSet("keychain upgrade", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	touchID := fs.Bool("touch-id", false,
 		"require Touch ID or the device passcode to read the Vault key from the macOS Keychain")
 	if err := fs.Parse(e.args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass keychain upgrade --touch-id")
 	}
 	if !*touchID {
 		return e.fail(ExitUsage, "usage: cpass keychain upgrade --touch-id")
@@ -54,7 +55,8 @@ func cmdKeychainUpgrade(e *env) int {
 	key, err := broker.UnlockKey()
 	if err != nil {
 		if errors.Is(err, broker.ErrLocked) {
-			return e.fail(ExitError, "%v", err)
+			fprintln(e.stderr, e.locked())
+			return ExitError
 		}
 		return e.failErr(err)
 	}

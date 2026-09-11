@@ -2,6 +2,7 @@ package cli
 
 import (
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -63,10 +64,10 @@ func targetNames() []string {
 // preserving everything else in it. Idempotent.
 func integrateCodex(e *env, args []string) int {
 	fs := flag.NewFlagSet("integrate codex", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	path := fs.String("path", "AGENTS.md", "path to the Codex instructions file")
 	if err := fs.Parse(args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass integrate codex [--path FILE]")
 	}
 	if fs.NArg() != 0 {
 		return e.fail(ExitUsage, "usage: cpass integrate codex [--path FILE]")

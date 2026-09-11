@@ -2,6 +2,7 @@ package cli
 
 import (
 	"flag"
+	"io"
 
 	"claudepass/internal/integrate"
 )
@@ -19,9 +20,9 @@ func init() {
 // is meant to be pasted.
 func integrateMCP(e *env, args []string) int {
 	fs := flag.NewFlagSet("integrate mcp", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass integrate mcp")
 	}
 	if fs.NArg() != 0 {
 		return e.fail(ExitUsage, "usage: cpass integrate mcp")

@@ -38,6 +38,24 @@ type Spec struct {
 	// redact it from and redacting it would corrupt the captured value.
 	// Stderr is still redacted and Command Policy still applies.
 	RawStdout bool
+	// DecorateStdoutMarker and DecorateStderrMarker, when set, wrap each
+	// [REDACTED:...] marker written to the corresponding stream — the CLI
+	// sets these to colour the marker red when that specific stream is a
+	// TTY with colour on (docs/CLI-STYLE.md's Colour section), never
+	// otherwise. Left nil, the marker is exactly Marker(handle), unchanged.
+	DecorateStdoutMarker func(handle string, marker []byte) []byte
+	DecorateStderrMarker func(handle string, marker []byte) []byte
+	// FormatExposed, when set, renders the Exposed-reminder line for one
+	// Secret (docs/CLI-STYLE.md: "cpass: <handle> is Exposed since <date>,
+	// rotate it") — the CLI sets this to internal/cli's own env.exposed so
+	// the reminder is coloured through Warn's stream the same way every
+	// other diagnostic in internal/cli/cli.go is (ember handle, red
+	// "Exposed", dim date), instead of Run hand-rolling a second, always-
+	// plain copy of that grammar. Left nil (as internal/mcp's callers leave
+	// it, since an MCP client is never a human terminal), the reminder is
+	// the same plain "cpass: <handle> is Exposed since <date>, rotate it"
+	// wording, unchanged.
+	FormatExposed func(handle, since string) string
 }
 
 // ErrNoCommand is returned when Argv is empty.
@@ -91,10 +109,14 @@ func Run(spec Spec) (int, error) {
 			if !s.ExposedAt.IsZero() {
 				since = s.ExposedAt.Format("2006-01-02")
 			}
+			line := fmt.Sprintf("cpass: %s is Exposed since %s, rotate it", s.Handle, since)
+			if spec.FormatExposed != nil {
+				line = spec.FormatExposed(s.Handle, since)
+			}
 			// Best-effort, like every other human-facing notice cpass prints: a
 			// broken Warn stream isn't actionable here and the run proceeds
 			// either way.
-			_, _ = fmt.Fprintf(spec.Warn, "cpass: %s is Exposed since %s, rotate it\n", s.Handle, since)
+			_, _ = fmt.Fprintln(spec.Warn, line)
 		}
 	}
 	logPath := ""
@@ -106,9 +128,11 @@ func Run(spec Spec) (int, error) {
 	if spec.RawStdout {
 		stdout = nopWriteCloser{spec.Stdout}
 	} else {
-		stdout = redact.NewWriter(spec.Stdout, "stdout", patterns, rlog.Record)
+		stdout = redact.NewWriter(spec.Stdout, "stdout", patterns, rlog.Record,
+			redact.WithMarkerDecorator(spec.DecorateStdoutMarker))
 	}
-	stderr := redact.NewWriter(spec.Stderr, "stderr", patterns, rlog.Record)
+	stderr := redact.NewWriter(spec.Stderr, "stderr", patterns, rlog.Record,
+		redact.WithMarkerDecorator(spec.DecorateStderrMarker))
 
 	cmd := exec.Command(spec.Argv[0], spec.Argv[1:]...)
 	cmd.Env = env

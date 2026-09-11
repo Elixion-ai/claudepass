@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"flag"
+	"io"
 	"strings"
 
 	"claudepass/internal/broker"
@@ -22,12 +23,12 @@ func (m *multiFlag) Set(s string) error { *m = append(*m, s); return nil }
 
 func cmdRun(e *env) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	var with multiFlag
 	fs.Var(&with, "with", "Handle to inject, optionally with a Binding override (handle:VAR); repeatable")
 	unsafe := fs.Bool("unsafe-allow", false, "skip Command Policy (humans only; refused without a terminal)")
 	if err := fs.Parse(e.args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass run [--with handle[:VAR]]... [--unsafe-allow] -- <command> [args]")
 	}
 	argv := fs.Args()
 	if len(argv) == 0 {
@@ -63,11 +64,14 @@ func cmdRun(e *env) int {
 	}
 
 	if *unsafe && !e.humanPresent() {
-		return e.fail(ExitRefused, "--unsafe-allow needs a terminal: only a human may skip Command Policy")
+		return e.refuse("--unsafe-allow needs a terminal", "only a human may skip Command Policy")
 	}
 	code, err := run.Run(run.Spec{
 		Refs: refs, Argv: argv, UnsafeAllow: *unsafe,
 		Stdin: e.stdin, Stdout: e.stdout, Stderr: e.stderr, Warn: e.stderr,
+		DecorateStdoutMarker: markerDecorator(e.outMode),
+		DecorateStderrMarker: markerDecorator(e.errMode),
+		FormatExposed:        e.exposed,
 	})
 	if err != nil {
 		if errors.Is(err, run.ErrNoCommand) {
@@ -75,7 +79,7 @@ func cmdRun(e *env) int {
 		}
 		var ref *policy.Refusal
 		if errors.As(err, &ref) {
-			return e.fail(ExitRefused, "%v", err)
+			return e.refuse(ref.Rule, ref.Advice)
 		}
 		return e.fail(code, "%v", err)
 	}

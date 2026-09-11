@@ -2,6 +2,7 @@ package cli
 
 import (
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -35,10 +36,10 @@ func defaultClaudeSkillsDir() string {
 // ~/.claude/skills directory.
 func integrateClaude(e *env, args []string) int {
 	fs := flag.NewFlagSet("integrate claude", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	dir := fs.String("path", defaultClaudeSkillsDir(), "Claude Code skills directory to install into")
 	if err := fs.Parse(args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass integrate claude [--path DIR]")
 	}
 	if fs.NArg() != 0 {
 		return e.fail(ExitUsage, "usage: cpass integrate claude [--path DIR]")

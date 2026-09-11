@@ -30,6 +30,7 @@ type Writer struct {
 	patterns []Pattern
 	ac       *automaton // nil when patterns is empty
 	onEvent  func(Event)
+	decorate func(handle string, marker []byte) []byte // nil: marker unchanged
 
 	mu       sync.Mutex
 	held     []byte // suffix that may still complete a Pattern
@@ -38,6 +39,21 @@ type Writer struct {
 	matchBuf []acMatch // scratch, reused across scan calls
 	closed   bool
 	writeErr error
+}
+
+// Option configures a Writer beyond NewWriter's required parameters.
+type Option func(*Writer)
+
+// WithMarkerDecorator wraps every marker's bytes (Marker's own output,
+// never the matched Secret) before scan writes it to dst — the boundary
+// where the replacement is chosen, not the matcher. It exists so a caller
+// that knows its destination is a terminal can colour the [REDACTED:...]
+// marker (see internal/cli/ansi.go and docs/CLI-STYLE.md's Colour section)
+// without the matching logic itself knowing anything about colour. With no
+// option, or a nil decorate func, the bytes written are Marker(handle)
+// unchanged — today's behaviour.
+func WithMarkerDecorator(decorate func(handle string, marker []byte) []byte) Option {
+	return func(w *Writer) { w.decorate = decorate }
 }
 
 // Idle periods after which a held partial match is released unmatched. A
@@ -51,10 +67,13 @@ const (
 )
 
 // NewWriter wraps dst. stream names it in events ("stdout"/"stderr").
-func NewWriter(dst io.Writer, stream string, patterns []Pattern, onEvent func(Event)) *Writer {
+func NewWriter(dst io.Writer, stream string, patterns []Pattern, onEvent func(Event), opts ...Option) *Writer {
 	w := &Writer{dst: dst, stream: stream, patterns: patterns, onEvent: onEvent}
 	if len(patterns) > 0 {
 		w.ac = buildAutomaton(patterns)
+	}
+	for _, opt := range opts {
+		opt(w)
 	}
 	return w
 }
@@ -137,7 +156,11 @@ func (w *Writer) scan(buf []byte) (out, rest []byte) {
 		}
 		res.Write(buf[cursor:m.start])
 		pat := w.patterns[m.pidx]
-		res.Write(Marker(pat.Handle))
+		marker := Marker(pat.Handle)
+		if w.decorate != nil {
+			marker = w.decorate(pat.Handle, marker)
+		}
+		res.Write(marker)
 		if w.onEvent != nil {
 			w.onEvent(Event{Handle: pat.Handle, Encoding: pat.Encoding, Stream: w.stream})
 		}

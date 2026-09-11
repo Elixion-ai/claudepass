@@ -20,10 +20,10 @@ func init() {
 
 func cmdUnlock(e *env) int {
 	fs := flag.NewFlagSet("unlock", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	timeout := fs.Duration("timeout", broker.DefaultIdleTimeout, "idle timeout before the Broker drops the key")
 	if err := fs.Parse(e.args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass unlock [--timeout DURATION]")
 	}
 	if broker.UseKeychain() {
 		return e.fail(ExitError, "this Vault unlocks via the macOS Keychain automatically; there is no Broker to start (set CPASS_UNLOCK=socket to use one anyway)")
@@ -53,9 +53,9 @@ func cmdUnlock(e *env) int {
 
 func cmdLock(e *env) int {
 	fs := flag.NewFlagSet("lock", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	if err := fs.Parse(e.args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass lock")
 	}
 	if broker.UseKeychain() {
 		return e.fail(ExitError, "this Vault unlocks via the macOS Keychain automatically; there is no Broker to stop (set CPASS_UNLOCK=socket to use one anyway)")
@@ -73,11 +73,11 @@ func cmdLock(e *env) int {
 // process listing.
 func cmdBrokerServe(e *env) int {
 	fs := flag.NewFlagSet("broker-serve", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	socketPath := fs.String("socket", "", "unix socket path to listen on")
 	timeout := fs.Duration("timeout", broker.DefaultIdleTimeout, "idle timeout before exiting")
 	if err := fs.Parse(e.args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass broker-serve -socket PATH [--timeout DURATION]")
 	}
 	if *socketPath == "" {
 		return e.fail(ExitUsage, "broker-serve requires -socket")

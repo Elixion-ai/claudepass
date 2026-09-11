@@ -2,6 +2,7 @@ package cli
 
 import (
 	"flag"
+	"io"
 	"time"
 )
 
@@ -13,9 +14,9 @@ func init() {
 
 func cmdExposed(e *env) int {
 	fs := flag.NewFlagSet("exposed", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	if err := fs.Parse(e.args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass exposed")
 	}
 	v, code := openVault(e)
 	if code != ExitOK {
@@ -43,9 +44,9 @@ func cmdExposed(e *env) int {
 
 func cmdRotateDone(e *env) int {
 	fs := flag.NewFlagSet("rotate-done", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	if err := fs.Parse(e.args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass rotate-done <handle>")
 	}
 	if fs.NArg() != 1 {
 		return e.fail(ExitUsage, "usage: cpass rotate-done <handle>")
@@ -67,11 +68,11 @@ func cmdRotateDone(e *env) int {
 
 func cmdMarkExposed(e *env) int {
 	fs := flag.NewFlagSet("mark-exposed", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	reason := fs.String("reason", "manual", "why the Secret is considered Exposed")
 	pos, err := parseInterspersed(fs, e.args)
 	if err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass mark-exposed <handle> [--reason REASON]")
 	}
 	if len(pos) != 1 {
 		return e.fail(ExitUsage, "usage: cpass mark-exposed <handle> [--reason REASON]")

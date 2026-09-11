@@ -27,6 +27,13 @@ type env struct {
 	stdin  io.Reader
 	stdout io.Writer
 	stderr io.Writer
+
+	// outMode and errMode are this env's colour mode for stdout and
+	// stderr respectively, decided once (see ansi.go) when the env is
+	// built: never re-detected mid-command, and never applied to a
+	// stream other than the one it was decided for.
+	outMode colorMode
+	errMode colorMode
 }
 
 type command struct {
@@ -51,7 +58,10 @@ func fprint(w io.Writer, a ...any)                 { _, _ = fmt.Fprint(w, a...) 
 
 // Main runs cpass with the given arguments and returns the exit code.
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	e := &env{args: args, stdin: stdin, stdout: stdout, stderr: stderr}
+	e := &env{
+		args: args, stdin: stdin, stdout: stdout, stderr: stderr,
+		outMode: streamColorMode(stdout), errMode: streamColorMode(stderr),
+	}
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		usage(stdout)
 		return ExitOK
@@ -62,7 +72,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	c, ok := commands[args[0]]
 	if !ok {
-		fprintf(stderr, "cpass: unknown command %q\n", args[0])
+		e.notice("unknown command %q", args[0])
 		usage(stderr)
 		return ExitUsage
 	}
@@ -119,6 +129,111 @@ func (e *env) failErr(err error) int {
 }
 
 var errLocked = errors.New("locked")
+
+// usageErr turns a flag.FlagSet parse failure — an unknown or malformed
+// flag, or a bare -h/--help — into the same "cpass: ..." diagnostic every
+// other error uses, so a subcommand's own flag handling can never fall
+// through to the flag package's raw, unprefixed, mixed-case, multi-line
+// output (docs/CLI-STYLE.md Voice: every diagnostic is "cpass: <message>",
+// one line). Every FlagSet passed through this path is built with
+// fs.SetOutput(io.Discard) for exactly this reason — flag never gets to
+// write anything itself, on a parse error or on -h/--help alike — and each
+// call site passes the same one-line "cpass <command> ..." synopsis it
+// already shows for a bad positional-argument count, so there is exactly
+// one string to keep in sync per command. -h/--help (flag.ErrHelp) prints
+// that synopsis to stdout and exits 0, mirroring Main's own top-level
+// `cpass help`/`-h` handling; any other parse error keeps flag's own
+// message — already lowercase and terse — appends the usage synopsis, and
+// gets the "cpass: " prefix via fail, exiting ExitUsage like any other
+// usage error.
+func (e *env) usageErr(err error, usage string) int {
+	if errors.Is(err, flag.ErrHelp) {
+		fprintln(e.stdout, "usage: "+usage)
+		return ExitOK
+	}
+	return e.fail(ExitUsage, "%v; usage: %s", err, usage)
+}
+
+// paintErr and paintOut colour s for role using this env's stderr/stdout
+// colour mode respectively — the single point every helper below routes
+// through, so ansi.go's detection is the only place that decides whether
+// any escape byte is ever written.
+func (e *env) paintErr(role brandRole, s string) string { return e.errMode.paint(role, s) }
+func (e *env) paintOut(role brandRole, s string) string { return e.outMode.paint(role, s) }
+
+// notice writes a plain "cpass: <message>" diagnostic to stderr — the
+// fallback for any hand-written diagnostic that doesn't match one of the
+// specific grammars below (docs/CLI-STYLE.md "Message grammar"). It never
+// applies colour: a plain notice carries no brand role of its own.
+func (e *env) notice(format string, a ...any) {
+	fprintln(e.stderr, "cpass: "+fmt.Sprintf(format, a...))
+}
+
+// refusalTextForMode renders docs/CLI-STYLE.md's refusal grammar — "cpass:
+// refused: <what> — <do instead>" — colouring the whole line red (the role
+// docs/CLI-STYLE.md's Colour section assigns to refusals) under an
+// explicitly given colour mode, rather than a stream's TTY-derived one.
+// `cpass policy --hook` and `cpass intercept` (see interceptcmd.go's use of
+// storedTextForMode) are consumed by Claude Code's hook machinery, never
+// shown on a raw fd a human is necessarily watching as a terminal, and the
+// hook protocol re-displays this exact text to the human itself — so those
+// call sites must always pass colorNone here regardless of what the hook
+// subprocess's own stderr happens to be (a pty, a supervisor-attached
+// terminal, ...), independent of the env's errMode.
+func refusalTextForMode(mode colorMode, what, insteadDo string) string {
+	return mode.paint(roleRed, "cpass: refused: "+what+" — "+insteadDo)
+}
+
+// refusalText is refusalTextForMode using this env's stream-derived
+// errMode — the common case for every refusal a human's own terminal may
+// show directly. refuse uses it for the common case; `cpass policy --hook`
+// calls refusalTextForMode(colorNone, ...) directly instead (see above).
+func (e *env) refusalText(what, insteadDo string) string {
+	return refusalTextForMode(e.errMode, what, insteadDo)
+}
+
+// refuse writes a Command Policy refusal in the one grammar every refusal
+// must use and returns ExitRefused, so a call site never has to spell the
+// shape (or the exit code) out itself.
+func (e *env) refuse(what, insteadDo string) int {
+	fprintln(e.stderr, e.refusalText(what, insteadDo))
+	return ExitRefused
+}
+
+// storedTextForMode renders one "<kind> as <handle>" fragment of
+// docs/CLI-STYLE.md's "cpass: stored <kind> as <handle>; …" row: the Handle
+// ember (the role the Colour section assigns to a Handle everywhere it
+// appears) and kind dim grey (secondary detail next to it), under an
+// explicitly given colour mode rather than a stream's TTY-derived one.
+// cmdIntercept (interceptcmd.go) — Claude Code's UserPromptSubmit hook,
+// which re-displays this text to the human itself — always passes
+// colorNone here, the same reasoning as refusalTextForMode above.
+func storedTextForMode(mode colorMode, kind, handle string) string {
+	return mode.paint(roleDim, kind) + " as " + mode.paint(roleEmber, handle)
+}
+
+// stored is storedTextForMode using this env's stream-derived errMode.
+// Callers with more than one fragment join them with a plain comma
+// (docs/CLI-STYLE.md's Intercept row: "<kind> as <handle>[, <kind> as
+// <handle>…]") before wrapping the result in a notice.
+func (e *env) stored(kind, handle string) string {
+	return storedTextForMode(e.errMode, kind, handle)
+}
+
+// exposed renders docs/CLI-STYLE.md's Exposed-reminder line: "cpass:
+// <handle> is Exposed since <date>, rotate it" — the Handle ember, the
+// Exposed state red, and the date dim grey (secondary detail), matching
+// the Colour section's role for each.
+func (e *env) exposed(handle, since string) string {
+	return "cpass: " + e.paintErr(roleEmber, handle) + " is " + e.paintErr(roleRed, "Exposed") +
+		" since " + e.paintErr(roleDim, since) + ", rotate it"
+}
+
+// locked renders docs/CLI-STYLE.md's locked-Vault line, colouring the
+// suggested command cyan — the role the Colour section assigns to hints.
+func (e *env) locked() string {
+	return "cpass: vault is locked, run " + e.paintErr(roleCyan, "cpass unlock")
+}
 
 func isTerminal(r io.Reader) bool {
 	f, ok := r.(*os.File)

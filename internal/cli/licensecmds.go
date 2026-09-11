@@ -3,6 +3,7 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"io"
 	"time"
 
 	"claudepass/internal/broker"
@@ -32,9 +33,9 @@ func cmdLicense(e *env) int {
 
 func licenseActivate(e *env, args []string) int {
 	fs := flag.NewFlagSet("license activate", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass license activate <token>")
 	}
 	if fs.NArg() != 1 {
 		return e.fail(ExitUsage, "usage: cpass license activate <token>")
@@ -55,9 +56,9 @@ func licenseActivate(e *env, args []string) int {
 
 func licenseStatus(e *env, args []string) int {
 	fs := flag.NewFlagSet("license status", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass license status")
 	}
 	home, err := broker.Home()
 	if err != nil {
@@ -80,9 +81,9 @@ func licenseStatus(e *env, args []string) int {
 
 func licenseDeactivate(e *env, args []string) int {
 	fs := flag.NewFlagSet("license deactivate", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass license deactivate")
 	}
 	home, err := broker.Home()
 	if err != nil {
@@ -97,7 +98,7 @@ func licenseDeactivate(e *env, args []string) int {
 
 func warnIfDegraded(e *env, st license.Status) {
 	if st.Warning != "" {
-		fprintln(e.stderr, "cpass: "+st.Warning)
+		e.notice("%s", st.Warning)
 	}
 }
 

@@ -31,9 +31,9 @@ const bypassPrefix = "!!"
 
 func cmdIntercept(e *env) int {
 	fs := flag.NewFlagSet("intercept", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
+	fs.SetOutput(io.Discard)
 	if _, err := parseInterspersed(fs, e.args); err != nil {
-		return ExitUsage
+		return e.usageErr(err, "cpass intercept")
 	}
 
 	raw, err := io.ReadAll(e.stdin)
@@ -70,15 +70,21 @@ func cmdIntercept(e *env) int {
 		if _, err := v.Add(handle, m.Value, vault.AddOptions{}); err != nil {
 			return e.failErr(err)
 		}
-		stored = append(stored, fmt.Sprintf("%s as %s", m.Kind, handle))
+		// Always plain: this text ends up in the stderr Claude Code's
+		// UserPromptSubmit hook re-displays to the human (see cmdIntercept's
+		// doc comment), not a terminal cpass itself controls, so it must
+		// never carry escapes regardless of this process's stderr TTY-ness —
+		// the same reasoning as cmdPolicy's hook branch (policycmd.go).
+		stored = append(stored, storedTextForMode(colorNone, m.Kind, handle))
 	}
 	if err := v.Save(); err != nil {
 		return e.failErr(err)
 	}
 	// Claude Code's UserPromptSubmit hook protocol: exit 2 blocks the
 	// submission and shows this stderr text to the human, who resubmits.
-	fprintf(e.stderr, "cpass: stored %s; resubmit using the Handle, or prefix with !! to send anyway\n",
-		joinWithAnd(stored))
+	// docs/CLI-STYLE.md's Intercept row joins multiple items with a plain
+	// comma, not "a, b and c".
+	e.notice("stored %s; resubmit using the Handle, or prefix with !! to send anyway", strings.Join(stored, ", "))
 	return ExitUsage
 }
 
@@ -108,7 +114,7 @@ func interceptBypass(e *env, matches []detect.Match) {
 	if err := v.Save(); err != nil {
 		return
 	}
-	fprintf(e.stderr, "cpass: bypass — stored and flagged Exposed: %s\n", strings.Join(stored, ", "))
+	e.notice("bypass — stored and flagged Exposed: %s", strings.Join(stored, ", "))
 }
 
 // inferredOrInbox returns the Match's inferred Handle, or an inbox/<timestamp>
@@ -131,16 +137,4 @@ func uniqueHandle(used map[string]bool, base string) string {
 	}
 	used[h] = true
 	return h
-}
-
-// joinWithAnd renders ["a", "b", "c"] as "a, b and c".
-func joinWithAnd(parts []string) string {
-	switch len(parts) {
-	case 0:
-		return ""
-	case 1:
-		return parts[0]
-	default:
-		return strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1]
-	}
 }
