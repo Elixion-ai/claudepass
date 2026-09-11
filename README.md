@@ -1,4 +1,5 @@
-# ClaudePass
+<p align="center"><img src="site/assets/readme-header.png" alt="ClaudePass — the Agent sees a Handle, never the Secret" width="820"></p>
+
 
 A secret manager for AI coding agents.
 
