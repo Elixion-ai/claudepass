@@ -966,7 +966,7 @@
     spawnParticles(iv.x + iv.w / 2, iv.y + iv.h / 2, PAL.red);
     spawnRedactedPop(iv.x + iv.w / 2, iv.y);
     popups.push({ text: "+" + pts + (combo > 1 ? " x" + combo : ""), t: 0, dur: 0.7,
-      x: iv.x + iv.w / 2, y: iv.y, color: PAL.coin_yellow || PAL.yellow, floaty: true });
+      x: iv.x + iv.w / 2, y: iv.y, color: PAL.yellow, floaty: true });
     sfxKill();
     maybeDropPowerup(iv);
     updateHudScore();
@@ -1301,7 +1301,7 @@
       dimBox();
       var blink = motionOK ? (Math.floor(stateT * 4) % 2 === 0) : true;
       if (blink) { ctx.fillStyle = PAL.red; ctx.fillText("GAME OVER", CANVAS_W / 2, CANVAS_H / 2 - 30); }
-      ctx.fillStyle = PAL.text_hi || "#f3ece4";
+      ctx.fillStyle = PAL.white;
       ctx.font = "6px 'Press Start 2P', monospace";
       ctx.fillText("SCORE " + pad(score, 6) + "   WAVE " + (wave + 1), CANVAS_W / 2, CANVAS_H / 2 - 12);
       if (state === STATE.ENTER_INITIALS) {

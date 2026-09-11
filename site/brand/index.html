@@ -1,0 +1,709 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brand — ClaudePass</title>
+<meta name="description" content="The living ClaudePass style guide: every token, text style, and component/state in one reference page.">
+<meta name="robots" content="noindex">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23ff8a1f'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%230e0a06'/%3E%3Crect x='12' y='6' width='2' height='5' fill='%230e0a06'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/retro.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="ClaudePass">
+  <meta property="og:title" content="ClaudePass — the Agent sees a Handle, never the Secret">
+  <meta property="og:description" content="A secret manager for AI coding agents. Your agent uses a Secret without ever reading it.">
+  <meta property="og:image" content="https://claudepass.com/assets/og.png">
+  <meta property="og:url" content="https://claudepass.com/">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://claudepass.com/assets/og.png">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+</head>
+<body class="inner-page">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="arcade-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <svg class="brand-glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <rect x="0" y="0" width="16" height="16" fill="currentColor"/>
+        <circle cx="8" cy="8" r="3" fill="var(--bg-void)"/>
+        <rect x="12" y="6" width="2" height="5" fill="var(--bg-void)"/>
+      </svg>
+      CLAUDEPASS
+    </a>
+    <nav class="arcade-nav" aria-label="Primary">
+      <a href="/install">INSTALL</a>
+      <a href="/pricing">PRICING</a>
+      <a href="/docs">DOCS</a>
+      <a href="/security">SECURITY</a>
+    </nav>
+    <div class="header-tools">
+      <button id="mute-toggle" class="icon-btn" type="button" aria-pressed="false" aria-label="Unmute sound">🔇</button>
+      <button id="crt-toggle" class="icon-btn" type="button" aria-pressed="true" aria-label="Toggle CRT scanlines">≈</button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <div class="content">
+    <div class="wrap">
+
+      <h1>Brand</h1>
+      <p class="lede">
+        The living ClaudePass style guide: every design token, text style,
+        component, and state named in the Figma Brand Book, rendered with
+        the real CSS this site ships — not a screenshot of it. This page is
+        deliberately not in the nav; it's a reference for whoever touches
+        <code>site/retro.css</code> next.
+      </p>
+
+      <nav class="brand-toc" aria-label="On this page">
+        <a href="#canon">Canon</a>
+        <a href="#typography">Typography</a>
+        <a href="#spacing-radius">Spacing &amp; Radius</a>
+        <a href="#elevation">Elevation</a>
+        <a href="#motion">Motion</a>
+        <a href="#components">Components</a>
+        <a href="#iconography">Iconography</a>
+        <a href="#accessibility">Accessibility</a>
+        <a href="#trademark">Trademark</a>
+        <a href="#voice-tone">Voice &amp; Tone</a>
+      </nav>
+
+      <!-- ============================== CANON ============================== -->
+      <section class="brand-section" id="canon">
+        <h2><span class="glyph">▶</span>Canon</h2>
+
+        <h3>Wordmark</h3>
+        <p class="muted">
+          The vault-door glyph (Door / Dial / Handle) scales proportionally
+          with the wordmark at every size — Door ≈ cap-height, Dial ≈ 37.5%
+          of the Door's width centered in it, Handle a thin vertical bar
+          right-of-center.
+        </p>
+        <div class="wordmark-row">
+          <div class="wordmark-lockup lockup-14">
+            <div class="lockup-row">
+              <svg class="vault-glyph" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <rect width="16" height="16" fill="currentColor"/>
+                <ellipse cx="8" cy="8" rx="3" ry="3" fill="var(--bg-void)"/>
+                <rect x="12" y="6" width="2" height="5" fill="var(--bg-void)"/>
+              </svg>
+              <span class="lockup-word">CLAUDEPASS</span>
+            </div>
+            <span class="cap">14px lockup — nav scale</span>
+          </div>
+          <div class="wordmark-lockup lockup-48">
+            <div class="lockup-row">
+              <svg class="vault-glyph" width="55" height="55" viewBox="0 0 55 55" aria-hidden="true" focusable="false">
+                <rect width="55" height="55" fill="currentColor"/>
+                <ellipse cx="27.5" cy="27.5" rx="10.5" ry="10.5" fill="var(--bg-void)"/>
+                <rect x="41" y="21" width="7" height="17" fill="var(--bg-void)"/>
+              </svg>
+              <span class="lockup-word">CLAUDEPASS</span>
+            </div>
+            <span class="cap">48px lockup</span>
+          </div>
+          <div class="wordmark-lockup lockup-96">
+            <div class="lockup-row">
+              <svg class="vault-glyph" width="110" height="110" viewBox="0 0 110 110" aria-hidden="true" focusable="false">
+                <rect width="110" height="110" fill="currentColor"/>
+                <ellipse cx="55" cy="55" rx="20.5" ry="20.5" fill="var(--bg-void)"/>
+                <rect x="82" y="41" width="14" height="34" fill="var(--bg-void)"/>
+              </svg>
+              <span class="lockup-word">CLAUDEPASS</span>
+            </div>
+            <span class="cap">96px lockup — primary reference</span>
+          </div>
+        </div>
+        <p class="muted">Informal lowercase usage (<code>claudepass</code>) is fine in running prose; the wordmark lockup itself is always all-caps Press Start 2P.</p>
+
+        <h3>Palette — Primitives (20 tokens)</h3>
+        <p class="muted">The cabinet shell, brand, signal/alert, text, light-mode, and game-only tracks — every raw colour literal this system permits, verified byte-for-byte against <code>site/retro.css</code>.</p>
+
+        <p class="section-eyebrow">SURFACES — the cabinet shell, darkest to lightest</p>
+        <div class="swatch-grid">
+          <div class="swatch"><div class="swatch-fill sw-bg-void"></div><p class="swatch-name">bg-void</p><p class="swatch-hex">#0e0a06</p></div>
+          <div class="swatch"><div class="swatch-fill sw-panel-bg"></div><p class="swatch-name">panel-bg</p><p class="swatch-hex">#17110b</p></div>
+          <div class="swatch"><div class="swatch-fill sw-panel-edge-hi"></div><p class="swatch-name">panel-edge-hi</p><p class="swatch-hex">#3a2f24</p></div>
+          <div class="swatch"><div class="swatch-fill sw-panel-edge-lo"></div><p class="swatch-name">panel-edge-lo</p><p class="swatch-hex">#080603</p></div>
+        </div>
+
+        <p class="section-eyebrow">BRAND (PRIMARY) — CTAs, player tank, active accents. Arcade amber, not Anthropic terracotta (ADR-0008)</p>
+        <div class="swatch-grid">
+          <div class="swatch"><div class="swatch-fill sw-ember"></div><p class="swatch-name">ember</p><p class="swatch-hex">#ff8a1f</p></div>
+          <div class="swatch"><div class="swatch-fill sw-ember-dim"></div><p class="swatch-name">ember-dim</p><p class="swatch-hex">#b85a10</p></div>
+        </div>
+
+        <p class="section-eyebrow">SIGNAL &amp; ALERT — Command Policy / Broker signal, danger, and reward accents</p>
+        <div class="swatch-grid">
+          <div class="swatch"><div class="swatch-fill sw-signal-cyan"></div><p class="swatch-name">signal-cyan</p><p class="swatch-hex">#4de8ff</p></div>
+          <div class="swatch"><div class="swatch-fill sw-alert-red"></div><p class="swatch-name">alert-red</p><p class="swatch-hex">#ff4d4d</p></div>
+          <div class="swatch"><div class="swatch-fill sw-alert-red-dim"></div><p class="swatch-name">alert-red-dim</p><p class="swatch-hex">#b32424</p></div>
+          <div class="swatch"><div class="swatch-fill sw-coin-yellow"></div><p class="swatch-name">coin-yellow</p><p class="swatch-hex">#ffe94d</p></div>
+        </div>
+
+        <p class="section-eyebrow">TEXT — reading text and structural gray</p>
+        <div class="swatch-grid">
+          <div class="swatch"><div class="swatch-fill sw-text-hi"></div><p class="swatch-name">text-hi</p><p class="swatch-hex">#f3ece4</p></div>
+          <div class="swatch"><div class="swatch-fill sw-text-muted"></div><p class="swatch-name">text-muted</p><p class="swatch-hex">#b3a89b</p></div>
+          <div class="swatch"><div class="swatch-fill sw-steel"></div><p class="swatch-name">steel</p><p class="swatch-hex">#6b7280</p></div>
+        </div>
+
+        <p class="section-eyebrow">LIGHT MODE — inner long-form pages. Never swap ember #ff8a1f in on white</p>
+        <div class="swatch-grid">
+          <div class="swatch"><div class="swatch-fill sw-light-bg"></div><p class="swatch-name">light-bg</p><p class="swatch-hex">#f8f6f3</p></div>
+          <div class="swatch"><div class="swatch-fill sw-light-fg"></div><p class="swatch-name">light-fg</p><p class="swatch-hex">#14110d</p></div>
+          <div class="swatch"><div class="swatch-fill sw-cream"></div><p class="swatch-name">cream</p><p class="swatch-hex">#f6efe6</p></div>
+          <div class="swatch"><div class="swatch-fill sw-sand"></div><p class="swatch-name">sand</p><p class="swatch-hex">#d9cfc2</p></div>
+          <div class="swatch"><div class="swatch-fill sw-light-theme-amber"></div><p class="swatch-name">light-theme-amber</p><p class="swatch-hex">#9a4a0c</p></div>
+        </div>
+
+        <p class="section-eyebrow">GAME-ONLY — tank treads, never used outside the canvas</p>
+        <div class="swatch-grid">
+          <div class="swatch"><div class="swatch-fill sw-track-dark"></div><p class="swatch-name">track-dark</p><p class="swatch-hex">#4d2a0e</p></div>
+          <div class="swatch"><div class="swatch-fill sw-track-dark-red"></div><p class="swatch-name">track-dark-red</p><p class="swatch-hex">#5c1a1a</p></div>
+        </div>
+
+        <h3>Palette — Semantic tokens</h3>
+        <p class="muted">The Color collection's Dark and Light modes, side by side. Dark ships on every page's header/footer and on <code>/</code>; Light ships on every <code>.inner-page</code>'s content area (this page included).</p>
+
+        <p class="section-eyebrow">SEMANTIC — DARK</p>
+        <div class="brand-dark">
+          <div class="swatch-grid">
+            <div class="swatch"><div class="swatch-fill sw-color-bg-canvas"></div><p class="swatch-name">color-bg-canvas</p><p class="swatch-hex">#0e0a06</p></div>
+            <div class="swatch"><div class="swatch-fill sw-color-bg-surface"></div><p class="swatch-name">color-bg-surface</p><p class="swatch-hex">#17110b</p></div>
+            <div class="swatch"><div class="swatch-fill sw-color-border"></div><p class="swatch-name">color-border</p><p class="swatch-hex">#3a2f24</p></div>
+            <div class="swatch"><div class="swatch-fill sw-color-border-shadow"></div><p class="swatch-name">color-border-shadow</p><p class="swatch-hex">#080603</p></div>
+            <div class="swatch"><div class="swatch-fill sw-color-text-primary"></div><p class="swatch-name">color-text-primary</p><p class="swatch-hex">#f3ece4</p></div>
+            <div class="swatch"><div class="swatch-fill sw-color-text-secondary"></div><p class="swatch-name">color-text-secondary</p><p class="swatch-hex">#b3a89b</p></div>
+            <div class="swatch"><div class="swatch-fill sw-color-text-on-accent"></div><p class="swatch-name">color-text-on-accent</p><p class="swatch-hex">#0e0a06</p></div>
+            <div class="swatch"><div class="swatch-fill sw-color-accent"></div><p class="swatch-name">color-accent</p><p class="swatch-hex">#ff8a1f</p></div>
+            <div class="swatch"><div class="swatch-fill sw-color-accent-dim"></div><p class="swatch-name">color-accent-dim</p><p class="swatch-hex">#b85a10</p></div>
+            <div class="swatch"><div class="swatch-fill sw-color-danger"></div><p class="swatch-name">color-danger</p><p class="swatch-hex">#ff4d4d</p></div>
+            <div class="swatch"><div class="swatch-fill sw-color-danger-dim"></div><p class="swatch-name">color-danger-dim</p><p class="swatch-hex">#b32424</p></div>
+            <div class="swatch"><div class="swatch-fill sw-color-signal"></div><p class="swatch-name">color-signal</p><p class="swatch-hex">#4de8ff</p></div>
+            <div class="swatch"><div class="swatch-fill sw-color-coin"></div><p class="swatch-name">color-coin</p><p class="swatch-hex">#ffe94d</p></div>
+            <div class="swatch"><div class="swatch-fill sw-color-steel"></div><p class="swatch-name">color-steel</p><p class="swatch-hex">#6b7280</p></div>
+          </div>
+        </div>
+
+        <p class="section-eyebrow">SEMANTIC — LIGHT</p>
+        <div class="swatch-grid">
+          <div class="swatch"><div class="swatch-fill sw-color-bg-canvas"></div><p class="swatch-name">color-bg-canvas</p><p class="swatch-hex">#f8f6f3</p></div>
+          <div class="swatch"><div class="swatch-fill sw-color-bg-surface"></div><p class="swatch-name">color-bg-surface</p><p class="swatch-hex">#f6efe6</p></div>
+          <div class="swatch"><div class="swatch-fill sw-color-border"></div><p class="swatch-name">color-border</p><p class="swatch-hex">#d9cfc2</p></div>
+          <div class="swatch"><div class="swatch-fill sw-color-border-shadow"></div><p class="swatch-name">color-border-shadow</p><p class="swatch-hex">#d9cfc2</p></div>
+          <div class="swatch"><div class="swatch-fill sw-color-text-primary"></div><p class="swatch-name">color-text-primary</p><p class="swatch-hex">#14110d</p></div>
+          <div class="swatch"><div class="swatch-fill sw-color-text-secondary"></div><p class="swatch-name">color-text-secondary</p><p class="swatch-hex">#14110d</p></div>
+          <div class="swatch"><div class="swatch-fill sw-color-text-on-accent"></div><p class="swatch-name">color-text-on-accent</p><p class="swatch-hex">#f8f6f3</p></div>
+          <div class="swatch"><div class="swatch-fill sw-color-accent"></div><p class="swatch-name">color-accent</p><p class="swatch-hex">#9a4a0c</p></div>
+          <div class="swatch"><div class="swatch-fill sw-color-accent-dim"></div><p class="swatch-name">color-accent-dim</p><p class="swatch-hex">#9a4a0c</p></div>
+          <div class="swatch"><div class="swatch-fill sw-color-danger"></div><p class="swatch-name">color-danger</p><p class="swatch-hex">#b32424</p></div>
+          <div class="swatch"><div class="swatch-fill sw-color-danger-dim"></div><p class="swatch-name">color-danger-dim</p><p class="swatch-hex">#b32424</p></div>
+          <div class="swatch"><div class="swatch-fill sw-color-signal"></div><p class="swatch-name">color-signal</p><p class="swatch-hex">#4de8ff (unusable, 1.36:1 — never used on light pages)</p></div>
+          <div class="swatch"><div class="swatch-fill sw-color-coin"></div><p class="swatch-name">color-coin</p><p class="swatch-hex">#b85a10</p></div>
+          <div class="swatch"><div class="swatch-fill sw-color-steel"></div><p class="swatch-name">color-steel</p><p class="swatch-hex">#6b7280</p></div>
+        </div>
+      </section>
+
+      <!-- ============================== TYPOGRAPHY ============================== -->
+      <section class="brand-section" id="typography">
+        <h2><span class="glyph">▶</span>Typography</h2>
+        <p class="muted"><code>font-family-display</code> = Press Start 2P (short strings only: wordmark, H1/H2, buttons, HUD). <code>font-family-body</code>/<code>font-family-mono</code> = the shipped monospace stack. Weights are 400 (regular) and 700 (bold).</p>
+
+        <h3>Type Scale</h3>
+        <div class="type-scale-sample scale-xs"><span class="tok">text-xs — 12px</span><span class="sample">The quick brown fox</span></div>
+        <div class="type-scale-sample scale-sm"><span class="tok">text-sm — 13px</span><span class="sample">The quick brown fox</span></div>
+        <div class="type-scale-sample scale-base"><span class="tok">text-base — 16px</span><span class="sample">The quick brown fox</span></div>
+        <div class="type-scale-sample scale-lg"><span class="tok">text-lg — 18px</span><span class="sample">The quick brown fox</span></div>
+        <div class="type-scale-sample scale-xl"><span class="tok">text-xl — 22px</span><span class="sample">The quick brown fox</span></div>
+        <div class="type-scale-sample scale-2xl"><span class="tok">text-2xl — 28px</span><span class="sample">The quick brown fox</span></div>
+        <div class="type-scale-sample scale-3xl"><span class="tok">text-3xl — 32px</span><span class="sample">The quick brown fox</span></div>
+        <div class="type-scale-sample scale-4xl"><span class="tok">text-4xl — 48px</span><span class="sample">The quick brown fox</span></div>
+
+        <h3>Text styles</h3>
+        <div class="spec-row">
+          <div class="spec-item"><span class="cap">.t-display-wordmark-hero</span><span class="t-display-wordmark-hero">CLAUDEPASS</span><span class="scroll-hint">SCROLLS → full word continues off-screen</span></div>
+        </div>
+        <div class="spec-row">
+          <div class="spec-item"><span class="cap">.t-display-wordmark-nav</span><span class="t-display-wordmark-nav">CLAUDEPASS</span></div>
+          <div class="spec-item"><span class="cap">.t-display-h1</span><span class="t-display-h1">▶ HEADLINE</span></div>
+          <div class="spec-item"><span class="cap">.t-display-h2</span><span class="t-display-h2">▶ SUBHEAD</span></div>
+        </div>
+        <div class="spec-row">
+          <div class="spec-item"><span class="cap">.t-display-button</span><span class="btn btn-primary">INSERT COIN</span></div>
+          <div class="spec-item"><span class="cap">.t-display-hud-label</span><span class="t-display-hud-label">WAVE 1</span></div>
+          <div class="spec-item"><span class="cap">.t-display-hud-score</span><span class="t-display-hud-score">SCORE 000000</span></div>
+          <div class="spec-item"><span class="cap">.t-label</span><span class="t-label">SURFACES</span></div>
+        </div>
+        <div class="spec-row">
+          <div class="spec-item"><span class="cap">.t-body</span><span class="t-body">Your Handles are inside.</span></div>
+          <div class="spec-item"><span class="cap">.t-body-small</span><span class="t-body-small">Copied directly from site/retro.css.</span></div>
+        </div>
+        <div class="spec-row">
+          <div class="spec-item"><span class="cap">.t-code-inline</span><code class="t-code-inline">cpass run -- psql "$DATABASE_URL"</code></div>
+          <div class="spec-item"><span class="cap">.t-code-mono-small</span><span class="handle-pill t-code-mono-small">stripe/live</span></div>
+        </div>
+      </section>
+
+      <!-- ============================== SPACING & RADIUS ============================== -->
+      <section class="brand-section" id="spacing-radius">
+        <h2><span class="glyph">▶</span>Spacing &amp; Radius</h2>
+
+        <h3>Spacing</h3>
+        <div class="token-bar-row"><span class="token-bar-label">space-1</span><span class="token-bar bar-space-1"></span><span class="token-bar-value">4px</span></div>
+        <div class="token-bar-row"><span class="token-bar-label">space-2</span><span class="token-bar bar-space-2"></span><span class="token-bar-value">8px</span></div>
+        <div class="token-bar-row"><span class="token-bar-label">space-3</span><span class="token-bar bar-space-3"></span><span class="token-bar-value">12px</span></div>
+        <div class="token-bar-row"><span class="token-bar-label">space-4</span><span class="token-bar bar-space-4"></span><span class="token-bar-value">16px</span></div>
+        <div class="token-bar-row"><span class="token-bar-label">space-5</span><span class="token-bar bar-space-5"></span><span class="token-bar-value">24px</span></div>
+        <div class="token-bar-row"><span class="token-bar-label">space-6</span><span class="token-bar bar-space-6"></span><span class="token-bar-value">32px</span></div>
+        <div class="token-bar-row"><span class="token-bar-label">space-7</span><span class="token-bar bar-space-7"></span><span class="token-bar-value">48px</span></div>
+        <div class="token-bar-row"><span class="token-bar-label">space-8</span><span class="token-bar bar-space-8"></span><span class="token-bar-value">64px</span></div>
+
+        <h3>Radius</h3>
+        <p class="muted">0 everywhere except <code>radius-pill</code> (Handle Pill, Badge) — the one deliberate exception.</p>
+        <div class="radius-box-row">
+          <div class="radius-box radius-none">none<br>0</div>
+          <div class="radius-box radius-sm">sm<br>2px</div>
+          <div class="radius-box radius-md">md<br>8px</div>
+          <div class="radius-box radius-lg">lg<br>12px</div>
+          <div class="radius-box radius-pill">pill<br>999px</div>
+        </div>
+      </section>
+
+      <!-- ============================== ELEVATION ============================== -->
+      <section class="brand-section" id="elevation">
+        <h2><span class="glyph">▶</span>Elevation</h2>
+        <p class="muted">No soft drop-shadows — an arcade cabinet has bevelled hardware edges, not ambient light. "Elevation" is the bevel technique every panel already uses, plus three Effect Styles for tools/contexts that expect a conventional shadow token.</p>
+
+        <h3>Bevel</h3>
+        <div class="bevel-demo-row">
+          <div class="bevel-swatch bevel-raised">Bevel — raised<br>(panel-edge-hi @ bevel-width)</div>
+          <div class="bevel-swatch bevel-inset">Bevel — inset<br>(panel-edge-lo, recessed / pill inset)</div>
+        </div>
+
+        <h3>Elevation effect styles</h3>
+        <div class="elevation-row">
+          <div class="elevation-swatch elevation-1">Elevation/1 (Subtle)<br>1px lift — inline chips</div>
+          <div class="elevation-swatch elevation-2">Elevation/2 (Medium)<br>2px lift — cards, pricing tiles</div>
+          <div class="elevation-swatch elevation-3">Elevation/3 (Strong)<br>3px ember glow — modal / active dialog</div>
+        </div>
+      </section>
+
+      <!-- ============================== MOTION ============================== -->
+      <section class="brand-section" id="motion">
+        <h2><span class="glyph">▶</span>Motion</h2>
+        <p class="muted">Bar length is proportional to duration against the 900ms loop — the longer the bar, the longer the wait.</p>
+
+        <div class="motion-row"><span class="motion-label">duration-instant</span><span class="motion-track"><span class="motion-fill instant"></span></span><span class="motion-value">80ms</span></div>
+        <div class="motion-row"><span class="motion-label">duration-fast</span><span class="motion-track"><span class="motion-fill fast"></span></span><span class="motion-value">120ms</span></div>
+        <div class="motion-row"><span class="motion-label">duration-base</span><span class="motion-track"><span class="motion-fill base"></span></span><span class="motion-value">200ms</span></div>
+        <div class="motion-row"><span class="motion-label">duration-slow</span><span class="motion-track"><span class="motion-fill slow"></span></span><span class="motion-value">320ms</span></div>
+        <div class="motion-row"><span class="motion-label">duration-loop</span><span class="motion-track"><span class="motion-fill loop"></span></span><span class="motion-value">900ms</span></div>
+
+        <p class="muted">
+          <code>ease-out-arcade</code> = <code>cubic-bezier(0.23, 1, 0.32, 1)</code> — the sitewide ease-out for entrances/reveals.
+          <code>ease-in-out-loop</code> = <code>cubic-bezier(0.45, 0, 0.55, 1)</code> — for the looping install-spinner sweep only, since it repeats and needs symmetric easing.
+        </p>
+
+        <h3>Install spinner — live</h3>
+        <span class="spinner" role="img" aria-label="Installing"></span>
+
+        <div class="callout">
+          <strong>Reduced motion.</strong> Loops (the spinner sweep, blinking PRESS START) collapse to a single static frame. State changes that are informational rather than decorative (a kill's <code>[REDACTED]</code> pop, a breach flash) still occur but drop to a simple opacity crossfade at <code>duration-fast</code> with no bounce or spring. Every animation on this site respects <code>prefers-reduced-motion: reduce</code>.
+        </div>
+      </section>
+
+      <!-- ============================== COMPONENTS ============================== -->
+      <section class="brand-section" id="components">
+        <h2><span class="glyph">▶</span>Components</h2>
+
+        <h3>Button</h3>
+        <div class="cta-row">
+          <button class="btn btn-primary" type="button">PRIMARY</button>
+          <button class="btn btn-secondary" type="button">SECONDARY</button>
+          <button class="btn btn-danger-outline" type="button">DANGER OUTLINE</button>
+          <button class="btn btn-danger" type="button">DANGER FILLED</button>
+          <button class="btn btn-primary" type="button" disabled>DISABLED</button>
+          <a class="btn btn-secondary is-disabled" href="#" aria-disabled="true" tabindex="-1">DISABLED LINK</a>
+        </div>
+        <p class="muted">Focus-visible state: tab to any button above — the shared <code>--focus-ring</code> outline appears on keyboard focus, not as a 5th variant. <code>[disabled]</code> covers a real <code>&lt;button&gt;</code>/<code>&lt;input&gt;</code>; <code>.is-disabled</code> (right) covers an <code>&lt;a class="btn"&gt;</code> CTA, which has no native disabled state.</p>
+
+        <h3>Handle Pill</h3>
+        <div class="cta-row">
+          <span class="handle-pill t-code-mono-small">stripe/live</span>
+          <span class="handle-pill t-code-mono-small is-copied">stripe/live — COPIED</span>
+        </div>
+
+        <h3>Code Chip</h3>
+        <p>Light (default on this page): <code>cpass run -- deploy.sh</code></p>
+        <div class="brand-dark brand-dark-inline">
+          <p>Dark: <code>cpass run -- deploy.sh</code></p>
+        </div>
+
+        <h3>Badge</h3>
+        <div class="cta-row">
+          <span class="badge badge-free">FREE</span>
+          <span class="badge badge-pro">PRO</span>
+          <span class="badge badge-exposed">EXPOSED</span>
+        </div>
+
+        <h3>Input</h3>
+        <div class="spec-row">
+          <div class="spec-item">
+            <span class="cap">Default / Focus (click in)</span>
+            <input class="input" type="text" value="stripe/live" aria-label="Default input example">
+          </div>
+          <div class="spec-item">
+            <span class="cap">Error</span>
+            <input class="input" type="email" value="not-an-email" aria-invalid="true" aria-describedby="brand-input-error" aria-label="Error input example">
+            <span class="field-error" id="brand-input-error">Enter a valid email address.</span>
+          </div>
+        </div>
+
+        <h3>Redaction Token</h3>
+        <div class="cta-row">
+          <span class="redacted redacted--idle">stripe/live</span>
+          <span class="redacted redacted--kill">[REDACTED]</span>
+          <span class="redacted redacted--breach">[REDACTED:stripe/live]</span>
+        </div>
+
+        <h3>Terminal Window</h3>
+        <div class="terminal-titlebar">
+          <span class="terminal-dot red" aria-hidden="true"></span>
+          <span class="terminal-dot yellow" aria-hidden="true"></span>
+          <span class="terminal-dot cyan" aria-hidden="true"></span>
+          <span class="terminal-title">cpass</span>
+        </div>
+        <div class="terminal">
+          <div class="terminal-line">
+            <code>cpass run -- sh -c 'echo "deploy: authenticated"'</code>
+            <button class="copy-btn" type="button">COPY</button>
+          </div>
+        </div>
+
+        <h3>Command-Policy Alert / Toast</h3>
+        <div class="spec-row">
+          <div class="spec-item">
+            <span class="cap">Alert — inline card</span>
+            <div class="cp-alert">
+              <div class="cp-alert-head">
+                <span class="cp-alert-label">COMMAND POLICY</span>
+                <button type="button" class="cp-alert-dismiss" aria-label="Dismiss">✕</button>
+              </div>
+              <p class="cp-alert-message">cpass: refused: cat would read .env, a Secret-bearing file — use `cpass run` (or the Manifest) instead of reading the file directly</p>
+            </div>
+          </div>
+          <div class="spec-item">
+            <span class="cap">Toast — transient corner notification</span>
+            <div class="cp-toast">
+              <span class="cp-toast-badge" aria-hidden="true">CP</span>
+              <span>cpass: refused: cat would read .env, a Secret-bearing file — use `cpass run` (or the Manifest) instead of reading the file directly</span>
+            </div>
+            <span class="scroll-hint">SCROLLS → full refusal string continues off-screen</span>
+          </div>
+        </div>
+
+        <h3>Nav Header</h3>
+        <p class="muted">Live at the top of this page; reproduced here (non-sticky, no duplicate control IDs) purely as a labeled component reference. No <code>GITHUB</code> link, no header CTA — see the Trademark/decisions note in <code>docs/WEB-HANDOFF.md</code> and <code>docs/adr/0010-nav-footer-no-github-dark-footer.md</code>.</p>
+        <header class="arcade-header static-demo">
+          <div class="wrap">
+            <a class="brand" href="/">
+              <svg class="brand-glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <rect x="0" y="0" width="16" height="16" fill="currentColor"/>
+                <circle cx="8" cy="8" r="3" fill="var(--bg-void)"/>
+                <rect x="12" y="6" width="2" height="5" fill="var(--bg-void)"/>
+              </svg>
+              CLAUDEPASS
+            </a>
+            <nav class="arcade-nav" aria-label="Primary (reference copy)">
+              <a href="/install">INSTALL</a>
+              <a href="/pricing">PRICING</a>
+              <a href="/docs">DOCS</a>
+              <a href="/security">SECURITY</a>
+            </nav>
+          </div>
+        </header>
+
+        <h3>Footer — Dark (shipped) and Light (documented only)</h3>
+        <p class="muted">W22: the site uses the Dark footer on every page, including <code>.inner-page</code> ones. The Light variant below is a reference only — no real page uses it.</p>
+        <footer class="arcade-footer">
+          <div class="wrap">
+            <nav aria-label="Footer (reference copy, Dark)">
+              <a href="/install">INSTALL</a>
+              <a href="/pricing">PRICING</a>
+              <a href="/docs">DOCS</a>
+              <a href="/security">SECURITY</a>
+            </nav>
+            <p class="footer-legal">ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.</p>
+          </div>
+        </footer>
+        <div class="footer-light-demo">
+          <div class="wrap">
+            <nav aria-label="Footer (reference copy, Light)">
+              <a href="/install">INSTALL</a>
+              <a href="/pricing">PRICING</a>
+              <a href="/docs">DOCS</a>
+              <a href="/security">SECURITY</a>
+            </nav>
+            <p>ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.</p>
+          </div>
+        </div>
+
+        <h3>Pricing Card</h3>
+        <p class="muted">Copy is the canon-worked-examples text (verbatim match to <code>/pricing</code>) — see the W19 decision in <code>docs/WEB-HANDOFF.md</code>, not <code>dc-25:42</code>'s invented feature list.</p>
+        <div class="pricing-grid">
+          <div class="plan cab-panel">
+            <div class="plan-accent"></div>
+            <span class="badge badge-free">FREE</span>
+            <h3>FREE — $0</h3>
+            <ul>
+              <li>Up to 3 Secrets</li>
+              <li>Env and file Bindings</li>
+              <li>Command Policy &amp; Redaction</li>
+              <li>Claude Code, Codex, and MCP integrations</li>
+              <li>Manifest, Capture, and Intercept</li>
+            </ul>
+            <div class="cta-row"><span class="btn btn-secondary">INSTALL FREE</span></div>
+          </div>
+          <div class="plan cab-panel pro">
+            <div class="plan-accent"></div>
+            <span class="badge badge-pro">PRO</span>
+            <h3>PRO — $9.99/MO</h3>
+            <ul>
+              <li>Unlimited Secrets</li>
+              <li>Everything in Free</li>
+              <li>Ed25519-signed license, checked entirely offline</li>
+              <li>A network blip never locks your Vault</li>
+              <li>Cancel anytime — your token keeps working through its grace period</li>
+            </ul>
+            <div class="cta-row"><span class="btn btn-primary">CONTINUE →</span></div>
+          </div>
+        </div>
+
+        <h3>Install Terminal Block</h3>
+        <div class="terminal-titlebar">
+          <span class="terminal-dot red" aria-hidden="true"></span>
+          <span class="terminal-dot yellow" aria-hidden="true"></span>
+          <span class="terminal-dot cyan" aria-hidden="true"></span>
+          <span class="terminal-title">install.sh</span>
+        </div>
+        <div class="terminal">
+          <div class="terminal-line">
+            <code>brew install softorize/tap/cpass</code>
+            <button class="copy-btn" type="button">COPY</button>
+          </div>
+          <div class="terminal-line">
+            <code>curl -fsSL https://claudepass.com/install.sh | sh</code>
+            <button class="copy-btn" type="button">COPY</button>
+          </div>
+        </div>
+        <span class="scroll-hint">EACH LINE SCROLLS → full command continues off-screen</span>
+
+        <h3>Hi-Score Row</h3>
+        <div class="hiscore-ticker">
+          <div class="wrap">
+            <div class="score-line">HI-SCORE 013400</div>
+            <p class="caption">Local to this browser — nothing is sent anywhere. Ever.</p>
+            <table class="hiscore-table">
+              <caption class="visually-hidden">Sample Vault Defense scores</caption>
+              <thead>
+                <tr><th scope="col">#</th><th scope="col">Initials</th><th scope="col">Wave</th><th scope="col">Score</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>1</td><td>CPS</td><td>7</td><td class="score">013400</td></tr>
+                <tr><td>2</td><td>AGT</td><td>5</td><td class="score">008900</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <h3>Security Trust Panel</h3>
+        <div class="trust-panel">
+          <div class="trust-panel-icons" aria-hidden="true">
+            <span class="trust-panel-glyph">V</span>
+            <span class="trust-panel-glyph">CP</span>
+          </div>
+          <div class="trust-panel-copy">
+            <h4 class="section-h2"><span class="glyph">▶</span>SECURITY, BY DESIGN</h4>
+            <p class="lede">ClaudePass is closed source, so trust has to come from documentation rather than from reading the code yourself.</p>
+          </div>
+        </div>
+
+        <h3>Paywall / Upgrade Banner <span class="badge badge-free">REFERENCE ONLY</span></h3>
+        <p class="muted">W18: "3 of 3 Secrets used" is local CLI state, never transmitted to the website — there is no logged-in web dashboard today. This banner has no real web surface to sit on yet; flagged to product/design whether the trigger belongs in <code>cpass list</code>/<code>cpass add</code> terminal output instead (it already exists there — see <code>internal/cli/licensecmds.go</code>'s free-plan message).</p>
+        <div class="paywall-banner">
+          <div class="paywall-copy">
+            <p class="used">3 of 3 Secrets used</p>
+            <p class="pitch">Upgrade to Pro for unlimited Secrets — $9.99/mo</p>
+          </div>
+          <span class="btn btn-primary">INSERT COIN</span>
+        </div>
+
+        <h3>License Checkout Fields <span class="badge badge-free">REFERENCE ONLY</span></h3>
+        <div class="callout warn">
+          Stripe hosts the real card form. The real checkout (<code>/pricing</code>) posts only an optional email and redirects to Stripe-hosted Checkout — ClaudePass never collects or renders a card-number field, per Stripe's PCI model. This block is a spec-only mock, not a <code>&lt;form&gt;</code>; it can't be submitted.
+        </div>
+        <div class="checkout-mock">
+          <div class="field">
+            <span class="field-label">EMAIL</span>
+            <span class="field-mock">you@company.com</span>
+          </div>
+          <div class="field">
+            <span class="field-label">CARD NUMBER</span>
+            <span class="field-mock">4242 4242 4242 4242</span>
+          </div>
+          <p class="fine-print">Ed25519-signed license, checked entirely offline — a network blip never locks your Vault.</p>
+          <span class="btn btn-primary">CONTINUE →</span>
+        </div>
+      </section>
+
+      <!-- ============================== ICONOGRAPHY ============================== -->
+      <section class="brand-section" id="iconography">
+        <h2><span class="glyph">▶</span>Iconography</h2>
+        <p class="muted">Every SVG under <code>site/assets/icons/</code> — the seven named Tier-0 icons plus the two game sprites.</p>
+        <div class="icon-gallery">
+          <div class="icon-tile ink-accent"><img src="/assets/icons/icon-redaction-bar.svg" alt=""><span class="cap">icon-redaction-bar</span></div>
+          <div class="icon-tile"><img src="/assets/icons/icon-handle-tag.svg" alt=""><span class="cap">icon-handle-tag</span></div>
+          <div class="icon-tile"><img src="/assets/icons/icon-broker-seam.svg" alt=""><span class="cap">icon-broker-seam</span></div>
+          <div class="icon-tile"><img src="/assets/icons/icon-manifest-check.svg" alt=""><span class="cap">icon-manifest-check</span></div>
+          <div class="icon-tile ink-danger"><img src="/assets/icons/icon-command-refusal-bar.svg" alt=""><span class="cap">icon-command-refusal-bar</span></div>
+          <div class="icon-tile"><img src="/assets/icons/icon-exposed-flag.svg" alt=""><span class="cap">icon-exposed-flag</span></div>
+          <div class="icon-tile ink-accent"><img src="/assets/icons/icon-terminal-glyph.svg" alt=""><span class="cap">icon-terminal-glyph</span></div>
+          <div class="icon-tile"><img src="/assets/icons/player-tank.svg" alt=""><span class="cap">player-tank</span></div>
+          <div class="icon-tile"><img src="/assets/icons/intruder-tank-env.svg" alt=""><span class="cap">intruder-tank-env</span></div>
+        </div>
+
+        <h3>Excluded cliches — never used</h3>
+        <p class="muted">Enumerated in <code>CONTEXT.md</code>'s "Excluded icons" section and enforced by <code>internal/site/guardrail_test.go</code>, which fails <code>go test ./...</code> the moment a new SVG under <code>site/assets/</code> has a filename matching one of these.</p>
+        <ul>
+          <li>Padlock</li>
+          <li>Hoodie-Hacker Shield</li>
+          <li>Matrix-Rain</li>
+          <li>Sparkle / Starburst</li>
+          <li>Soft Rounded Keyhole</li>
+        </ul>
+      </section>
+
+      <!-- ============================== ACCESSIBILITY ============================== -->
+      <section class="brand-section" id="accessibility">
+        <h2><span class="glyph">▶</span>Accessibility</h2>
+        <p class="muted">Computed with a Python script (WCAG relative-luminance contrast ratio), not eyeballed. AA-normal needs 4.5:1; AA-large (≥18px, or ≥14px bold) needs 3:1.</p>
+        <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">Pairing</th><th scope="col">Ratio</th><th scope="col">AA normal</th><th scope="col">AA large</th></tr></thead>
+          <tbody>
+            <tr><td>text-hi on bg-void</td><td>16.84:1</td><td>PASS</td><td>PASS</td></tr>
+            <tr><td>text-hi on panel-bg</td><td>15.99:1</td><td>PASS</td><td>PASS</td></tr>
+            <tr><td>text-muted on panel-bg (incl. nav/footer links, 11px)</td><td>8.02:1</td><td>PASS</td><td>PASS</td></tr>
+            <tr><td>text-muted on bg-void</td><td>8.44:1</td><td>PASS</td><td>PASS</td></tr>
+            <tr><td>ember on bg-void</td><td>8.37:1</td><td>PASS</td><td>PASS</td></tr>
+            <tr><td>ember on panel-bg</td><td>7.94:1</td><td>PASS</td><td>PASS</td></tr>
+            <tr><td>ember-dim on panel-bg (icon-btn UI chrome only, never body text)</td><td>4.02:1</td><td>FAIL</td><td>PASS</td></tr>
+            <tr><td>signal-cyan on bg-void</td><td>13.43:1</td><td>PASS</td><td>PASS</td></tr>
+            <tr><td>alert-red on panel-bg</td><td>5.73:1</td><td>PASS</td><td>PASS</td></tr>
+            <tr><td>coin-yellow on panel-bg</td><td>15.17:1</td><td>PASS</td><td>PASS</td></tr>
+            <tr><td>color-text-on-accent on ember (Button Primary, Dark)</td><td>8.37:1</td><td>PASS</td><td>PASS</td></tr>
+            <tr><td>color-text-on-accent on alert-red (Button Danger, Dark)</td><td>6.03:1</td><td>PASS</td><td>PASS</td></tr>
+            <tr><td>steel on panel-bg (UI chrome only, never body text)</td><td>3.87:1</td><td>FAIL</td><td>PASS</td></tr>
+            <tr><td>light-fg on light-bg</td><td>17.45:1</td><td>PASS</td><td>PASS</td></tr>
+            <tr><td>light-fg on cream</td><td>16.50:1</td><td>PASS</td><td>PASS</td></tr>
+            <tr><td>light-theme-amber on light-bg</td><td>5.80:1</td><td>PASS</td><td>PASS</td></tr>
+            <tr><td>light-theme-amber on cream</td><td>5.48:1</td><td>PASS</td><td>PASS</td></tr>
+            <tr><td>color-text-on-accent on light-theme-amber (Button Primary, Light)</td><td>5.80:1</td><td>PASS</td><td>PASS</td></tr>
+            <tr><td>alert-red-dim on light-bg (color-danger, Light)</td><td>6.09:1</td><td>PASS</td><td>PASS</td></tr>
+            <tr><td>alert-red-dim on cream</td><td>5.76:1</td><td>PASS</td><td>PASS</td></tr>
+          </tbody>
+        </table>
+        </div>
+        <span class="scroll-hint">SCROLLS → the AA large column continues off-screen</span>
+        <p class="muted">
+          Two rows fail AA-normal, both by design rather than oversight: <strong>steel</strong> is documented as UI chrome only (borders, icon outlines) and never used as body text, so 3.87:1 never governs a text pairing. <strong>ember-dim</strong> on <code>panel-bg</code> sits at 4.02:1 — below AA-normal's 4.5:1 threshold — but the only remaining place it colors anything is the header's mute/CRT <code>.icon-btn</code> glyphs, which are UI chrome, not body text, so 3.87:1's neighbor threshold (3:1) is what governs it. <strong>Stage A4 fix:</strong> the nav-link and footer-link colour (11px labels) used to be ember-dim (4.02:1, a real AA-normal failure on real body-text-sized links) — both now use <code>color-text-secondary</code> (text-muted, 8.02:1/8.44:1 above), matching dc-24-6/comp-nav-header/canon-footer's own binding for nav and footer text.
+        </p>
+      </section>
+
+      <!-- ============================== TRADEMARK ============================== -->
+      <section class="brand-section" id="trademark">
+        <h2><span class="glyph">▶</span>Trademark</h2>
+
+        <div class="callout warn">
+          ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.
+        </div>
+        <p class="muted">Verbatim, used everywhere — footer minimum. Additional compatible caveat, used alongside it, not instead of it: "ClaudePass is an independent product; 'Claude' is a trademark of Anthropic, PBC, used here only to describe compatibility."</p>
+
+        <h3>One-word usage rule</h3>
+        <p><strong>CORRECT:</strong> ClaudePass — always one word, capital C and P, no space or hyphen.</p>
+        <p><strong>NEVER:</strong> "Claude Pass", "claude-pass", "ClaudPass".</p>
+
+        <h3>Amber, not terracotta</h3>
+        <p class="muted">ADR-0008: the hue sits in the amber-phosphor family of 1980s CRT monitors, not Anthropic's muted clay/rust terracotta — a deliberate, defensible distance, not a coincidence.</p>
+        <div class="tm-swatch-row">
+          <div class="tm-swatch"><div class="tm-swatch-fill ember"></div><p class="swatch-name">ClaudePass ember — #ff8a1f</p><p class="swatch-hex">hue ~29°, high sat, high light</p></div>
+          <div class="tm-swatch"><div class="tm-swatch-fill terracotta"></div><p class="swatch-name">Anthropic terracotta — #D97757</p><p class="swatch-hex">hue ~14–19°, lower sat/light</p></div>
+        </div>
+        <p class="muted">CIE76 ΔE between the two swatches (computed, Lab space): <strong>ΔE ≈ 36.4</strong> — a large, easily perceptible colour difference (anything above ~10 reads as a clearly different colour to a human eye), confirming the two are not the same hue family read at different exposures.</p>
+      </section>
+
+      <!-- ============================== VOICE & TONE ============================== -->
+      <section class="brand-section" id="voice-tone">
+        <h2><span class="glyph">▶</span>Voice &amp; Tone</h2>
+        <p class="muted">The 13 <code>CONTEXT.md</code> terms, copied verbatim — including each term's "avoid" list, since this internal reference is where that detail belongs (the public <a href="/docs">/docs</a> vocabulary drops it for readability).</p>
+        <dl class="term">
+          <dt>Secret</dt>
+          <dd>A sensitive value (API key, password, token, private key) that must never appear in an agent's context.<br><em>Avoid</em>: Credential, password (as the general term), key</dd>
+          <dt>Handle</dt>
+          <dd>An opaque name that refers to a Secret without revealing its value. The only form in which a Secret is visible to an Agent.<br><em>Avoid</em>: Reference, placeholder, alias, secret name</dd>
+          <dt>Agent</dt>
+          <dd>An AI coding session (Claude Code, Codex, or similar) whose context must be kept free of Secret values.<br><em>Avoid</em>: Model, assistant, AI, session</dd>
+          <dt>Broker</dt>
+          <dd>The local component that resolves a Handle into a Secret value at the moment a command runs, so the value reaches the destination process but not the Agent.<br><em>Avoid</em>: Vault, daemon, agent (in the 1Password/SSH sense), proxy</dd>
+          <dt>Context</dt>
+          <dd>Everything an Agent sees: prompts, tool results, and anything persisted from them (transcripts, logs, history).<br><em>Avoid</em>: Conversation, chat, window</dd>
+          <dt>Redaction</dt>
+          <dd>The Broker's replacement of a Secret value, in any recognisable encoding, with a marker in the output of a command before that output can reach an Agent.<br><em>Avoid</em>: Scrubbing, masking, filtering</dd>
+          <dt>Command Policy</dt>
+          <dd>The rules deciding whether a command an Agent wants to run may proceed: refusing commands that would reveal a Secret rather than use it, read Secrets from disk, or carry a raw Secret value. Applied both before a command runs and when the Broker injects.<br><em>Avoid</em>: Allowlist, blocklist, guard, hook rules</dd>
+          <dt>Vault</dt>
+          <dd>The encrypted local store, owned by ClaudePass, where Secrets live. The only source the Broker reads from.<br><em>Avoid</em>: Store, keychain, database, backend</dd>
+          <dt>Binding</dt>
+          <dd>How a Secret lands in a command's process: either as an environment variable holding the value, or as a temporary file whose path is placed in an environment variable and which is destroyed when the command exits. A Handle carries a default Binding; a command may override it.<br><em>Avoid</em>: Mapping, alias, export, mount</dd>
+          <dt>Manifest</dt>
+          <dd>A committed, per-project declaration of which Handles the project needs and their Bindings. Contains no Secret values and is safe to share.<br><em>Avoid</em>: Config, env file, profile, .env</dd>
+          <dt>Capture</dt>
+          <dd>Storing the output of a command directly into the Vault as a new Secret, so that a value born in a tool result never reaches an Agent.<br><em>Avoid</em>: Pipe-in, save output, record</dd>
+          <dt>Intercept</dt>
+          <dd>Catching a Secret value in a human's prompt before it reaches an Agent, moving it into the Vault, and erasing the prompt so the Agent only ever sees a Handle.<br><em>Avoid</em>: Scan, filter, prompt guard</dd>
+          <dt>Exposed</dt>
+          <dd>The state of a Secret whose value has entered an Agent's Context at least once. An Exposed Secret is treated as compromised and due for rotation.<br><em>Avoid</em>: Leaked, compromised, dirty, seen</dd>
+        </dl>
+      </section>
+
+    </div>
+  </div>
+  <div id="crt-overlay" class="crt-overlay page-wide" aria-hidden="true" hidden></div>
+</main>
+
+<footer class="arcade-footer">
+  <div class="wrap">
+    <nav aria-label="Footer">
+      <a href="/install">INSTALL</a>
+      <a href="/pricing">PRICING</a>
+      <a href="/docs">DOCS</a>
+      <a href="/security">SECURITY</a>
+      <a href="/privacy">PRIVACY</a>
+      <a href="/terms">TERMS</a>
+      <a href="/account">ACCOUNT</a>
+    </nav>
+    <p class="footer-legal">
+      ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.
+    </p>
+    <p class="footer-copyright">© 2026 ClaudePass. High scores live in your browser's localStorage only.</p>
+    <button id="crt-text-toggle" class="crt-text-toggle" type="button">CRT: ON</button>
+  </div>
+</footer>
+
+<script src="/js/site.js"></script>
+</body>
+</html>

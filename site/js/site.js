@@ -107,6 +107,82 @@
   }
 
   // ---------------------------------------------------------------
+  // Email field error state (pricing's optional Pro email, account's
+  // required reissue email). HTML5 constraint validation only —
+  // type="email" already treats an empty non-required field as
+  // valid, so this covers both "must be a real address if given" and
+  // "must be present and a real address". Registered before the
+  // Checkout Hand-off listener below on the same form element so an
+  // invalid address stops the submit (and the spinner/redirect state)
+  // via stopImmediatePropagation instead of racing it.
+  // ---------------------------------------------------------------
+  var emailValidatedForms = document.querySelectorAll("form.checkout-form");
+  for (var ef = 0; ef < emailValidatedForms.length; ef++) {
+    (function (form) {
+      var input = form.querySelector('input[type="email"]');
+      if (!input) return;
+      function clearError() {
+        input.removeAttribute("aria-invalid");
+        input.classList.remove("is-error");
+      }
+      function showError() {
+        input.setAttribute("aria-invalid", "true");
+        input.classList.add("is-error");
+      }
+      input.addEventListener("input", function () {
+        if (input.validity.valid) clearError();
+      });
+      form.addEventListener("submit", function (e) {
+        if (!input.validity.valid) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          showError();
+          input.focus();
+          return;
+        }
+        clearError();
+      });
+    })(emailValidatedForms[ef]);
+  }
+
+  // ---------------------------------------------------------------
+  // Checkout hand-off state (CLA-32 "Checkout Hand-off — Redirecting").
+  // Scoped to the real Stripe Checkout POST (action="/checkout"), not
+  // every form sharing the .checkout-form layout class (the /account
+  // reissue form also uses it, and "TAKING YOU TO SECURE CHECKOUT"
+  // would be the wrong label there). Plain form POST, no fetch/AJAX —
+  // the swapped label only needs to hold until the browser navigates
+  // away to Stripe.
+  // ---------------------------------------------------------------
+  var checkoutForms = document.querySelectorAll('form.checkout-form[action="/checkout"]');
+  for (var cf = 0; cf < checkoutForms.length; cf++) {
+    (function (form) {
+      form.addEventListener("submit", function () {
+        if (form.classList.contains("is-submitting")) return;
+        var btn = form.querySelector('button[type="submit"]');
+        form.classList.add("is-submitting");
+        if (btn) {
+          btn.disabled = true;
+          btn.innerHTML = '<span class="spinner spinner-inline" aria-hidden="true"></span> TAKING YOU TO SECURE CHECKOUT…';
+        }
+      });
+    })(checkoutForms[cf]);
+  }
+
+  // ---------------------------------------------------------------
+  // Command Policy alert dismiss control (.cp-alert "✕" — /security).
+  // ---------------------------------------------------------------
+  var cpDismissBtns = document.querySelectorAll(".cp-alert-dismiss");
+  for (var cd = 0; cd < cpDismissBtns.length; cd++) {
+    (function (btn) {
+      btn.addEventListener("click", function () {
+        var alertEl = btn.closest(".cp-alert");
+        if (alertEl) alertEl.hidden = true;
+      });
+    })(cpDismissBtns[cd]);
+  }
+
+  // ---------------------------------------------------------------
   // Scroll-aware mobile install bar (landing page only, under 720px
   // — CSS also gates visibility, this just drives the class + copy).
   // ---------------------------------------------------------------

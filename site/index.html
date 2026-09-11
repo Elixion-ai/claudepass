@@ -10,7 +10,7 @@
      soon as the stylesheet parses — a preload here just raced Chrome's
      "preloaded but not used within a few seconds" heuristic on every
      load even though the same URL+crossorigin got consumed correctly. -->
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230e0a06'/%3E%3Crect x='7' y='0' width='2' height='4' fill='%23ff8a1f'/%3E%3Crect x='6' y='4' width='4' height='1' fill='%23ff8a1f'/%3E%3Crect x='3' y='5' width='10' height='1' fill='%23ff8a1f'/%3E%3Crect x='0' y='6' width='3' height='8' fill='%23ff8a1f'/%3E%3Crect x='3' y='6' width='10' height='8' fill='%23ff8a1f'/%3E%3Crect x='13' y='6' width='3' height='8' fill='%23ff8a1f'/%3E%3Crect x='3' y='14' width='10' height='1' fill='%23ff8a1f'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23ff8a1f'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%230e0a06'/%3E%3Crect x='12' y='6' width='2' height='5' fill='%230e0a06'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/retro.css">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="ClaudePass">
@@ -30,13 +30,9 @@
   <div class="wrap">
     <a class="brand" href="/">
       <svg class="brand-glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-        <rect x="7" y="0" width="2" height="4" fill="currentColor"/>
-        <rect x="6" y="4" width="4" height="1" fill="currentColor"/>
-        <rect x="3" y="5" width="10" height="1" fill="currentColor"/>
-        <rect x="0" y="6" width="3" height="8" fill="currentColor"/>
-        <rect x="3" y="6" width="10" height="8" fill="currentColor"/>
-        <rect x="13" y="6" width="3" height="8" fill="currentColor"/>
-        <rect x="3" y="14" width="10" height="1" fill="currentColor"/>
+        <rect x="0" y="0" width="16" height="16" fill="currentColor"/>
+        <circle cx="8" cy="8" r="3" fill="var(--bg-void)"/>
+        <rect x="12" y="6" width="2" height="5" fill="var(--bg-void)"/>
       </svg>
       CLAUDEPASS
     </a>
@@ -60,7 +56,7 @@
       <h1 class="visually-hidden">ClaudePass: your AI agent sees a Handle, never the Secret.</h1>
       <span class="hero-eyebrow">CLAUDEPASS PRESENTS</span>
       <p class="marquee" aria-hidden="true">VAULT<br>DEFENSE</p>
-      <p class="hero-lede">Your Handles are inside. The intruders only get the name — never the value.</p>
+      <p class="hero-lede">Your Handles — like <span class="handle-pill t-code-mono-small">stripe/live</span> — are inside. The intruders only get the name — never the value.</p>
 
       <div class="cabinet">
         <span class="cabinet-bolt tl" aria-hidden="true"></span>
@@ -106,8 +102,8 @@
             tank (amber) defends the Vault from intruder tanks labelled
             <code>env</code>, <code>cat .env</code>, <code>echo $KEY</code> and
             <code>prompt-inject</code>. Destroy one and it pops
-            <code>[REDACTED]</code>; let one through and the Vault flashes
-            <code>[REDACTED:stripe/live]</code> and you lose a life — the
+            <span class="redacted redacted--kill">[REDACTED]</span>; let one through and the Vault flashes
+            <span class="redacted redacted--breach">[REDACTED:stripe/live]</span> and you lose a life — the
             value is never shown, win or lose.
           </p>
           <div class="cta-row">
@@ -191,6 +187,12 @@
       <span class="section-eyebrow">INSERT COIN</span>
       <h2 class="section-h2"><span class="glyph">▶</span>INSTALL</h2>
       <p class="section-lede">One command. No account required for Free.</p>
+      <div class="terminal-titlebar">
+        <span class="terminal-dot red" aria-hidden="true"></span>
+        <span class="terminal-dot yellow" aria-hidden="true"></span>
+        <span class="terminal-dot cyan" aria-hidden="true"></span>
+        <span class="terminal-title">install.sh</span>
+      </div>
       <div class="terminal">
         <div class="terminal-line">
           <code>brew install softorize/tap/cpass</code>
@@ -212,6 +214,7 @@
       <div class="pricing-grid">
         <div class="plan cab-panel">
           <div class="plan-accent"></div>
+          <span class="badge badge-free">FREE</span>
           <h3>FREE — $0</h3>
           <ul>
             <li>Up to 3 Secrets</li>
@@ -226,6 +229,7 @@
         </div>
         <div class="plan cab-panel pro">
           <div class="plan-accent"></div>
+          <span class="badge badge-pro">PRO</span>
           <h3>PRO — $9.99/MO</h3>
           <ul>
             <li>Unlimited Secrets</li>
@@ -234,9 +238,10 @@
             <li>A network blip never locks your Vault</li>
             <li>Cancel anytime — your token keeps working through its grace period</li>
           </ul>
-          <form class="checkout-form" method="POST" action="/checkout">
+          <form class="checkout-form" method="POST" action="/checkout" novalidate>
             <label class="visually-hidden" for="pro-email">Email address (optional)</label>
-            <input id="pro-email" type="email" name="email" placeholder="you@example.com (optional)" autocomplete="email">
+            <input id="pro-email" class="input" type="email" name="email" placeholder="you@example.com (optional)" autocomplete="email" aria-describedby="pro-email-error">
+            <span class="field-error" id="pro-email-error">Enter a valid email address, or leave it blank.</span>
             <button class="btn btn-primary" type="submit">CONTINUE →</button>
           </form>
         </div>
@@ -245,19 +250,27 @@
   </section>
 
   <section id="security">
-    <div class="wrap trust-panel">
+    <div class="wrap">
       <span class="section-eyebrow">OPERATOR MANUAL</span>
-      <h2 class="section-h2"><span class="glyph">▶</span>CLOSED SOURCE. NO TELEMETRY.</h2>
-      <p class="section-lede">
-        ClaudePass is closed-source software with a paid plan from day
-        one — the same model 1Password and LastPass use, not open-core.
-        Since you can't read the code yourself, trust has to come from
-        documentation instead: exactly what the Vault, the Broker, both
-        hooks, and the license check do and touch, every environment
-        variable and on-disk path, and a plain no-telemetry statement
-        beyond the license check.
-      </p>
-      <p><a href="/security">READ THE FULL SECURITY BREAKDOWN →</a></p>
+      <div class="trust-panel">
+        <div class="trust-panel-icons" aria-hidden="true">
+          <span class="trust-panel-glyph">V</span>
+          <span class="trust-panel-glyph">CP</span>
+        </div>
+        <div class="trust-panel-copy">
+          <h2 class="section-h2"><span class="glyph">▶</span>SECURITY, BY DESIGN</h2>
+          <p class="section-lede">
+            ClaudePass is closed-source software with a paid plan from day
+            one — the same model 1Password and LastPass use, not open-core.
+            Since you can't read the code yourself, trust has to come from
+            documentation instead: exactly what the Vault, the Broker, both
+            hooks, and the license check do and touch, every environment
+            variable and on-disk path, and a plain no-telemetry statement
+            beyond the license check.
+          </p>
+          <p><a href="/security">READ THE FULL SECURITY BREAKDOWN →</a></p>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -277,6 +290,7 @@
       <a href="/security">SECURITY</a>
       <a href="/privacy">PRIVACY</a>
       <a href="/terms">TERMS</a>
+      <a href="/account">ACCOUNT</a>
     </nav>
     <p class="footer-legal">
       ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.

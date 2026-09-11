@@ -55,3 +55,15 @@ _Avoid_: Scan, filter, prompt guard
 **Exposed**:
 The state of a Secret whose value has entered an Agent's Context at least once. An Exposed Secret is treated as compromised and due for rotation.
 _Avoid_: Leaked, compromised, dirty, seen
+
+## Excluded icons
+
+Generic security/hacker clichés this brand never uses, in any iconography, on any surface (Figma iconography-root's "Excluded Clichés" QA row and trademark-guardrails' "DON'T" row; see `site/brand/`'s Iconography section for the enforceable version of this list):
+
+- Padlock
+- Hoodie-Hacker Shield
+- Matrix-Rain
+- Sparkle / Starburst
+- Soft Rounded Keyhole
+
+The Vault + `[REDACTED]` bar is the mark of security here, never a padlock or shield glyph. A new SVG under `site/assets/` whose filename contains `lock`, `padlock`, `shield`, `hoodie`, `hacker`, `matrix`, `sparkle`, `starburst`, or `keyhole` should be treated as a guardrail violation on sight — flag it in review rather than merging it.

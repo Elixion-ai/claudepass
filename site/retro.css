@@ -15,8 +15,12 @@
 :root {
   color-scheme: dark;
 
-  /* Palette — see DESIGN spec. A faint green cast keeps bg-void from
-     reading as generic dark-mode black. */
+  /* ---- Primitives (figma-tokens.json "Primitives" collection, Value
+     mode) — see DESIGN spec. A faint green cast keeps bg-void from
+     reading as generic dark-mode black. Every one of these names is
+     kept even after the semantic layer below exists: the Color
+     collection's Dark/Light modes are defined as aliases OF these,
+     never the reverse. ---- */
   --bg-void: #0e0a06;
   --panel-bg: #17110b;
   --panel-edge-hi: #3a2f24;
@@ -36,12 +40,171 @@
   --light-bg: #f8f6f3;
   --light-fg: #14110d;
 
+  /* Added to match figma-tokens.json Primitives exactly (previously
+     missing from the live site). track-dark/track-dark-red are not
+     consumed by any rule yet — they exist so a future progress-track
+     component can reach for a primitive instead of a fresh literal. */
+  --light-theme-amber: #9a4a0c;
+  --cream: #f6efe6;
+  --sand: #d9cfc2;
+  --track-dark: #4d2a0e;
+  --track-dark-red: #5c1a1a;
+
+  /* Documentation-only comparison swatch (site/brand Trademark section,
+     "Amber, Not Terracotta") — Anthropic's terracotta is never a usable
+     UI colour in this system, so it is deliberately NOT part of the
+     Primitives or Color collections (trademark-guardrails.md: "none —
+     literal comparison swatch"). Kept here, inside the token block, so
+     this is the one place its literal is allowed to live. */
+  --reference-terracotta: #d97757;
+
+  /* ---- Semantic Color layer (figma-tokens.json "Color" collection,
+     Dark mode). Names are the exact Figma WEB code syntax. Every value
+     here is `var(--<primitive>)` — never a raw hex — so the primitive
+     stays the single source of truth. The Light mode of this same
+     collection is redefined, primitive-for-primitive, in the
+     `.inner-page main` override block further down (scoped to main so
+     the header/footer of inner pages stay Dark, exactly like today). ---- */
+  --color-bg-canvas: var(--bg-void);
+  --color-bg-surface: var(--panel-bg);
+  --color-border: var(--panel-edge-hi);
+  --color-border-shadow: var(--panel-edge-lo);
+  --color-text-primary: var(--text-hi);
+  --color-text-secondary: var(--text-muted);
+  --color-text-on-accent: var(--bg-void);
+  --color-accent: var(--ember);
+  --color-accent-dim: var(--ember-dim);
+  --color-danger: var(--alert-red);
+  --color-danger-dim: var(--alert-red-dim);
+  --color-signal: var(--signal-cyan);
+  --color-coin: var(--coin-yellow);
+  --color-steel: var(--steel);
+  /* Alias of color-danger in both modes (figma-tokens.json note) —
+     defining it as var(--color-danger) rather than duplicating the
+     primitive means it tracks color-danger's own Light override
+     automatically via the cascade, with no separate entry needed
+     below. */
+  --color-state-exposed: var(--color-danger);
+  --color-success: var(--signal-cyan);
+  --color-warning-exposed: var(--alert-red);
+
+  /* ---- Spacing (figma-tokens.json "Spacing", Value mode) ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  /* ---- Radius (figma-tokens.json "Radius"). radius-none is the
+     default everywhere; radius-pill is the one deliberate exception
+     (Handle Pill, Badge — stage A2). sm/md/lg are not applied
+     speculatively. ---- */
+  --radius-none: 0;
+  --radius-sm: 2px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  /* ---- Elevation (figma-tokens.json "Elevation"). focus-ring-width
+     is 3px, not the 2px in the current figma-tokens.json export: the
+     3px value is the shipped, owner-reviewed one and Figma has since
+     been updated to match — 3px wins here by explicit decision. ---- */
+  --bevel-width: 2px;
+  --focus-ring-width: 3px;
+  --focus-ring-offset: 2px;
+
+  /* ---- Motion (figma-tokens.json "Motion"). --ease-out is kept as a
+     compatibility alias of --ease-out-arcade (same curve, old name). ---- */
+  --duration-instant: 80ms;
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 320ms;
+  --duration-loop: 900ms;
+  --ease-out-arcade: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out-loop: cubic-bezier(0.45, 0, 0.55, 1);
+  --ease-out: var(--ease-out-arcade);
+
+  /* ---- Typography (figma-tokens.json "Typography"). font-display/
+     font-body are the pre-existing names (kept); font-family-* are the
+     exact Figma names, defined as aliases of the same stacks. ---- */
   --font-display: "Press Start 2P", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --font-body: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --font-family-display: var(--font-display);
+  --font-family-body: var(--font-body);
+  --font-family-mono: var(--font-body);
+  --font-weight-regular: 400;
+  --font-weight-bold: 700;
 
-  --focus-ring: 3px solid var(--signal-cyan);
+  /* ---- Type Scale (figma-tokens.json "Type Scale") ---- */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 16px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+  --text-3xl: 32px;
+  --text-4xl: 48px;
 
-  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  /* ---- Derived overlays — NOT in Figma. Also recorded as "derived,
+     not in Figma" in site/tokens.json. These exist only so the few
+     spots that need a translucent black/white/ember wash over an
+     existing fill have one named source instead of a fresh rgba()
+     literal each time. ---- */
+  --bevel-hi-overlay: rgb(255 255 255 / .35);
+  --bevel-lo-overlay: rgb(0 0 0 / .35);
+  --glow-accent: rgb(255 138 31 / .35);
+  --crt-scanline: rgb(0 0 0 / .35);
+  --overlay-scrim: rgb(10 14 10 / .72);
+  --overlay-scrim-hover: rgb(10 14 10 / .6);
+
+  --focus-ring: var(--focus-ring-width) solid var(--color-signal);
+}
+
+/* ---------- Inner pages: Light-mode Color override ----------
+   Scoped to `.inner-page main` (not `.inner-page`) so the sticky
+   header and footer on inner pages keep inheriting the Dark values
+   from :root exactly like today — only the long-form content area
+   switches to Figma's Light mode column. Only the Color tokens whose
+   Light value actually differs from Dark are redefined; every other
+   Color token (color-signal, color-steel, color-success, color-
+   danger-dim, color-state-exposed) is identical in both modes or is
+   itself an alias, so it falls through to the :root definition. */
+.inner-page main {
+  --color-bg-canvas: var(--light-bg);
+  --color-bg-surface: var(--cream);
+  --color-border: var(--sand);
+  --color-border-shadow: var(--sand);
+  --color-text-primary: var(--light-fg);
+  --color-text-secondary: var(--light-fg);
+  --color-text-on-accent: var(--light-bg);
+  --color-accent: var(--light-theme-amber);
+  --color-accent-dim: var(--light-theme-amber);
+  --color-danger: var(--alert-red-dim);
+  --color-warning-exposed: var(--alert-red-dim);
+  --color-coin: var(--ember-dim);
+  /* color-signal (signal-cyan) has no Light alias — Figma's own Focus
+     Ring spec (atom-focus-ring.md) says it is unusable on light
+     backgrounds (1.36:1) and to use color-accent instead until the
+     owner binds a real Light value. color-accent is already
+     light-theme-amber in this scope. */
+  --focus-ring: var(--focus-ring-width) solid var(--color-accent);
+}
+/* Dark composites (.terminal, .cp-alert, .cp-toast, .trust-panel) keep
+   their own background/colour regardless of the surrounding page theme
+   (see the "DARK COMPOSITES" comments above/below) — their focus ring
+   has to follow the same rule. ".inner-page main" above repaints
+   --focus-ring to light-theme-amber for the light page around them,
+   which clears only 2.995:1 against these components' own dark
+   panel-bg (below the 3:1 non-text minimum). Re-pin it to the dark-page
+   signal-cyan ring for any focusable control nested in one of them. */
+.inner-page main .terminal,
+.inner-page main .cp-alert,
+.inner-page main .cp-toast,
+.inner-page main .trust-panel {
+  --focus-ring: var(--focus-ring-width) solid var(--color-signal);
 }
 
 /* ---------- Reset ---------- */
@@ -63,19 +226,23 @@ body {
   background: var(--bg-void);
   color: var(--text-hi);
   font-family: var(--font-body);
-  font-size: 16px;
+  font-size: var(--text-base);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
 }
 
 img { max-width: 100%; }
 
-* { border-radius: 0 !important; }
+/* radius-none by default everywhere; radius-pill is the one deliberate
+   exception (Handle Pill, Badge — stage A2) and needs a plain
+   descendant-selector override to win, so no forced-priority declaration
+   is used here. */
+* { border-radius: var(--radius-none); }
 
 a { color: var(--signal-cyan); }
 a:hover { color: var(--ember); }
 
-h1, h2, h3 {
+h1, h2, h3, h4.section-h2 {
   font-family: var(--font-display);
   text-transform: uppercase;
   color: var(--ember);
@@ -86,6 +253,17 @@ h1, h2, h3 {
 p { margin: 0.9em 0; }
 
 code, pre, kbd { font-family: var(--font-body); }
+
+/* Dark-mode Code Chip (atoms-root-v1 20:3) — a one-off inline `<code>`
+   mention (Handle examples, `[REDACTED:<handle>]` markers) outside a
+   `<pre>` block. Distinct from `.terminal` (a whole panel) and from
+   `.handle-pill` (stage A2, Handle names specifically): this is for
+   any bare inline code on a dark page. */
+code:not(pre code) {
+  background: var(--color-bg-surface);
+  color: var(--color-accent);
+  padding: var(--space-1) var(--space-2);
+}
 
 .visually-hidden {
   position: absolute;
@@ -104,7 +282,7 @@ button:focus-visible,
 input:focus-visible,
 [tabindex]:focus-visible {
   outline: var(--focus-ring);
-  outline-offset: 2px;
+  outline-offset: var(--focus-ring-offset);
 }
 
 .skip-link {
@@ -114,12 +292,12 @@ input:focus-visible,
   background: var(--panel-bg);
   color: var(--ember);
   font-family: var(--font-display);
-  font-size: 11px;
+  font-size: 11px; /* off-scale by design: classic arcade micro-label size, not on the 8-step type scale — kept literal per W08 decision, not snapped to --text-xs */
   text-transform: uppercase;
   padding: 12px 16px;
   border: 2px solid var(--ember);
   z-index: 1000;
-  transition: top 150ms var(--ease-out);
+  transition: top var(--duration-fast) var(--ease-out);
 }
 .skip-link:focus {
   top: 8px;
@@ -128,13 +306,91 @@ input:focus-visible,
   .skip-link { transition: none; }
 }
 
+/* ---------- Text styles (foundations-typography 50:2 "Text Styles"
+   table) — 12 named utility classes, each bound to the type-scale and
+   font tokens. A handful of the Figma-specified sizes (10/14px) sit off
+   the 8-step scale; those stay literal with a comment, matching every
+   other off-scale rule already in this file, rather than distorting the
+   scale to fit them. ---------- */
+.t-display-wordmark-hero {
+  font-family: var(--font-family-display);
+  font-size: var(--text-4xl);
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+.t-display-wordmark-nav {
+  font-family: var(--font-family-display);
+  font-size: 14px; /* off-scale by design: matches the shipped .brand wordmark size */
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+.t-display-h1 {
+  font-family: var(--font-family-display);
+  /* Figma's Display/H1 specimen is 24px, which sits between --text-xl
+     (22) and --text-2xl (28); --text-xl already is the shipped H1 size
+     (.inner-page .content h1) so this utility matches it rather than
+     introducing a third H1 size. */
+  font-size: var(--text-xl);
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+.t-display-h2 {
+  font-family: var(--font-family-display);
+  font-size: var(--text-base);
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+.t-display-button {
+  font-family: var(--font-family-display);
+  font-size: var(--text-xs);
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+.t-display-hud-label {
+  font-family: var(--font-family-display);
+  font-size: 10px; /* off-scale by design: classic arcade micro-label size, matches every other shipped HUD-label */
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+.t-display-hud-score {
+  font-family: var(--font-family-display);
+  font-size: var(--text-base);
+  line-height: 1.2;
+}
+.t-label {
+  font-family: var(--font-family-display);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+.t-body {
+  font-family: var(--font-family-body);
+  font-size: var(--text-base);
+  line-height: 1.6;
+}
+.t-body-small {
+  font-family: var(--font-family-body);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.t-code-inline {
+  font-family: var(--font-family-mono);
+  font-size: 14px; /* off-scale by design: matches .handle-pill / dc-66:94's Code/Inline size */
+  line-height: 1.5;
+}
+.t-code-mono-small {
+  font-family: var(--font-family-mono);
+  font-size: var(--text-xs);
+  line-height: 1.42;
+}
+
 /* ---------- Bevel mixin (via box-shadow, kept as a class) ---------- */
 
 .bevel {
   background: var(--panel-bg);
   box-shadow:
-    inset 2px 2px 0 var(--panel-edge-hi),
-    inset -2px -2px 0 var(--panel-edge-lo);
+    inset var(--bevel-width) var(--bevel-width) 0 var(--panel-edge-hi),
+    inset calc(var(--bevel-width) * -1) calc(var(--bevel-width) * -1) 0 var(--panel-edge-lo);
 }
 
 /* ---------- Layout shell ---------- */
@@ -187,12 +443,24 @@ input:focus-visible,
   gap: 18px;
   flex-wrap: nowrap;
   overflow-x: auto;
+  /* Flex items default to min-width:auto, i.e. their content's
+     max-content width when nothing inside can wrap — without this the
+     nav can never shrink below the sum of its link widths, so
+     overflow-x:auto above never gets a chance to engage and the whole
+     header flex row (and the document with it) is forced wider than
+     the viewport instead. min-width:0 lets the nav actually shrink and
+     scroll internally as a last resort below the 640px breakpoint. */
+  min-width: 0;
 }
 .arcade-nav a {
   font-family: var(--font-display);
-  font-size: 11px;
+  font-size: 11px; /* off-scale by design: classic arcade micro-label size, not on the 8-step type scale — kept literal per W08 decision, not snapped to --text-xs */
   text-transform: uppercase;
-  color: var(--ember-dim);
+  /* color-text-secondary (text-muted), matching dc-24-6/comp-nav-header's
+     "Nav links: var(--color-text-secondary)" spec — NOT ember-dim, which
+     at this 11px non-bold size clears only 4.02:1 on panel-bg and fails
+     AA-normal body text (4.5:1). text-muted clears 8.02:1 here. */
+  color: var(--color-text-secondary);
   text-decoration: none;
   padding: 4px 2px;
   white-space: nowrap;
@@ -222,7 +490,7 @@ input:focus-visible,
   color: var(--ember-dim);
   border: 2px solid var(--ember-dim);
   cursor: pointer;
-  font-size: 16px;
+  font-size: var(--text-base);
   line-height: 1;
   transition: none;
 }
@@ -230,7 +498,50 @@ input:focus-visible,
 .icon-btn[aria-pressed="true"] { color: var(--signal-cyan); border-color: var(--signal-cyan); }
 .icon-btn:active {
   transform: translateY(2px);
-  box-shadow: inset 2px 2px 0 var(--panel-edge-lo);
+  box-shadow: inset var(--bevel-width) var(--bevel-width) 0 var(--panel-edge-lo);
+}
+
+/* Below ~640px the brand + nav + header-tools no longer fit on one
+   56px row without either clipping the nav's un-wrapped intrinsic
+   width past the viewport edge or hiding nav links inside a
+   scrollable strip with no visible affordance. Drop the nav to its
+   own full-width second row instead — every link stays reachable
+   without a scroll gesture, and nothing pushes the document wider
+   than the viewport.
+
+   This block MUST come after the plain .arcade-header/.brand/
+   .arcade-nav/.header-tools/.icon-btn rules above: a real-emulation
+   screenshot at 390px (shot.sh, not devtools responsive-mode) caught
+   SECURITY hanging 6px past the nav's own right edge, 14px from the
+   viewport edge instead of the intended 20px — root cause was this
+   media query previously sitting BEFORE the plain `.arcade-nav { gap:
+   18px; flex-wrap: nowrap; overflow-x: auto; }` rule, so at equal
+   specificity the later unconditional rule silently re-won flex-wrap,
+   gap and overflow-x back from this override at every width, mobile
+   included. Same specificity + source order, not a media-query bug. */
+@media (max-width: 640px) {
+  .arcade-header,
+  .arcade-header .wrap {
+    height: auto;
+  }
+  .arcade-header .wrap {
+    flex-wrap: wrap;
+    row-gap: 8px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+  .arcade-nav {
+    order: 3;
+    flex-basis: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    row-gap: 6px;
+    column-gap: 8px;
+    overflow-x: visible;
+  }
+  .arcade-nav a {
+    font-size: 10px;
+  }
 }
 
 /* ---------- Buttons ---------- */
@@ -243,28 +554,28 @@ input:focus-visible,
   min-height: 44px;
   padding: 12px 20px;
   font-family: var(--font-display);
-  font-size: 12px;
+  font-size: var(--text-xs);
   text-transform: uppercase;
   text-decoration: none;
   cursor: pointer;
   border: none;
   background: var(--panel-bg);
   color: var(--ember);
-  box-shadow: inset 2px 2px 0 var(--panel-edge-hi), inset -2px -2px 0 var(--panel-edge-lo);
+  box-shadow: inset var(--bevel-width) var(--bevel-width) 0 var(--panel-edge-hi), inset calc(var(--bevel-width) * -1) calc(var(--bevel-width) * -1) 0 var(--panel-edge-lo);
   transition: none;
 }
 .btn:hover { text-decoration: none; }
 .btn:active {
   transform: translateY(2px);
-  box-shadow: inset -2px -2px 0 var(--panel-edge-hi), inset 2px 2px 0 var(--panel-edge-lo);
+  box-shadow: inset calc(var(--bevel-width) * -1) calc(var(--bevel-width) * -1) 0 var(--panel-edge-hi), inset var(--bevel-width) var(--bevel-width) 0 var(--panel-edge-lo);
 }
 .btn-primary {
   color: var(--bg-void);
   background: var(--ember);
-  box-shadow: inset 2px 2px 0 #ffc07a, inset -2px -2px 0 #a34f0e;
+  box-shadow: inset var(--bevel-width) var(--bevel-width) 0 var(--bevel-hi-overlay), inset calc(var(--bevel-width) * -1) calc(var(--bevel-width) * -1) 0 var(--bevel-lo-overlay);
 }
 .btn-primary:active {
-  box-shadow: inset -2px -2px 0 #ffc07a, inset 2px 2px 0 #a34f0e;
+  box-shadow: inset calc(var(--bevel-width) * -1) calc(var(--bevel-width) * -1) 0 var(--bevel-hi-overlay), inset var(--bevel-width) var(--bevel-width) 0 var(--bevel-lo-overlay);
 }
 .btn-secondary {
   color: var(--signal-cyan);
@@ -273,6 +584,248 @@ input:focus-visible,
 .btn-danger-outline {
   color: var(--alert-red);
   border: 2px solid var(--alert-red);
+}
+.btn-danger {
+  color: var(--color-text-on-accent);
+  background: var(--color-danger);
+  box-shadow: inset var(--bevel-width) var(--bevel-width) 0 var(--bevel-hi-overlay), inset calc(var(--bevel-width) * -1) calc(var(--bevel-width) * -1) 0 var(--bevel-lo-overlay);
+}
+.btn-danger:active {
+  box-shadow: inset calc(var(--bevel-width) * -1) calc(var(--bevel-width) * -1) 0 var(--bevel-hi-overlay), inset var(--bevel-width) var(--bevel-width) 0 var(--bevel-lo-overlay);
+}
+/* Disabled — dc-64:33 Button Style×State. [disabled] covers real
+   <button>/<input>; .is-disabled covers an <a class="btn"> CTA, which
+   has no native disabled state. */
+.btn[disabled],
+.btn.is-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ---------- Handle Pill (atoms-root-v1 22:21; canon-worked-examples
+   "Handle Pill — stripe/live") — every Handle name shown as a Handle,
+   not just any inline code. ---------- */
+.handle-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-pill);
+  border: var(--bevel-width) solid var(--color-steel);
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+  font-size: 14px; /* Code/Inline text style */
+  line-height: 1.5;
+  white-space: nowrap;
+}
+/* Copied state (site/brand only today — no live page triggers it yet,
+   since no page currently wires a copy affordance onto a Handle Pill
+   itself; .copy-btn's own COPIED label, above, is the shipped
+   equivalent for a terminal-line command). Border/text shift to
+   color-accent, mirroring the copy-btn hover treatment. */
+.handle-pill.is-copied {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+/* ---------- Badge (atoms-root-v1 22:29; dc-25:42) — Free/Pro/Exposed.
+   Pro is deliberately ember (color-accent), never signal-cyan, per the
+   Worked Examples canon note. ---------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-family-display);
+  font-size: 10px; /* Display/HUD-Label — off-scale by design, matches every other shipped HUD-label size */
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.badge-free {
+  background: var(--color-bg-surface);
+  color: var(--color-text-secondary);
+  border: var(--bevel-width) solid var(--color-text-secondary);
+}
+.badge-pro {
+  background: var(--color-bg-surface);
+  color: var(--color-accent);
+  border: var(--bevel-width) solid var(--color-accent);
+}
+.badge-exposed {
+  background: var(--color-danger);
+  color: var(--color-text-on-accent);
+}
+
+/* ---------- Redacted chip (canon-vault-defense-motif "Vault States"):
+   Idle shows the live Handle sample untouched, Kill pops a plain
+   [REDACTED] on the coin-yellow "destroyed" color, Breach is the
+   danger-red "got through" state naming the handle that leaked.
+   Deliberately the raw dark primitives, not the (page-themed) semantic
+   layer — same rule as .terminal above: a Vault-state color code is a
+   fixed part of the game's palette and must read the same color-coded
+   way on every page, light or dark. --color-coin/--color-danger's
+   light-mode values (ember-dim/alert-red-dim) don't clear AA text
+   contrast against either light or dark ink at this chip's small size,
+   which the raw dark primitives here sidestep entirely. ---------- */
+.redacted {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-1) var(--space-3);
+  font-family: var(--font-family-mono);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.redacted--idle {
+  background: var(--panel-bg);
+  color: var(--text-hi);
+  /* color-steel, not color-border/panel-edge-hi: that same-hue edge
+     measures only 1.44-1.51:1 against panel-bg/bg-void (fails the 3:1
+     WCAG 1.4.11 UI-boundary minimum), so the chip would have no visible
+     border on a dark page. color-steel clears 3.87-4.08:1 against both,
+     UI-only per the accessibility contract (never used as body text
+     here). */
+  border: 1px solid var(--color-steel);
+}
+.redacted--kill {
+  background: var(--coin-yellow);
+  color: var(--bg-void);
+}
+/* No border: a same-hue alert-red-dim-on-alert-red stroke measured
+   2.0:1 (fails the 3:1 UI minimum), and no single border colour clears
+   3:1 against both the alert-red fill and every surrounding surface
+   this chip appears on (dark bg-void and light cream alike). Breach
+   still reads as the "louder" state without a stroke: its label names
+   the leaked handle, so it is always wider than Kill's bare
+   `[REDACTED]`. */
+.redacted--breach {
+  background: var(--alert-red);
+  color: var(--bg-void);
+}
+
+/* ---------- Command-Policy-Block Alert / Toast — both reuse the real
+   shipped refusal string verbatim (internal/policy/policy.go), never a
+   shortened stand-in. Both are DARK COMPOSITES: every colour below is a
+   raw dark primitive, never a `--color-*` semantic token, so the card
+   reads with the same ink on a light `.inner-page` (/security, /brand)
+   as it would on a dark page — like .terminal, it does not follow the
+   surrounding page theme. Alert follows dc-66:94's red-card spec
+   (border card, "COMMAND POLICY" label, ✕ dismiss glyph); Toast follows
+   composites-root-v1 26:25's Command Policy Toast spec (cyan border, a
+   square "CP" glyph badge, one un-wrapped line) — the two do not share
+   a colour treatment. */
+.cp-alert {
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: var(--panel-bg);
+  border: 2px solid var(--alert-red);
+}
+.cp-alert-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.cp-alert-label {
+  font-family: var(--font-family-display);
+  font-size: var(--text-xs);
+  color: var(--alert-red);
+  text-transform: uppercase;
+}
+.cp-alert-dismiss {
+  background: none;
+  border: none;
+  color: var(--alert-red);
+  font-size: var(--text-base);
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px;
+}
+.cp-alert-message {
+  font-family: var(--font-family-mono);
+  font-size: 14px; /* Code/Inline-adjacent, matches dc-66:94's 14px body */
+  color: var(--text-hi);
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+.cp-toast {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: 100%;
+  padding: var(--space-2) var(--space-4) var(--space-2) var(--space-2);
+  background: var(--panel-bg);
+  border: 2px solid var(--signal-cyan);
+  font-family: var(--font-family-mono);
+  font-size: var(--text-sm);
+  color: var(--text-hi);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.cp-toast-badge {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-void);
+  border: var(--bevel-width) solid var(--signal-cyan);
+  color: var(--signal-cyan);
+  font-family: var(--font-family-display);
+  font-size: 10px; /* Display/HUD-Label */
+}
+.cp-alert[hidden] { display: none; }
+
+/* ---------- Install spinner (motion-principles "Install spinner") — a
+   redaction-bar shape with an ember seam sweeping across it. ---------- */
+.spinner {
+  display: inline-block;
+  position: relative;
+  width: 100%;
+  max-width: 260px;
+  height: 16px;
+  background: var(--color-bg-surface);
+  /* color-steel, not color-border: the moving ember fill (.spinner::after,
+     below) already carries the progress signal well past AA, but the
+     track's own frame is part of the role="img" indicator's required
+     boundary under 1.4.11 (3:1 non-text minimum) — color-border clears
+     only 1.35-1.44:1 in both themes, color-steel clears 3.14-4.48:1. */
+  border: 1px solid var(--color-steel);
+  overflow: hidden;
+}
+.spinner::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -30%;
+  width: 30%;
+  height: 100%;
+  background: var(--color-accent);
+  animation: seam-sweep var(--duration-loop) var(--ease-in-out-loop) infinite;
+}
+@keyframes seam-sweep {
+  0% { left: -30%; }
+  100% { left: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner::after { animation: none; left: 0; width: 100%; }
+}
+/* Small inline variant — embedded in the checkout button's submitting
+   label (CLA-32 "Checkout Hand-off — Redirecting", site.js). */
+.spinner.spinner-inline {
+  width: 60px;
+  max-width: 60px;
+  height: 10px;
+  vertical-align: -1px;
+}
+form.checkout-form.is-submitting button[type="submit"] {
+  cursor: not-allowed;
 }
 
 .cta-row {
@@ -290,7 +843,7 @@ input:focus-visible,
   position: relative;
   background: var(--panel-bg);
   border: 2px solid var(--ember-dim);
-  box-shadow: inset 2px 2px 0 var(--panel-edge-hi), inset -2px -2px 0 var(--panel-edge-lo);
+  box-shadow: inset var(--bevel-width) var(--bevel-width) 0 var(--panel-edge-hi), inset calc(var(--bevel-width) * -1) calc(var(--bevel-width) * -1) 0 var(--panel-edge-lo);
   padding: 24px 20px 20px;
 }
 .cab-panel::before {
@@ -303,7 +856,7 @@ input:focus-visible,
   border-right: 2px solid var(--ember-dim);
 }
 .cab-panel h3 {
-  font-size: 13px;
+  font-size: var(--text-sm);
   margin-bottom: 12px;
   color: var(--ember);
 }
@@ -313,7 +866,7 @@ input:focus-visible,
   color: var(--text-muted);
   margin-bottom: 6px;
 }
-.cab-panel p { color: var(--text-hi); font-size: 15px; }
+.cab-panel p { color: var(--text-hi); font-size: 15px; /* off-scale by design: sits between --text-xs(12) and --text-base(16); not on the 8-step type scale — kept literal per W08 decision */ }
 
 .grid3 {
   display: grid;
@@ -331,10 +884,14 @@ input:focus-visible,
    devices only. */
 @media (hover: hover) and (pointer: fine) {
   .cab-panel {
-    transition: filter 120ms linear;
+    transition: filter var(--duration-fast) linear;
   }
   .cab-panel:hover {
     filter: brightness(1.12);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cab-panel { transition: none; }
+    .cab-panel:hover { filter: none; }
   }
 }
 
@@ -345,21 +902,28 @@ input:focus-visible,
   font-family: var(--font-display);
   font-size: 10px;
   text-transform: uppercase;
-  color: var(--text-muted);
+  /* --color-text-secondary, not the raw --text-muted primitive: this
+     class is used both on the dark landing page and (site/brand) inside
+     .inner-page main, where the semantic token resolves to --light-fg
+     instead of a dark-mode grey that reads at ~2.1:1 on a light canvas.
+     Behaviour on the dark page is unchanged (--color-text-secondary is
+     var(--text-muted) there too). */
+  color: var(--color-text-secondary);
   margin-bottom: 10px;
 }
 .section-h2 {
-  font-size: 18px;
+  font-size: var(--text-lg);
   margin-bottom: 8px;
 }
 .section-h2 .glyph { color: var(--ember); margin-right: 8px; }
 @media (min-width: 720px) {
-  .section-h2 { font-size: 22px; }
+  .section-h2 { font-size: var(--text-xl); }
 }
 .section-lede {
   font-family: var(--font-body);
-  font-size: 16px;
-  color: var(--text-muted);
+  font-size: var(--text-base);
+  /* same --color-text-secondary reasoning as .section-eyebrow above. */
+  color: var(--color-text-secondary);
   max-width: 65ch;
   margin: 10px 0 26px;
 }
@@ -368,6 +932,42 @@ section { padding: 48px 0; }
 section + section { border-top: 2px solid var(--panel-edge-hi); }
 
 /* ---------- Terminal / code panels ---------- */
+
+/* Titlebar chrome (dc-62:97 Terminal Window) — sits directly above a
+   .terminal block; the block's own top border reads as the titlebar's
+   bottom divider so the pair looks like one bordered window. */
+.terminal-titlebar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 10px 12px;
+  margin: 14px 0 0;
+  background: var(--bg-void);
+  border: 1px solid var(--ember-dim);
+  border-bottom: none;
+}
+.terminal-titlebar + .terminal,
+.terminal-titlebar + pre { margin-top: 0; }
+.terminal-dot {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  display: inline-block;
+  /* Documented radius-pill exception (docs/WEB-HANDOFF.md): Figma's
+     Install Terminal Block draws the traffic-light trio as circles. */
+  border-radius: var(--radius-pill);
+}
+.terminal-dot.red { background: var(--alert-red); }
+.terminal-dot.yellow { background: var(--coin-yellow); }
+.terminal-dot.cyan { background: var(--signal-cyan); }
+.terminal-title {
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  /* the raw dark primitive, not --color-text-secondary: like .terminal
+     itself, the titlebar always reads as a terminal, dark on every page. */
+  color: var(--text-muted);
+  margin-left: 4px;
+}
 
 .terminal {
   background: var(--bg-void);
@@ -388,6 +988,12 @@ section + section { border-top: 2px solid var(--panel-edge-hi); }
 .terminal-line code {
   white-space: pre;
   overflow-x: auto;
+  /* Cancel the global inline Code Chip treatment: this <code> already
+     sits inside a full .terminal panel, so it must not get a second,
+     nested background/padding chip on top of it. */
+  background: none;
+  color: inherit;
+  padding: 0;
 }
 .terminal-line + .terminal-line {
   border-top: 1px dashed var(--panel-edge-hi);
@@ -429,12 +1035,12 @@ section + section { border-top: 2px solid var(--panel-edge-hi); }
   text-align: center;
   margin: 0 auto 10px;
   max-width: 20ch;
-  text-shadow: 0 0 12px rgba(51, 255, 102, 0.35);
+  text-shadow: 0 0 12px var(--glow-accent);
 }
 .hero-lede {
   text-align: center;
   color: var(--text-hi);
-  font-size: 16px;
+  font-size: var(--text-base);
   max-width: 56ch;
   margin: 0 auto 28px;
 }
@@ -454,7 +1060,7 @@ section + section { border-top: 2px solid var(--panel-edge-hi); }
   position: absolute;
   width: 10px; height: 10px;
   background: var(--steel);
-  box-shadow: inset 1px 1px 0 #a3a8ad, inset -1px -1px 0 #35393d;
+  box-shadow: inset 1px 1px 0 var(--panel-edge-hi), inset -1px -1px 0 var(--panel-edge-lo);
 }
 .cabinet-bolt.tl { top: 6px; left: 6px; }
 .cabinet-bolt.tr { top: 6px; right: 6px; }
@@ -465,7 +1071,7 @@ section + section { border-top: 2px solid var(--panel-edge-hi); }
   position: relative;
   display: flex;
   justify-content: center;
-  background: #000;
+  background: var(--panel-edge-lo);
   border: 2px solid var(--bg-void);
   line-height: 0;
 }
@@ -490,7 +1096,7 @@ section + section { border-top: 2px solid var(--panel-edge-hi); }
   justify-content: center;
   text-align: center;
   padding: 20px;
-  background: rgba(10, 14, 10, 0.72);
+  background: var(--overlay-scrim);
   color: var(--coin-yellow);
   font-family: var(--font-display);
   font-size: clamp(10px, 3vw, 14px);
@@ -498,7 +1104,7 @@ section + section { border-top: 2px solid var(--panel-edge-hi); }
   border: none;
   width: 100%;
 }
-.canvas-overlay-prompt:hover { background: rgba(10, 14, 10, 0.6); }
+.canvas-overlay-prompt:hover { background: var(--overlay-scrim-hover); }
 .canvas-overlay-prompt[hidden] { display: none; }
 
 .crt-overlay {
@@ -507,8 +1113,8 @@ section + section { border-top: 2px solid var(--panel-edge-hi); }
   pointer-events: none;
   background: repeating-linear-gradient(
     0deg,
-    rgba(0, 0, 0, 0.35) 0px,
-    rgba(0, 0, 0, 0.35) 1px,
+    var(--crt-scanline) 0px,
+    var(--crt-scanline) 1px,
     transparent 1px,
     transparent 3px
   );
@@ -520,6 +1126,12 @@ section + section { border-top: 2px solid var(--panel-edge-hi); }
   position: fixed;
   z-index: 5;
   opacity: 0.15;
+}
+/* The scanline pattern plus multiply blend reads as a faint flicker to
+   some viewers even with no transition running on it — reduced-motion
+   drops it to inert instead of just leaving it "technically static". */
+@media (prefers-reduced-motion: reduce) {
+  .crt-overlay { opacity: 0; mix-blend-mode: normal; }
 }
 
 /* ---------- HUD ---------- */
@@ -533,7 +1145,7 @@ section + section { border-top: 2px solid var(--panel-edge-hi); }
   max-width: 640px;
   margin: 14px auto 0;
   font-family: var(--font-display);
-  font-size: 11px;
+  font-size: 11px; /* off-scale by design: classic arcade micro-label size, not on the 8-step type scale — kept literal per W08 decision, not snapped to --text-xs */
   color: var(--ember);
 }
 .hud dt {
@@ -575,7 +1187,7 @@ section + section { border-top: 2px solid var(--panel-edge-hi); }
   background: var(--panel-bg);
   border: 2px solid var(--signal-cyan);
   color: var(--signal-cyan);
-  font-size: 18px;
+  font-size: var(--text-lg);
   touch-action: none;
   cursor: pointer;
 }
@@ -590,7 +1202,7 @@ section + section { border-top: 2px solid var(--panel-edge-hi); }
   border-radius: 0;
   background: var(--alert-red);
   color: var(--bg-void);
-  border: 2px solid #7a1414;
+  border: 2px solid var(--alert-red-dim);
   font-family: var(--font-display);
   font-size: 10px;
   touch-action: none;
@@ -610,14 +1222,14 @@ section + section { border-top: 2px solid var(--panel-edge-hi); }
 }
 .hiscore-ticker .score-line {
   font-family: var(--font-display);
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--coin-yellow);
   min-height: 16px;
 }
 .hiscore-ticker .caption {
   font-family: var(--font-body);
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--text-sm);
   margin-top: 8px;
 }
 
@@ -627,7 +1239,7 @@ section + section { border-top: 2px solid var(--panel-edge-hi); }
   max-width: 480px;
   margin: 20px auto 0;
   font-family: var(--font-display);
-  font-size: 11px;
+  font-size: 11px; /* off-scale by design: classic arcade micro-label size, not on the 8-step type scale — kept literal per W08 decision, not snapped to --text-xs */
 }
 .hiscore-table th, .hiscore-table td {
   text-align: left;
@@ -655,19 +1267,12 @@ section + section { border-top: 2px solid var(--panel-edge-hi); }
 }
 .plan.pro { border-color: var(--signal-cyan); border-width: 3px; }
 .plan.pro .plan-accent { background: var(--signal-cyan); }
-.plan .price {
-  font-family: var(--font-display);
-  font-size: 24px;
-  color: var(--text-hi);
-  margin: 10px 0 4px;
-}
-.plan .price small { font-size: 11px; color: var(--text-muted); }
 .plan ul { list-style: none; padding: 0; margin: 18px 0 24px; }
 .plan li {
   padding-left: 1.6em;
   position: relative;
   margin: 10px 0;
-  font-size: 15px;
+  font-size: 15px; /* off-scale by design: sits between --text-xs(12) and --text-base(16); not on the 8-step type scale — kept literal per W08 decision */
 }
 .plan li::before {
   content: "▸";
@@ -682,24 +1287,87 @@ form.checkout-form {
   gap: 12px;
   margin-top: 4px;
 }
+/* Generalized Input (dc-64:41) — Default/Focus/Error. .checkout-form's
+   own email field is one caller of this; .input is the reusable class
+   for any other input the site adds. */
+.input,
 form.checkout-form input[type="email"] {
+  width: 100%;
   padding: 12px;
   background: var(--bg-void);
   color: var(--text-hi);
   border: 1px solid var(--steel);
   font-family: var(--font-body);
-  font-size: 15px;
+  font-size: 15px; /* off-scale by design: sits between --text-xs(12) and --text-base(16); not on the 8-step type scale — kept literal per W08 decision */
 }
+.input:focus-visible,
 form.checkout-form input[type="email"]:focus-visible {
   outline: var(--focus-ring);
   outline-offset: 1px;
   border-color: var(--signal-cyan);
 }
+.input.is-error,
+.input[aria-invalid="true"],
+form.checkout-form input[aria-invalid="true"] {
+  border-width: 2px;
+  border-color: var(--color-danger);
+}
+.field-error {
+  display: none;
+  color: var(--color-danger);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  margin: -6px 0 0;
+}
+.input[aria-invalid="true"] + .field-error,
+form.checkout-form input[aria-invalid="true"] + .field-error {
+  display: block;
+}
 form.checkout-form button { cursor: pointer; }
 
-/* ---------- Trust panel ---------- */
-
-.trust-panel { max-width: 72ch; margin: 0 auto; text-align: left; }
+/* ---------- Trust panel (composites-root-v1 26:15 Security Trust
+   Panel) — two square glyph badges (V vault, CP command policy) in
+   signal-cyan outline beside the security copy. Figma shows a DARK
+   cabinet surface, not a page-themed card: every colour here is a raw
+   dark primitive, never a `--color-*` semantic token, so the panel
+   (and its cyan glyphs) render identically — and clear AA — on the
+   dark landing page and on every light `.inner-page` (/security,
+   /brand) alike, exactly like .terminal/.cab-panel's own bevel. */
+.trust-panel {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-6);
+  max-width: 72ch;
+  margin: 0 auto;
+  text-align: left;
+  background: var(--panel-bg);
+  border: 2px solid var(--ember-dim);
+  box-shadow: inset var(--bevel-width) var(--bevel-width) 0 var(--panel-edge-hi), inset calc(var(--bevel-width) * -1) calc(var(--bevel-width) * -1) 0 var(--panel-edge-lo);
+  padding: var(--space-5);
+}
+.trust-panel-icons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  flex: none;
+}
+.trust-panel-glyph {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-void);
+  border: var(--bevel-width) solid var(--signal-cyan);
+  color: var(--signal-cyan);
+  font-family: var(--font-family-display);
+  font-size: var(--text-xs);
+}
+.trust-panel-copy { flex: 1 1 auto; min-width: 0; }
+@media (max-width: 640px) {
+  .trust-panel { flex-direction: column; align-items: center; text-align: center; }
+  .trust-panel-icons { flex-direction: row; }
+}
 
 /* ---------- Footer ---------- */
 
@@ -717,22 +1385,25 @@ form.checkout-form button { cursor: pointer; }
 }
 .arcade-footer nav a {
   font-family: var(--font-display);
-  font-size: 11px;
+  font-size: 11px; /* off-scale by design: classic arcade micro-label size, not on the 8-step type scale — kept literal per W08 decision, not snapped to --text-xs */
   text-transform: uppercase;
-  color: var(--ember-dim);
+  /* color-text-secondary (text-muted): canon-footer.md binds the footer's
+     text to color-text-secondary too, and it clears AA (8.02:1/8.44:1)
+     where ember-dim at this 11px non-bold size does not (4.02:1). */
+  color: var(--color-text-secondary);
   text-decoration: none;
 }
 .arcade-footer nav a:hover { color: var(--ember); }
 .footer-legal {
   font-family: var(--font-body);
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   max-width: 72ch;
   line-height: 1.6;
 }
 .footer-copyright {
   font-family: var(--font-body);
-  font-size: 12px;
+  font-size: var(--text-xs);
   /* text-muted, not steel: steel is chrome/structure, not text — at
      12px on panel-bg it clears WCAG AA (8.28:1) where steel would not
      (3.80:1, large-text-only). */
@@ -744,7 +1415,7 @@ form.checkout-form button { cursor: pointer; }
   border: none;
   color: var(--text-muted);
   font-family: var(--font-body);
-  font-size: 12px;
+  font-size: var(--text-xs);
   cursor: pointer;
   padding: 0;
   margin-top: 14px;
@@ -768,7 +1439,7 @@ form.checkout-form button { cursor: pointer; }
   border-top: 2px solid var(--signal-cyan);
   opacity: 0;
   transform: translateY(100%);
-  transition: opacity 150ms ease-out, transform 150ms ease-out;
+  transition: opacity var(--duration-fast) ease-out, transform var(--duration-fast) ease-out;
 }
 .mobile-install-bar.is-visible {
   opacity: 1;
@@ -783,7 +1454,7 @@ form.checkout-form button { cursor: pointer; }
 }
 .mobile-install-bar a {
   font-family: var(--font-display);
-  font-size: 11px;
+  font-size: 11px; /* off-scale by design: classic arcade micro-label size, not on the 8-step type scale — kept literal per W08 decision, not snapped to --text-xs */
   color: var(--bg-void);
   background: var(--signal-cyan);
   padding: 10px 14px;
@@ -792,7 +1463,7 @@ form.checkout-form button { cursor: pointer; }
 }
 .mobile-install-bar .bar-score {
   font-family: var(--font-display);
-  font-size: 11px;
+  font-size: 11px; /* off-scale by design: classic arcade micro-label size, not on the 8-step type scale — kept literal per W08 decision, not snapped to --text-xs */
   color: var(--coin-yellow);
   white-space: nowrap;
   overflow: hidden;
@@ -805,6 +1476,9 @@ form.checkout-form button { cursor: pointer; }
   0%, 49% { opacity: 1; }
   50%, 100% { opacity: 0; }
 }
+/* 1s, not var(--duration-loop) (900ms): this mirrors the classic
+   1Hz arcade "insert coin" blink rate, not the game's attract-mode
+   loop timing — the two loops are deliberately unrelated. */
 .blink {
   animation: blink-step 1s steps(1) infinite;
 }
@@ -815,44 +1489,77 @@ form.checkout-form button { cursor: pointer; }
 /* ---------- noscript fallback ---------- */
 
 .noscript-panel { max-width: 640px; margin: 0 auto; }
-.noscript-panel p { font-size: 15px; }
+.noscript-panel p { font-size: 15px; /* off-scale by design: sits between --text-xs(12) and --text-base(16); not on the 8-step type scale — kept literal per W08 decision */ }
 
 /* ---------- Inner pages: lighter treatment ---------- */
 
 .inner-page main {
-  background: var(--light-bg);
-  color: var(--light-fg);
+  background: var(--color-bg-canvas);
+  color: var(--color-text-primary);
 }
 .inner-page .content {
   padding: 44px 0 64px;
 }
 .inner-page .content h1 {
-  color: var(--light-fg);
-  font-size: 22px;
+  color: var(--color-text-primary);
+  font-size: var(--text-xl);
   margin-bottom: 14px;
 }
 .inner-page .content h2 {
-  color: var(--light-fg);
-  font-size: 18px;
+  color: var(--color-text-primary);
+  font-size: var(--text-lg);
   margin: 2em 0 0.6em;
 }
 .inner-page .content h2:first-of-type { margin-top: 0; }
+.inner-page .content h2 img,
+.inner-page .content h2 .heading-icon {
+  vertical-align: -5px;
+  margin-right: 6px;
+}
+/* Bare content h3 (site/brand's component sub-headings — every other
+   inner page's h3 lives inside .cab-panel, which already sets its own
+   color/size below). Without this, h3 falls through to the plain h1/h2/
+   h3 reset above, which is the literal ember primitive on every page —
+   on a light/cream background that clears only ~2.1:1, both failing AA
+   and violating the "never swap ember in on light pages" contract. */
+.inner-page .content h3 {
+  color: var(--color-accent);
+  font-size: var(--text-base);
+  margin: 1.8em 0 0.5em;
+}
+.inner-page .content h3:first-of-type { margin-top: 0.6em; }
 .inner-page .content p,
 .inner-page .content li {
-  color: var(--light-fg);
-  font-size: 16px;
+  color: var(--color-text-primary);
+  font-size: var(--text-base);
   line-height: 1.6;
 }
 .inner-page .content .lede {
   font-size: 17px;
-  color: #4a3f33;
+  color: var(--color-text-secondary);
   max-width: 65ch;
 }
-.inner-page .content a { color: #0a6e8a; }
-.inner-page .content a:hover { color: #084f63; }
+/* De-emphasized captions (site/brand and every long-form page's fine-
+   print asides). color-text-secondary, not the raw --text-muted
+   primitive: on a Light .inner-page main, color-text-secondary resolves
+   to light-fg (Figma's Light column has no separate muted tone), so the
+   smaller size is what carries the de-emphasis there; on Dark contexts
+   elsewhere on the site color-text-secondary is text-muted, which does
+   the whole job on its own. Either way this guarantees AA (never the
+   raw text-muted-on-sand pairing, which clears only 1.52:1). */
+.inner-page .content .muted {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+.inner-page .content a:not(.btn) { color: var(--color-accent); }
+.inner-page .content a:not(.btn):hover { color: var(--color-accent-dim); }
 .inner-page .content .terminal,
 .inner-page .content pre {
-  background: #0d120d;
+  /* Deliberately the dark primitives, not the (now light) semantic
+     layer: an inline code/terminal block reads as a terminal on every
+     page, light or dark — it does not follow the surrounding page
+     theme. */
+  background: var(--bg-void);
   color: var(--ember);
   border: 1px solid var(--ember-dim);
   padding: 14px 16px;
@@ -860,30 +1567,95 @@ form.checkout-form button { cursor: pointer; }
   margin: 1em 0;
 }
 .inner-page .content code {
-  background: #f6efe6;
-  color: #9a4a0c;
+  background: var(--color-bg-surface);
+  color: var(--color-accent);
   padding: 0.15em 0.4em;
   font-size: 0.92em;
 }
 .inner-page .content pre code { background: none; color: inherit; padding: 0; }
+/* Without this, `.inner-page .content code` above (2 classes + type)
+   out-specifies `.terminal-line code` (1 class + type) and re-applies
+   the inline Code Chip pill (background/padding) inside a .terminal on
+   every light .inner-page (e.g. /install's curl command clips mid-word
+   inside the chip's padding at narrow widths). Cancel it again here,
+   at higher specificity, exactly like the pre-code rule just above. */
+.inner-page .content .terminal-line code { background: none; color: inherit; padding: 0; }
 .inner-page .content .cab-panel {
-  background: #fff;
-  border-color: #d9cfc2;
-  color: var(--light-fg);
-  box-shadow: inset 2px 2px 0 #fff, inset -2px -2px 0 #e6ddd1;
+  background: var(--color-bg-surface);
+  border-color: var(--color-border);
+  color: var(--color-text-primary);
+  box-shadow: inset var(--bevel-width) var(--bevel-width) 0 var(--color-bg-canvas), inset calc(var(--bevel-width) * -1) calc(var(--bevel-width) * -1) 0 var(--color-border);
 }
-.inner-page .content .cab-panel h3 { color: #9a4a0c; }
-.inner-page .content .cab-panel p { color: var(--light-fg); }
+/* Restores .cab-panel h3's own size/spacing (font-size: text-sm,
+   margin-bottom only) against the generic ".inner-page .content h3"
+   rule above, which would otherwise win on specificity and resize every
+   cab-panel heading (pricing cards, account page) sitewide. */
+.inner-page .content .cab-panel h3 { color: var(--color-accent); font-size: var(--text-sm); margin: 0 0 12px; }
+.inner-page .content .cab-panel p { color: var(--color-text-primary); }
+/* .cab-kicker has no live use inside a light .inner-page today (only
+   site/index.html's dark landing-page cab-panels use it, unaffected by
+   this scope), but every other .cab-panel child got this override —
+   close the gap pre-emptively so a future light-page kicker doesn't
+   inherit the raw --text-muted primitive (2.05-2.17:1 on cream/canvas,
+   below the 4.5:1 minimum for this small caption text). */
+.inner-page .content .cab-panel .cab-kicker { color: var(--color-text-secondary); }
+/* .trust-panel is a dark cabinet on every page (see the rule itself,
+   above) — its background/border/glyphs never follow the semantic
+   Color layer, so its copy can't either: on a light .inner-page,
+   ".content h2"/".content p" above would otherwise repaint the
+   heading and lede as --light-fg (near-black), unreadable on the
+   panel's --panel-bg. Raw dark primitives here, same reasoning as the
+   .cab-panel overrides just above. */
+.inner-page .content .trust-panel-copy h2,
+.inner-page .content .trust-panel-copy h4 { color: var(--ember); }
+.inner-page .content .trust-panel-copy p { color: var(--text-hi); }
+/* Same trap, same fix, for the Command-Policy-Block Alert's message:
+   it is a bare <p>, so ".inner-page .content p" above (2 classes + a
+   type) would otherwise out-specify ".cp-alert-message" (1 class, no
+   type) and repaint it --light-fg on every light .inner-page — the
+   near-invisible dark-text-on-dark-card bug this pass fixes. */
+.inner-page .content .cp-alert-message { color: var(--text-hi); }
+/* Same trap again, missed for two more raw dark-literal components that
+   only ever get nested inside .content on site/brand's reference page:
+   the Hi-Score Row (caption is a bare <p>, header cells are bare <th>)
+   and the Dark footer's legal paragraph (.footer-legal, also a bare
+   <p>). Without these, ".content p"/".content th" above repaint them
+   --light-fg on top of the components' own --panel-bg, which is the
+   same near-invisible bug fixed above for .cab-panel/.trust-panel-copy/
+   .cp-alert-message. */
+.inner-page .content .hiscore-ticker .caption { color: var(--text-muted); }
+.inner-page .content .hiscore-table th { color: var(--text-muted); }
+.inner-page .content .hiscore-table td { color: var(--ember); }
+.inner-page .content .hiscore-table td.score { color: var(--coin-yellow); }
+.inner-page .content .footer-legal { color: var(--text-muted); }
+/* The Nav Header and Footer — Dark reference demos on site/brand also
+   embed the live nav/footer markup inside .content for documentation
+   purposes. ".content a:not(.btn)" below (3 classes) outranks
+   ".arcade-nav a" / ".arcade-footer nav a" (1 class + type) and repaints
+   their links --color-accent, which on a light .inner-page is
+   light-theme-amber — 2.995:1 against these components' own dark
+   panel-bg, under the 4.5:1 AA-normal minimum for this 11px link text.
+   Pin them back to the raw dark-primitive text-muted/ember pair every
+   other instance of this nav/footer uses. */
+.inner-page .content .arcade-nav a,
+.inner-page .content .arcade-footer nav a { color: var(--text-muted); }
+.inner-page .content .arcade-nav a:hover,
+.inner-page .content .arcade-nav a:focus-visible,
+.inner-page .content .arcade-footer nav a:hover { color: var(--ember); }
 .inner-page .content dl.term dt {
   font-family: var(--font-display);
-  font-size: 12px;
+  font-size: var(--text-xs);
   text-transform: uppercase;
-  color: #9a4a0c;
+  color: var(--color-accent);
   margin-top: 1.4em;
+}
+.inner-page .content dl.term dt img {
+  vertical-align: -4px;
+  margin-right: 4px;
 }
 .inner-page .content dl.term dd {
   margin: 0.3em 0 0;
-  color: #4a3f33;
+  color: var(--color-text-secondary);
 }
 .inner-page .content table {
   border-collapse: collapse;
@@ -893,42 +1665,55 @@ form.checkout-form button { cursor: pointer; }
 .inner-page .content th, .inner-page .content td {
   text-align: left;
   padding: 10px 12px;
-  border-bottom: 1px solid #d9cfc2;
+  border-bottom: 1px solid var(--color-border);
   vertical-align: top;
 }
 .inner-page .content th {
-  color: #6b5f52;
+  color: var(--color-text-secondary);
   font-family: var(--font-display);
   font-size: 10px;
   text-transform: uppercase;
 }
 .inner-page .content .callout {
-  border: 1px solid #d9cfc2;
-  background: #f6efe6;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-surface);
   padding: 16px 18px;
   margin: 1.4em 0;
-  font-size: 15px;
+  font-size: 15px; /* off-scale by design: sits between --text-xs(12) and --text-base(16); not on the 8-step type scale — kept literal per W08 decision */
 }
-.inner-page .content .callout.warn { border-color: var(--alert-red-dim); }
-.inner-page .arcade-header,
-.inner-page .arcade-footer { position: sticky; }
-.inner-page .arcade-footer { position: static; }
-
-.status-404 { text-align: center; padding: 20px 0; }
-.status-404 .code {
+.inner-page .content .callout.warn { border-color: var(--color-danger); }
+.status-404, .status-500 { text-align: center; padding: 20px 0; }
+.status-404 .code, .status-500 .code {
   font-family: var(--font-display);
-  font-size: 48px;
-  color: var(--ember);
+  font-size: var(--text-4xl);
   margin-bottom: 6px;
 }
-.status-404 .redacted-line {
+.status-404 .code { color: var(--ember); }
+/* Distinct from the 404's ember: red reads as "something broke" rather
+   than "that page doesn't exist" — the two are deliberately not the same
+   color even though the layout is identical. */
+.status-500 .code { color: var(--alert-red); }
+.status-404 .redacted-line, .status-500 .redacted-line {
   font-family: var(--font-body);
-  color: var(--text-muted);
+  /* color-text-secondary, not the raw --text-muted primitive: both
+     404.html and 500.html are always `.inner-page` (Light mode), where
+     text-muted-on-light-bg clears only ~2.17:1 — a real AA failure that
+     was live on both shipped pages. color-text-secondary resolves to
+     light-fg here (17.45:1 on light-bg), and would fall back to
+     text-muted (8.44:1 on bg-void) if this class were ever reused on a
+     Dark page. */
+  color: var(--color-text-secondary);
   margin-bottom: 22px;
 }
-.inner-page .status-404 .code { color: #9a4a0c; }
+.inner-page .status-404 .code { color: var(--color-accent); }
+.inner-page .status-500 .code { color: var(--color-danger); }
 
 /* ---------- Checkout status pages ---------- */
+/* Used by the license service's own HTML responses
+   (services/license/internal/pages): every GET/POST /license, /checkout
+   and /reissue state that isn't the full "ready" page reuses this one
+   narrow, centered treatment instead of the wide .content flow the docs
+   and account pages use. */
 
 .status-panel {
   max-width: 560px;
@@ -936,3 +1721,318 @@ form.checkout-form button { cursor: pointer; }
   text-align: center;
   padding: 36px 28px;
 }
+.status-panel h1 { margin-bottom: 14px; }
+/* dl.term (site/docs) is normally full-width; inside a centered
+   .status-panel its dt/dd pairs read better left-aligned, so the "plan"
+   / "account" summary on the license-ready page doesn't inherit the
+   panel's text-align: center. */
+.status-panel dl.term {
+  text-align: left;
+  max-width: 340px;
+  margin: 20px auto;
+}
+
+/* =========================================================================
+   Brand / living style guide (site/brand/index.html ONLY)
+   ---------------------------------------------------------------------
+   Every rule below exists solely to render the style-guide page's token
+   and component gallery — no other page references these classes. Every
+   colour here is a var() of a primitive or semantic token already
+   defined above; nothing here introduces a new literal (the one
+   documentation-only exception, --reference-terracotta, is declared
+   inside :root, above, not here). ========================================= */
+
+/* Re-applies the Color collection's Dark mode inside a Light .inner-page
+   main, so the Canon/Palette section can show both modes side by side
+   without a second page. Mirrors :root's own semantic layer exactly. */
+.brand-dark {
+  --color-bg-canvas: var(--bg-void);
+  --color-bg-surface: var(--panel-bg);
+  --color-border: var(--panel-edge-hi);
+  --color-border-shadow: var(--panel-edge-lo);
+  --color-text-primary: var(--text-hi);
+  --color-text-secondary: var(--text-muted);
+  --color-text-on-accent: var(--bg-void);
+  --color-accent: var(--ember);
+  --color-accent-dim: var(--ember-dim);
+  --color-danger: var(--alert-red);
+  --color-danger-dim: var(--alert-red-dim);
+  --color-coin: var(--coin-yellow);
+  --color-warning-exposed: var(--alert-red);
+  --color-state-exposed: var(--alert-red);
+  --focus-ring: var(--focus-ring-width) solid var(--color-signal);
+  background: var(--color-bg-canvas);
+  color: var(--color-text-primary);
+  padding: var(--space-5);
+}
+
+/* W22: the Light footer is documented here only — every shipped page
+   uses the Dark .arcade-footer unconditionally. This is a static
+   reference rendering, not a live theme variant. */
+.footer-light-demo {
+  background: var(--light-bg);
+  color: var(--light-fg);
+  border-top: 2px solid var(--sand);
+  padding: 30px 20px 36px;
+}
+.footer-light-demo nav { display: flex; flex-wrap: wrap; gap: 16px 22px; margin-bottom: 16px; }
+.footer-light-demo nav a {
+  font-family: var(--font-display);
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--light-theme-amber);
+  text-decoration: none;
+}
+.footer-light-demo p {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--light-fg);
+  max-width: 72ch;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.brand-toc { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 18px 0 36px; }
+.brand-toc a { font-family: var(--font-family-mono); font-size: var(--text-sm); }
+.brand-section { margin: 0 0 56px; }
+
+.spec-row { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; margin: 18px 0; }
+/* flex-basis 260px + min-width:min(260px,100%) + overflow-x:auto:
+   several specimens inside a .spec-item are inherently wider than a
+   390px viewport (a 48px wordmark span, a Toast's unbroken refusal
+   string) and need to scroll inside their own item rather than
+   widening the page. A bare `min-width: 0` (no floor at all) used to
+   sit here — with two items sharing one .spec-row that let flexbox
+   shrink BOTH of them down to near-nothing instead of wrapping either
+   one to its own line (e.g. the Command-Policy Alert/Toast pair
+   rendered as an illegibly thin sliver at 390px, each getting maybe a
+   fifth of the row). A 260px basis forces two-per-row content to wrap
+   to one-per-line on a phone, where it then grows to the full item
+   width via flex-grow — min(260px,100%) keeps that floor from ever
+   itself forcing the page wider than the viewport. */
+.spec-item {
+  display: flex; flex-direction: column; gap: 10px; align-items: flex-start;
+  flex: 1 1 260px; min-width: min(260px, 100%); max-width: 100%; overflow-x: auto;
+}
+.spec-item .cap { font-family: var(--font-family-mono); font-size: var(--text-xs); color: var(--color-text-secondary); }
+
+/* Scroll-affordance caption for specimens/tables that are, by design,
+   wider than a narrow viewport and scroll inside their own box rather
+   than widening the page (.spec-item above, .terminal, .table-scroll).
+   Without this, a mobile reader has no way to discover that the
+   visibly cut-off content continues off-screen — it just looks broken.
+   Uses "SCROLLS →" rather than the ◀▶ triangle glyphs: this class sets
+   font-family-mono (the *system* monospace stack — SF Mono/Menlo/
+   Consolas, not the self-hosted Press Start 2P subset), and U+25C0/
+   U+25B6 do not render reliably there (tofu in some stacks) the way
+   they do in the display font. → (U+2192) is plain, widely supported,
+   and already confirmed present in the Press Start 2P subset too. */
+.scroll-hint {
+  display: block;
+  font-family: var(--font-family-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  margin-top: 6px;
+}
+
+/* Palette swatches (Canon section) */
+.swatch-grid { display: flex; flex-wrap: wrap; gap: 16px; margin: 16px 0 28px; }
+.swatch-fill { width: 132px; height: 88px; border: 1px solid var(--color-border); }
+.swatch-name { font-family: var(--font-family-mono); font-size: var(--text-sm); color: var(--color-text-primary); margin: 8px 0 0; }
+.swatch-hex { font-family: var(--font-family-mono); font-size: var(--text-xs); color: var(--color-text-secondary); margin: 0; }
+
+.sw-bg-void { background: var(--bg-void); }
+.sw-panel-bg { background: var(--panel-bg); }
+.sw-panel-edge-hi { background: var(--panel-edge-hi); }
+.sw-panel-edge-lo { background: var(--panel-edge-lo); }
+.sw-ember { background: var(--ember); }
+.sw-ember-dim { background: var(--ember-dim); }
+.sw-signal-cyan { background: var(--signal-cyan); }
+.sw-alert-red { background: var(--alert-red); }
+.sw-alert-red-dim { background: var(--alert-red-dim); }
+.sw-coin-yellow { background: var(--coin-yellow); }
+.sw-text-hi { background: var(--text-hi); }
+.sw-text-muted { background: var(--text-muted); }
+.sw-steel { background: var(--steel); }
+.sw-light-bg { background: var(--light-bg); border: 1px solid var(--sand); }
+.sw-light-fg { background: var(--light-fg); }
+.sw-cream { background: var(--cream); border: 1px solid var(--sand); }
+.sw-sand { background: var(--sand); }
+.sw-light-theme-amber { background: var(--light-theme-amber); }
+.sw-track-dark { background: var(--track-dark); }
+.sw-track-dark-red { background: var(--track-dark-red); }
+
+.sw-color-bg-canvas { background: var(--color-bg-canvas); }
+.sw-color-bg-surface { background: var(--color-bg-surface); }
+.sw-color-border { background: var(--color-border); }
+.sw-color-border-shadow { background: var(--color-border-shadow); }
+.sw-color-text-primary { background: var(--color-text-primary); }
+.sw-color-text-secondary { background: var(--color-text-secondary); }
+.sw-color-text-on-accent { background: var(--color-text-on-accent); border: 1px solid var(--color-border); }
+.sw-color-accent { background: var(--color-accent); }
+.sw-color-accent-dim { background: var(--color-accent-dim); }
+.sw-color-danger { background: var(--color-danger); }
+.sw-color-danger-dim { background: var(--color-danger-dim); }
+.sw-color-signal { background: var(--color-signal); }
+.sw-color-coin { background: var(--color-coin); }
+.sw-color-steel { background: var(--color-steel); }
+
+/* Wordmark lockups (Canon section) */
+.wordmark-row { display: flex; flex-wrap: wrap; gap: 40px; align-items: flex-end; margin: 18px 0 28px; }
+.wordmark-lockup { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; min-width: 0; max-width: 100%; }
+.wordmark-lockup .lockup-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-width: 0; }
+.wordmark-lockup .lockup-row .vault-glyph { image-rendering: pixelated; flex: none; color: var(--color-accent); max-width: 100%; height: auto; }
+.wordmark-lockup .lockup-word { color: var(--color-accent); font-family: var(--font-family-display); text-transform: uppercase; line-height: 1.1; }
+.wordmark-lockup .cap { font-family: var(--font-family-mono); font-size: var(--text-xs); color: var(--color-text-secondary); }
+/* clamp(), not the literal Figma px, below ~600px viewport width: a
+   single unbroken word ("CLAUDEPASS", no spaces or hyphens to break on)
+   at a fixed 48/96px would overflow a phone-width page rather than wrap.
+   7vw is tuned so both specimens fit a 390px viewport (≈27px, ten
+   characters ≈270px, comfortably inside the ~350px content column); the
+   96px/48px caps are still what renders from ~685px/~1371px up. */
+.lockup-14 .lockup-word { font-size: 14px; white-space: nowrap; }
+.lockup-48 .lockup-word { font-size: clamp(16px, 7vw, 48px); }
+.lockup-96 .lockup-word { font-size: clamp(16px, 7vw, 96px); }
+
+/* Spacing bars */
+.token-bar-row { display: flex; align-items: center; gap: 14px; margin: 10px 0; flex-wrap: wrap; }
+.token-bar-label { width: 100px; font-family: var(--font-family-mono); font-size: var(--text-sm); color: var(--color-text-secondary); flex: none; }
+.token-bar { height: 20px; background: var(--color-accent); flex: none; }
+.token-bar-value { font-family: var(--font-family-mono); font-size: var(--text-xs); color: var(--color-text-secondary); }
+.bar-space-1 { width: var(--space-1); }
+.bar-space-2 { width: var(--space-2); }
+.bar-space-3 { width: var(--space-3); }
+.bar-space-4 { width: var(--space-4); }
+.bar-space-5 { width: var(--space-5); }
+.bar-space-6 { width: var(--space-6); }
+.bar-space-7 { width: var(--space-7); }
+.bar-space-8 { width: var(--space-8); }
+
+/* Radius boxes */
+.radius-box-row { display: flex; flex-wrap: wrap; gap: 20px; margin: 14px 0; }
+.radius-box {
+  width: 72px; height: 72px;
+  background: var(--color-bg-surface);
+  border: 2px solid var(--color-accent);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-family-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+.radius-box.radius-none { border-radius: var(--radius-none); }
+.radius-box.radius-sm { border-radius: var(--radius-sm); }
+.radius-box.radius-md { border-radius: var(--radius-md); }
+.radius-box.radius-lg { border-radius: var(--radius-lg); }
+.radius-box.radius-pill { border-radius: var(--radius-pill); width: 104px; }
+
+/* Elevation */
+.elevation-row { display: flex; flex-wrap: wrap; gap: 28px; margin: 14px 0 24px; }
+.bevel-demo-row { display: flex; flex-wrap: wrap; gap: 28px; margin: 14px 0 32px; }
+.bevel-swatch, .elevation-swatch {
+  width: 168px; height: 96px;
+  display: flex; align-items: flex-end; justify-content: center;
+  padding-bottom: 10px;
+  font-family: var(--font-family-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+.bevel-raised {
+  background: var(--color-bg-surface);
+  box-shadow:
+    inset var(--bevel-width) var(--bevel-width) 0 var(--color-border),
+    inset calc(var(--bevel-width) * -1) calc(var(--bevel-width) * -1) 0 var(--color-border-shadow);
+}
+.bevel-inset {
+  background: var(--color-bg-surface);
+  box-shadow:
+    inset calc(var(--bevel-width) * -1) calc(var(--bevel-width) * -1) 0 var(--color-border),
+    inset var(--bevel-width) var(--bevel-width) 0 var(--color-border-shadow);
+}
+.elevation-1 { background: var(--color-bg-surface); box-shadow: 0 1px 0 var(--bevel-lo-overlay); }
+.elevation-2 { background: var(--color-bg-surface); box-shadow: 0 2px 0 var(--bevel-lo-overlay); }
+.elevation-3 { background: var(--color-bg-surface); box-shadow: 0 3px 0 var(--glow-accent); }
+
+/* Motion duration bars — widths are proportional to each duration
+   against the 900ms duration-loop, matching motion-principles (34:3)'s
+   own bar-length ratios (36/53/89/142/400px of a 400px track). These
+   are dimension literals, not colours, so the token-block rule doesn't
+   apply to them. */
+.motion-row { display: flex; align-items: center; gap: 14px; margin: 10px 0; flex-wrap: wrap; }
+.motion-label { width: 150px; font-family: var(--font-family-mono); font-size: var(--text-sm); color: var(--color-text-secondary); flex: none; }
+.motion-track { width: 400px; max-width: 100%; height: 16px; border: 1px solid var(--color-border); background: var(--color-bg-canvas); flex: none; }
+.motion-fill { height: 100%; background: var(--color-accent); }
+.motion-fill.instant { width: 36px; }
+.motion-fill.fast { width: 53px; }
+.motion-fill.base { width: 89px; }
+.motion-fill.slow { width: 142px; }
+.motion-fill.loop { width: 100%; }
+.motion-value { font-family: var(--font-family-mono); font-size: var(--text-xs); color: var(--color-text-secondary); width: 64px; flex: none; }
+
+/* Icon gallery */
+.icon-gallery { display: flex; flex-wrap: wrap; gap: 20px; margin: 16px 0; }
+.icon-tile {
+  width: 100px;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 14px 8px;
+  background: var(--color-bg-surface);
+  border: 2px solid var(--color-border);
+}
+.icon-tile img, .icon-tile svg { width: 28px; height: 28px; flex: none; }
+.icon-tile .cap { font-family: var(--font-family-mono); font-size: 12px; color: var(--color-text-secondary); text-align: center; }
+.icon-tile.ink-accent { color: var(--color-accent); }
+.icon-tile.ink-danger { color: var(--color-danger); }
+
+/* Paywall / Upgrade Banner (dc-66:25, W18 — /brand only) */
+.paywall-banner {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-5);
+  padding: var(--space-5);
+  background: var(--color-bg-surface);
+  border: 2px solid var(--color-accent);
+}
+.paywall-copy { display: flex; flex-direction: column; gap: 4px; flex: 1 1 240px; }
+.paywall-copy .used { font-family: var(--font-family-mono); font-size: var(--text-sm); color: var(--color-text-secondary); margin: 0; }
+.paywall-copy .pitch { font-family: var(--font-family-mono); font-size: var(--text-base); color: var(--color-text-primary); margin: 0; }
+
+/* License Checkout Fields (dc-66:32, W20 — spec-only mock, /brand only).
+   Reuses .input's visual treatment on non-input elements so it never
+   behaves like a real, submittable card-number field. */
+.checkout-mock { display: flex; flex-direction: column; gap: var(--space-3); align-items: flex-start; padding: var(--space-5); background: var(--color-bg-surface); border: 2px solid var(--color-border); max-width: 340px; }
+.checkout-mock .field { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.checkout-mock .field-label { font-family: var(--font-family-mono); font-size: 12px; color: var(--color-text-secondary); }
+.checkout-mock .field-mock {
+  width: 100%;
+  padding: 12px;
+  background: var(--color-bg-canvas);
+  color: var(--color-text-primary);
+  border: 1px solid var(--steel);
+  font-family: var(--font-body);
+  font-size: 14px;
+}
+.checkout-mock .fine-print { font-family: var(--font-family-mono); font-size: 12px; color: var(--color-text-secondary); margin: 0; }
+
+/* Trademark comparison swatches */
+.tm-swatch-row { display: flex; flex-wrap: wrap; gap: 32px; margin: 16px 0; }
+.tm-swatch-fill { width: 160px; height: 80px; }
+.tm-swatch-fill.ember { background: var(--ember); }
+.tm-swatch-fill.terracotta { background: var(--reference-terracotta); }
+
+/* Type Scale live samples (Typography section) */
+.type-scale-sample { font-family: var(--font-family-mono); color: var(--color-text-primary); margin: 10px 0; }
+.type-scale-sample .tok { display: block; font-size: var(--text-xs); color: var(--color-text-secondary); margin-bottom: 2px; }
+.type-scale-sample.scale-xs .sample { font-size: var(--text-xs); }
+.type-scale-sample.scale-sm .sample { font-size: var(--text-sm); }
+.type-scale-sample.scale-base .sample { font-size: var(--text-base); }
+.type-scale-sample.scale-lg .sample { font-size: var(--text-lg); }
+.type-scale-sample.scale-xl .sample { font-size: var(--text-xl); }
+.type-scale-sample.scale-2xl .sample { font-size: var(--text-2xl); }
+.type-scale-sample.scale-3xl .sample { font-size: var(--text-3xl); }
+.type-scale-sample.scale-4xl .sample { font-size: var(--text-4xl); }
+
+/* Non-sticky reproduction of .arcade-header / .arcade-footer for mid-page
+   component reference (site/brand only) — the real ones (top/bottom of
+   every page, this one included) stay sticky/normal-flow as shipped. */
+.arcade-header.static-demo { position: static; }
+.brand-dark-inline { display: inline-block; }
+.table-scroll { overflow-x: auto; max-width: 100%; }

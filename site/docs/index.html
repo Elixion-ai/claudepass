@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Docs — ClaudePass</title>
 <meta name="description" content="The 60-second ClaudePass quickstart: Vault, Handle, Manifest, and the Claude Code integration.">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230e0a06'/%3E%3Crect x='7' y='0' width='2' height='4' fill='%23ff8a1f'/%3E%3Crect x='6' y='4' width='4' height='1' fill='%23ff8a1f'/%3E%3Crect x='3' y='5' width='10' height='1' fill='%23ff8a1f'/%3E%3Crect x='0' y='6' width='3' height='8' fill='%23ff8a1f'/%3E%3Crect x='3' y='6' width='10' height='8' fill='%23ff8a1f'/%3E%3Crect x='13' y='6' width='3' height='8' fill='%23ff8a1f'/%3E%3Crect x='3' y='14' width='10' height='1' fill='%23ff8a1f'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23ff8a1f'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%230e0a06'/%3E%3Crect x='12' y='6' width='2' height='5' fill='%230e0a06'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/retro.css">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="ClaudePass">
@@ -25,13 +25,9 @@
   <div class="wrap">
     <a class="brand" href="/">
       <svg class="brand-glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-        <rect x="7" y="0" width="2" height="4" fill="currentColor"/>
-        <rect x="6" y="4" width="4" height="1" fill="currentColor"/>
-        <rect x="3" y="5" width="10" height="1" fill="currentColor"/>
-        <rect x="0" y="6" width="3" height="8" fill="currentColor"/>
-        <rect x="3" y="6" width="10" height="8" fill="currentColor"/>
-        <rect x="13" y="6" width="3" height="8" fill="currentColor"/>
-        <rect x="3" y="14" width="10" height="1" fill="currentColor"/>
+        <rect x="0" y="0" width="16" height="16" fill="currentColor"/>
+        <circle cx="8" cy="8" r="3" fill="var(--bg-void)"/>
+        <rect x="12" y="6" width="2" height="5" fill="var(--bg-void)"/>
       </svg>
       CLAUDEPASS
     </a>
@@ -61,6 +57,12 @@
       </p>
 
       <h2>Quickstart</h2>
+      <div class="terminal-titlebar">
+        <span class="terminal-dot red" aria-hidden="true"></span>
+        <span class="terminal-dot yellow" aria-hidden="true"></span>
+        <span class="terminal-dot cyan" aria-hidden="true"></span>
+        <span class="terminal-title">cpass</span>
+      </div>
       <pre><code># 1. Create a Vault. CPASS_KEY (CI) or the platform's unlock source
 #    (macOS Keychain, or a passphrase on Linux) supplies the encryption
 #    key.
@@ -88,7 +90,7 @@ cpass integrate claude
 cpass run -- sh -c '[ -n "$STRIPE_LIVE" ] &amp;&amp; echo "deploy: authenticated"'</code></pre>
 
       <p class="muted">
-        The value of <code>stripe/live</code> is never typed into a
+        The value of <span class="handle-pill t-code-mono-small">stripe/live</span> is never typed into a
         command line, never appears in this terminal's scrollback, and —
         because Claude Code's plugin is installed — never gets past a
         paste into the Agent's prompt either.
@@ -97,19 +99,31 @@ cpass run -- sh -c '[ -n "$STRIPE_LIVE" ] &amp;&amp; echo "deploy: authenticated
       <h2>Vocabulary</h2>
       <dl class="term">
         <dt>Secret</dt>
-        <dd>A sensitive value (API key, password, token, private key) that must never appear in an Agent's Context.</dd>
+        <dd>A sensitive value (API key, password, token, private key) that must never appear in an agent's context.</dd>
         <dt>Handle</dt>
-        <dd>An opaque name that refers to a Secret without revealing its value — the only form in which a Secret is ever visible to an Agent.</dd>
-        <dt>Broker</dt>
-        <dd>The local component that resolves a Handle into a Secret value at the moment a command runs.</dd>
-        <dt>Manifest</dt>
-        <dd>A committed, per-project file (<code>.claudepass.toml</code>) declaring which Handles the project needs. Contains no values.</dd>
+        <dd>An opaque name that refers to a Secret without revealing its value. The only form in which a Secret is visible to an Agent. For example, <span class="handle-pill t-code-mono-small">stripe/live</span>.</dd>
+        <dt>Agent</dt>
+        <dd>An AI coding session (Claude Code, Codex, or similar) whose context must be kept free of Secret values.</dd>
+        <dt><img src="/assets/icons/icon-broker-seam.svg" alt="" width="18" height="18"> Broker</dt>
+        <dd>The local component that resolves a Handle into a Secret value at the moment a command runs, so the value reaches the destination process but not the Agent.</dd>
+        <dt>Context</dt>
+        <dd>Everything an Agent sees: prompts, tool results, and anything persisted from them (transcripts, logs, history).</dd>
+        <dt><svg class="heading-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><rect x="2" y="10" width="4" height="4" fill="currentColor"/><rect x="7.5" y="10" width="4" height="4" fill="currentColor"/><rect x="13" y="10" width="4" height="4" fill="currentColor"/><rect x="18.5" y="10" width="4" height="4" fill="currentColor"/></svg> Redaction</dt>
+        <dd>The Broker's replacement of a Secret value, in any recognisable encoding, with a marker in the output of a command before that output can reach an Agent.</dd>
+        <dt><svg class="heading-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><rect x="3" y="10" width="18" height="4" rx="1" fill="currentColor"/><rect x="11" y="2" width="2" height="20" transform="rotate(-0.785398 11 2)" fill="currentColor"/></svg> Command Policy</dt>
+        <dd>The rules deciding whether a command an Agent wants to run may proceed: refusing commands that would reveal a Secret rather than use it, read Secrets from disk, or carry a raw Secret value. Applied both before a command runs and when the Broker injects.</dd>
+        <dt>Vault</dt>
+        <dd>The encrypted local store, owned by ClaudePass, where Secrets live. The only source the Broker reads from.</dd>
+        <dt>Binding</dt>
+        <dd>How a Secret lands in a command's process: either as an environment variable holding the value, or as a temporary file whose path is placed in an environment variable and which is destroyed when the command exits. A Handle carries a default Binding; a command may override it.</dd>
+        <dt><img src="/assets/icons/icon-manifest-check.svg" alt="" width="18" height="18"> Manifest</dt>
+        <dd>A committed, per-project declaration of which Handles the project needs and their Bindings. Contains no Secret values and is safe to share. For example, <code>.claudepass.toml</code>.</dd>
         <dt>Capture</dt>
-        <dd>Storing the output of a command directly into the Vault as a new Secret, so a value born in a tool result never reaches an Agent.</dd>
+        <dd>Storing the output of a command directly into the Vault as a new Secret, so that a value born in a tool result never reaches an Agent.</dd>
         <dt>Intercept</dt>
-        <dd>Catching a Secret value in a human's prompt before it reaches an Agent, and moving it into the Vault instead.</dd>
-        <dt>Exposed</dt>
-        <dd>The state of a Secret whose value has entered an Agent's Context at least once — treated as compromised and due for rotation.</dd>
+        <dd>Catching a Secret value in a human's prompt before it reaches an Agent, moving it into the Vault, and erasing the prompt so the Agent only ever sees a Handle.</dd>
+        <dt><img src="/assets/icons/icon-exposed-flag.svg" alt="" width="18" height="18"> Exposed</dt>
+        <dd>The state of a Secret whose value has entered an Agent's Context at least once. An Exposed Secret is treated as compromised and due for rotation.</dd>
       </dl>
 
       <h2>Learn more</h2>
@@ -133,6 +147,7 @@ cpass run -- sh -c '[ -n "$STRIPE_LIVE" ] &amp;&amp; echo "deploy: authenticated
       <a href="/security">SECURITY</a>
       <a href="/privacy">PRIVACY</a>
       <a href="/terms">TERMS</a>
+      <a href="/account">ACCOUNT</a>
     </nav>
     <p class="footer-legal">
       ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.

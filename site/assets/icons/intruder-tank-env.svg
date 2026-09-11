@@ -1,0 +1,11 @@
+<svg width="42" height="57" viewBox="0 0 42 57" fill="none" xmlns="http://www.w3.org/2000/svg">
+<rect x="11" y="14" width="20" height="8" fill="#ff4d4d"/>
+<rect x="10" y="21" width="22" height="3" fill="#b32424"/>
+<rect x="17" y="7" width="8" height="8" fill="#ff4d4d"/>
+<mask id="path-4-inside-1_29_14" fill="white">
+<path d="M0 30C0 28.8954 0.895431 28 2 28H40C41.1046 28 42 28.8954 42 30V55C42 56.1046 41.1046 57 40 57H2C0.89543 57 0 56.1046 0 55V30Z"/>
+</mask>
+<path d="M0 30C0 28.8954 0.895431 28 2 28H40C41.1046 28 42 28.8954 42 30V55C42 56.1046 41.1046 57 40 57H2C0.89543 57 0 56.1046 0 55V30Z" fill="#17110b"/>
+<path d="M2 28V30H40V28V26H2V28ZM42 30H40V55H42H44V30H42ZM40 57V55H2V57V59H40V57ZM0 55H2V30H0H-2V55H0ZM2 57V55H2H0H-2C-2 57.2091 -0.209139 59 2 59V57ZM42 55H40V55V57V59C42.2091 59 44 57.2091 44 55H42ZM40 28V30V30H42H44C44 27.7909 42.2091 26 40 26V28ZM2 28V26C-0.209138 26 -2 27.7909 -2 30H0H2V30V28Z" fill="#ff4d4d" mask="url(#path-4-inside-1_29_14)"/>
+<text x="21" y="47" text-anchor="middle" font-family="monospace" font-size="12" fill="#ff4d4d">env</text>
+</svg>

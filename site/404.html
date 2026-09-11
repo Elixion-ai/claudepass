@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Page not found — ClaudePass</title>
 <meta name="description" content="This page doesn't exist.">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230e0a06'/%3E%3Crect x='7' y='0' width='2' height='4' fill='%23ff8a1f'/%3E%3Crect x='6' y='4' width='4' height='1' fill='%23ff8a1f'/%3E%3Crect x='3' y='5' width='10' height='1' fill='%23ff8a1f'/%3E%3Crect x='0' y='6' width='3' height='8' fill='%23ff8a1f'/%3E%3Crect x='3' y='6' width='10' height='8' fill='%23ff8a1f'/%3E%3Crect x='13' y='6' width='3' height='8' fill='%23ff8a1f'/%3E%3Crect x='3' y='14' width='10' height='1' fill='%23ff8a1f'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23ff8a1f'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%230e0a06'/%3E%3Crect x='12' y='6' width='2' height='5' fill='%230e0a06'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/retro.css">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="ClaudePass">
@@ -25,13 +25,9 @@
   <div class="wrap">
     <a class="brand" href="/">
       <svg class="brand-glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-        <rect x="7" y="0" width="2" height="4" fill="currentColor"/>
-        <rect x="6" y="4" width="4" height="1" fill="currentColor"/>
-        <rect x="3" y="5" width="10" height="1" fill="currentColor"/>
-        <rect x="0" y="6" width="3" height="8" fill="currentColor"/>
-        <rect x="3" y="6" width="10" height="8" fill="currentColor"/>
-        <rect x="13" y="6" width="3" height="8" fill="currentColor"/>
-        <rect x="3" y="14" width="10" height="1" fill="currentColor"/>
+        <rect x="0" y="0" width="16" height="16" fill="currentColor"/>
+        <circle cx="8" cy="8" r="3" fill="var(--bg-void)"/>
+        <rect x="12" y="6" width="2" height="5" fill="var(--bg-void)"/>
       </svg>
       CLAUDEPASS
     </a>
@@ -53,7 +49,7 @@
     <div class="wrap">
       <div class="status-404">
         <h1 class="code">404</h1>
-        <p class="redacted-line">[REDACTED: /this-page]</p>
+        <p class="redacted-line"><span class="redacted redacted--breach">[REDACTED: /this-page]</span></p>
         <p class="lede">That page doesn't exist.</p>
         <div class="cta-row cta-center">
           <a class="btn btn-primary" href="/">BACK TO HOME</a>
@@ -74,6 +70,7 @@
       <a href="/security">SECURITY</a>
       <a href="/privacy">PRIVACY</a>
       <a href="/terms">TERMS</a>
+      <a href="/account">ACCOUNT</a>
     </nav>
     <p class="footer-legal">
       ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.

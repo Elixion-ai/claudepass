@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Security — ClaudePass</title>
 <meta name="description" content="Exactly what the Vault, the Broker, Redaction, Command Policy, and the license check do — and the no-telemetry guarantee.">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230e0a06'/%3E%3Crect x='7' y='0' width='2' height='4' fill='%23ff8a1f'/%3E%3Crect x='6' y='4' width='4' height='1' fill='%23ff8a1f'/%3E%3Crect x='3' y='5' width='10' height='1' fill='%23ff8a1f'/%3E%3Crect x='0' y='6' width='3' height='8' fill='%23ff8a1f'/%3E%3Crect x='3' y='6' width='10' height='8' fill='%23ff8a1f'/%3E%3Crect x='13' y='6' width='3' height='8' fill='%23ff8a1f'/%3E%3Crect x='3' y='14' width='10' height='1' fill='%23ff8a1f'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23ff8a1f'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%230e0a06'/%3E%3Crect x='12' y='6' width='2' height='5' fill='%230e0a06'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/retro.css">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="ClaudePass">
@@ -25,13 +25,9 @@
   <div class="wrap">
     <a class="brand" href="/">
       <svg class="brand-glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-        <rect x="7" y="0" width="2" height="4" fill="currentColor"/>
-        <rect x="6" y="4" width="4" height="1" fill="currentColor"/>
-        <rect x="3" y="5" width="10" height="1" fill="currentColor"/>
-        <rect x="0" y="6" width="3" height="8" fill="currentColor"/>
-        <rect x="3" y="6" width="10" height="8" fill="currentColor"/>
-        <rect x="13" y="6" width="3" height="8" fill="currentColor"/>
-        <rect x="3" y="14" width="10" height="1" fill="currentColor"/>
+        <rect x="0" y="0" width="16" height="16" fill="currentColor"/>
+        <circle cx="8" cy="8" r="3" fill="var(--bg-void)"/>
+        <rect x="12" y="6" width="2" height="5" fill="var(--bg-void)"/>
       </svg>
       CLAUDEPASS
     </a>
@@ -54,11 +50,21 @@
 
 
       <h1>Security</h1>
-      <p class="lede">
-        ClaudePass is closed source, so trust has to come from
-        documentation rather than from reading the code yourself. This
-        page says exactly what each component does and touches.
-      </p>
+
+      <div class="trust-panel">
+        <div class="trust-panel-icons" aria-hidden="true">
+          <span class="trust-panel-glyph">V</span>
+          <span class="trust-panel-glyph">CP</span>
+        </div>
+        <div class="trust-panel-copy">
+          <h2 class="section-h2"><span class="glyph">▶</span>SECURITY, BY DESIGN</h2>
+          <p class="lede">
+            ClaudePass is closed source, so trust has to come from
+            documentation rather than from reading the code yourself. This
+            page says exactly what each component does and touches.
+          </p>
+        </div>
+      </div>
 
       <div class="callout">
         <strong>No telemetry.</strong> The only network call the
@@ -72,10 +78,11 @@
         run afterwards never talks to it.
       </div>
 
-      <h2>The Vault</h2>
+      <h2><img src="/assets/icons/icon-handle-tag.svg" alt="" width="20" height="20"> The Vault</h2>
       <p>
         Your Secrets live in one encrypted file on your own machine
-        (<code>$CPASS_HOME/vault.cpv</code>), never synced or uploaded.
+        (<code>$CPASS_HOME/vault.cpv</code>), never synced or uploaded,
+        addressed only by a Handle like <span class="handle-pill t-code-mono-small">stripe/live</span>.
         It's a JSON envelope encrypted with XChaCha20-Poly1305 (an AEAD
         cipher) under a random data key, itself wrapped by your unlock
         key. Tampering and a wrong key fail loudly and distinctly — the
@@ -93,12 +100,13 @@
         disk in plaintext.
       </p>
 
-      <h2>Redaction: best-effort by design</h2>
+      <h2><svg class="heading-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><rect x="2" y="10" width="4" height="4" fill="currentColor"/><rect x="7.5" y="10" width="4" height="4" fill="currentColor"/><rect x="13" y="10" width="4" height="4" fill="currentColor"/><rect x="18.5" y="10" width="4" height="4" fill="currentColor"/></svg> Redaction: best-effort by design</h2>
       <p>
         Everything a wrapped command writes to stdout and stderr passes
         through Redaction, which replaces an injected Secret's value —
         and its base64, hex, percent-, and JSON-escaped forms — with a
-        <code>[REDACTED:&lt;handle&gt;]</code> marker before your Agent
+        <span class="redacted redacted--breach">[REDACTED:&lt;handle&gt;]</span>
+        marker before your Agent
         can read it. This is honest best-effort, not a guarantee: it
         covers the encodings above and a value written in pieces across
         separate writes, but a value the child transforms some other way
@@ -107,7 +115,7 @@
         Secret hard and detectable, not impossible.</strong>
       </p>
 
-      <h2>Command Policy</h2>
+      <h2><svg class="heading-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><rect x="3" y="10" width="18" height="4" rx="1" fill="currentColor"/><rect x="11" y="2" width="2" height="20" transform="rotate(-0.785398 11 2)" fill="currentColor"/></svg> Command Policy</h2>
       <p>
         Before a command runs, Command Policy refuses the well-known ways
         a command tries to defeat Redaction on purpose: dumping the
@@ -116,6 +124,15 @@
         value that would bypass its terminal-only gate. The same rule set
         runs in the CLI, the Claude Code hook, and the MCP server.
       </p>
+
+      <div class="cp-alert">
+        <div class="cp-alert-head">
+          <span class="cp-alert-label">COMMAND POLICY</span>
+          <button type="button" class="cp-alert-dismiss" aria-label="Dismiss">✕</button>
+        </div>
+        <p class="cp-alert-message">cpass: refused: cat would read .env, a Secret-bearing file — use `cpass run` (or the Manifest) instead of reading the file directly</p>
+      </div>
+      <p class="muted">What a refusal looks like — the exact message <code>cpass</code> prints, verbatim.</p>
 
       <h2>Intercept</h2>
       <p>
@@ -126,7 +143,7 @@
         Handle to resubmit with instead.
       </p>
 
-      <h2>Exposed tracking</h2>
+      <h2><img src="/assets/icons/icon-exposed-flag.svg" alt="" width="20" height="20"> Exposed tracking</h2>
       <p>
         When a value does reach an Agent's Context anyway — a deliberate
         bypass, a manual paste before the plugin was installed —
@@ -170,6 +187,7 @@
       <a href="/security">SECURITY</a>
       <a href="/privacy">PRIVACY</a>
       <a href="/terms">TERMS</a>
+      <a href="/account">ACCOUNT</a>
     </nav>
     <p class="footer-legal">
       ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.

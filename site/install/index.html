@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Install — ClaudePass</title>
 <meta name="description" content="Install cpass via Homebrew (brew install softorize/tap/cpass) or curl -fsSL https://claudepass.com/install.sh | sh.">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230e0a06'/%3E%3Crect x='7' y='0' width='2' height='4' fill='%23ff8a1f'/%3E%3Crect x='6' y='4' width='4' height='1' fill='%23ff8a1f'/%3E%3Crect x='3' y='5' width='10' height='1' fill='%23ff8a1f'/%3E%3Crect x='0' y='6' width='3' height='8' fill='%23ff8a1f'/%3E%3Crect x='3' y='6' width='10' height='8' fill='%23ff8a1f'/%3E%3Crect x='13' y='6' width='3' height='8' fill='%23ff8a1f'/%3E%3Crect x='3' y='14' width='10' height='1' fill='%23ff8a1f'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23ff8a1f'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%230e0a06'/%3E%3Crect x='12' y='6' width='2' height='5' fill='%230e0a06'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/retro.css">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="ClaudePass">
@@ -25,13 +25,9 @@
   <div class="wrap">
     <a class="brand" href="/">
       <svg class="brand-glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-        <rect x="7" y="0" width="2" height="4" fill="currentColor"/>
-        <rect x="6" y="4" width="4" height="1" fill="currentColor"/>
-        <rect x="3" y="5" width="10" height="1" fill="currentColor"/>
-        <rect x="0" y="6" width="3" height="8" fill="currentColor"/>
-        <rect x="3" y="6" width="10" height="8" fill="currentColor"/>
-        <rect x="13" y="6" width="3" height="8" fill="currentColor"/>
-        <rect x="3" y="14" width="10" height="1" fill="currentColor"/>
+        <rect x="0" y="0" width="16" height="16" fill="currentColor"/>
+        <circle cx="8" cy="8" r="3" fill="var(--bg-void)"/>
+        <rect x="12" y="6" width="2" height="5" fill="var(--bg-void)"/>
       </svg>
       CLAUDEPASS
     </a>
@@ -55,6 +51,12 @@
       <p class="lede">Two ways to get <code>cpass</code> — pick whichever fits your setup. No account and no GitHub credentials needed.</p>
 
       <h2>Homebrew</h2>
+      <div class="terminal-titlebar">
+        <span class="terminal-dot red" aria-hidden="true"></span>
+        <span class="terminal-dot yellow" aria-hidden="true"></span>
+        <span class="terminal-dot cyan" aria-hidden="true"></span>
+        <span class="terminal-title">install.sh</span>
+      </div>
       <div class="terminal">
         <div class="terminal-line">
           <code>brew install softorize/tap/cpass</code>
@@ -63,6 +65,12 @@
       </div>
 
       <h2>curl</h2>
+      <div class="terminal-titlebar">
+        <span class="terminal-dot red" aria-hidden="true"></span>
+        <span class="terminal-dot yellow" aria-hidden="true"></span>
+        <span class="terminal-dot cyan" aria-hidden="true"></span>
+        <span class="terminal-title">install.sh</span>
+      </div>
       <div class="terminal">
         <div class="terminal-line">
           <code>curl -fsSL https://claudepass.com/install.sh | sh</code>
@@ -78,6 +86,12 @@
       </p>
 
       <h2>Verify</h2>
+      <div class="terminal-titlebar">
+        <span class="terminal-dot red" aria-hidden="true"></span>
+        <span class="terminal-dot yellow" aria-hidden="true"></span>
+        <span class="terminal-dot cyan" aria-hidden="true"></span>
+        <span class="terminal-title">cpass</span>
+      </div>
       <div class="terminal">
         <div class="terminal-line">
           <code>cpass version</code>
@@ -85,12 +99,16 @@
         </div>
       </div>
 
-      <h2>Next</h2>
+      <h2><img src="/assets/icons/icon-manifest-check.svg" alt="" width="20" height="20"> Next</h2>
       <p>
         Once <code>cpass</code> is installed, the
         <a href="/docs">60-second quickstart</a> takes you from an empty
         Vault to a real command that uses a Secret without ever printing
         it.
+      </p>
+
+      <p class="spinner-demo">
+        <span class="spinner" role="img" aria-label="Installing"></span>
       </p>
     </div>
   </div>
@@ -106,6 +124,7 @@
       <a href="/security">SECURITY</a>
       <a href="/privacy">PRIVACY</a>
       <a href="/terms">TERMS</a>
+      <a href="/account">ACCOUNT</a>
     </nav>
     <p class="footer-legal">
       ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.

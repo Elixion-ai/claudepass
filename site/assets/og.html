@@ -9,13 +9,17 @@ html,body{width:1200px;height:630px;background:var(--void);overflow:hidden}
 .wm{color:var(--ember);font-size:76px;line-height:1.15;margin:22px 0 6px;text-shadow:0 0 24px rgba(255,138,31,.28)}
 .tag{color:var(--hi);font-size:26px;line-height:1.55;max-width:1000px;margin-top:18px}
 .chip{display:inline-flex;gap:14px;margin-top:34px}
-.pill{border:2px solid #6b7280;border-radius:999px;color:var(--hi);font-size:19px;padding:9px 18px}
+/* Same shape/spec as the shipped .handle-pill (site/retro.css): pill
+   radius, steel border, mono text — this page is a standalone screenshot
+   target with no retro.css, so the rule is duplicated here by name only,
+   not reinvented with different geometry. */
+.handle-pill{border:2px solid #6b7280;border-radius:999px;color:var(--hi);font-size:19px;padding:9px 18px}
 .red{background:var(--red);color:var(--void);border-radius:2px;font-size:17px;padding:9px 16px}
 .foot{position:absolute;left:88px;bottom:40px;color:var(--mut);font-size:16px}
 </style></head><body><div class="wrap">
 <div class="eyebrow body">SECRET MANAGER FOR AI CODING AGENTS</div>
 <div class="wm disp">CLAUDEPASS</div>
 <div class="tag body">Your AI agent uses a Secret without ever reading it. It sees a <b style="color:var(--ember)">Handle</b>, never the value.</div>
-<div class="chip body"><span class="pill">stripe/live</span><span class="red disp">[REDACTED]</span></div>
+<div class="chip body"><span class="handle-pill">stripe/live</span><span class="red disp">[REDACTED]</span></div>
 <div class="foot body">claudepass.com · brew install softorize/tap/cpass</div>
 <div class="scan"></div></div></body></html>
