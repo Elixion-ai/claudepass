@@ -38,12 +38,18 @@ func TestIssueForCheckoutThenTakeTokenOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tok, err := s.TakeCheckoutToken(ctx, "cs_1")
+	got, err := s.TakeCheckoutToken(ctx, "cs_1")
 	if err != nil {
 		t.Fatalf("first take: %v", err)
 	}
-	if tok != "tok-1" {
-		t.Fatalf("token = %q, want tok-1", tok)
+	if got.Token != "tok-1" {
+		t.Fatalf("token = %q, want tok-1", got.Token)
+	}
+	if got.Email != "a@example.com" {
+		t.Fatalf("email = %q, want a@example.com", got.Email)
+	}
+	if got.PeriodEnd != 1000 {
+		t.Fatalf("period end = %d, want 1000", got.PeriodEnd)
 	}
 
 	if _, err := s.TakeCheckoutToken(ctx, "cs_1"); !errors.Is(err, ErrTokenAlreadyShown) {
@@ -183,12 +189,12 @@ func TestIssueForCheckoutSameEventRedeliveredIsRefused(t *testing.T) {
 	if err := issueForCheckout(ctx, s, "evt_dup", "cs_dup", "cus_dup", "d@example.com", 1000, 600, "tok-b"); !errors.Is(err, ErrAlreadyProcessed) {
 		t.Fatalf("redelivered event: err = %v, want ErrAlreadyProcessed", err)
 	}
-	tok, err := s.TakeCheckoutToken(ctx, "cs_dup")
+	got, err := s.TakeCheckoutToken(ctx, "cs_dup")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tok != "tok-a" {
-		t.Fatalf("token = %q, want the original tok-a; the redelivery must not have overwritten it", tok)
+	if got.Token != "tok-a" {
+		t.Fatalf("token = %q, want the original tok-a; the redelivery must not have overwritten it", got.Token)
 	}
 }
 
@@ -207,12 +213,12 @@ func TestIssueForCheckoutUpsertsSessionAcrossDistinctEvents(t *testing.T) {
 	if err := issueForCheckout(ctx, s, "evt_b", "cs_multi", "cus_multi", "m@example.com", 1000, 600, "tok-b"); err != nil {
 		t.Fatal(err)
 	}
-	tok, err := s.TakeCheckoutToken(ctx, "cs_multi")
+	got, err := s.TakeCheckoutToken(ctx, "cs_multi")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tok != "tok-b" {
-		t.Fatalf("token = %q, want the latest issued token tok-b", tok)
+	if got.Token != "tok-b" {
+		t.Fatalf("token = %q, want the latest issued token tok-b", got.Token)
 	}
 }
 

@@ -67,16 +67,16 @@ type fakeMailer struct {
 }
 
 type sentMail struct {
-	To, Subject, Body string
+	To, Subject, Text, HTML string
 }
 
-func (f *fakeMailer) Send(_ context.Context, to, subject, body string) error {
+func (f *fakeMailer) Send(_ context.Context, to, subject, text, html string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
 	}
-	f.sent = append(f.sent, sentMail{To: to, Subject: subject, Body: body})
+	f.sent = append(f.sent, sentMail{To: to, Subject: subject, Text: text, HTML: html})
 	return nil
 }
 

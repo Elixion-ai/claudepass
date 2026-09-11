@@ -225,7 +225,7 @@ func TestSubscriptionUpdatedRefreshesPeriodEndForReissue(t *testing.T) {
 	if !ok {
 		t.Fatal("reissue should have sent an email")
 	}
-	token := extractToken(t, sent.Body)
+	token := extractToken(t, sent.Text)
 	p := verifyWithKey(t, token, d.PubKey)
 	wantExp := renewedPeriodEnd.Add(GracePeriod).Unix()
 	if p.Exp != wantExp {

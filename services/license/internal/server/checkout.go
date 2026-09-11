@@ -2,6 +2,8 @@ package server
 
 import (
 	"net/http"
+
+	"claudepass/services/license/internal/pages"
 )
 
 // handleCheckout creates a Stripe Checkout Session for the $9.99/month
@@ -13,7 +15,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	url, err := s.checkout.NewCheckoutSession(r.Context(), email)
 	if err != nil {
 		s.log.Error("create checkout session", "error", err)
-		http.Error(w, "could not start checkout", http.StatusBadGateway)
+		pages.CheckoutFailed(w)
 		return
 	}
 	http.Redirect(w, r, url, http.StatusSeeOther)

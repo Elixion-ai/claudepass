@@ -218,41 +218,58 @@ var ErrTokenNotFound = errors.New("store: checkout session not found")
 // longer readable from the store, by design (GET /license shows it once).
 var ErrTokenAlreadyShown = errors.New("store: token already shown")
 
+// CheckoutToken bundles TakeCheckoutToken's result: the one-time-show
+// token itself plus the subscriber details license_ready.html shows
+// alongside it (the account email, the plan's renewal date). Both already
+// sit in the customers row IssueForCheckout wrote for this session's
+// customer_id, joined in here so the handler needs exactly one store call
+// to render the page instead of a second round trip for the email.
+type CheckoutToken struct {
+	Token     string
+	Email     string
+	PeriodEnd int64 // unix seconds; 0 if not yet known
+}
+
 // TakeCheckoutToken returns the token issued for sessionID and clears it
 // from the store in the same statement, so it can never be displayed
 // twice — even to two concurrent requests for the same session_id, only
 // one wins the UPDATE and gets the token back.
-func (s *Store) TakeCheckoutToken(ctx context.Context, sessionID string) (string, error) {
+func (s *Store) TakeCheckoutToken(ctx context.Context, sessionID string) (CheckoutToken, error) {
 	var token sql.NullString
 	var shown int
-	err := s.db.QueryRowContext(ctx,
-		`SELECT token, shown FROM checkout_tokens WHERE session_id = ?`, sessionID,
-	).Scan(&token, &shown)
+	var email string
+	var periodEnd int64
+	err := s.db.QueryRowContext(ctx, `
+SELECT ct.token, ct.shown, c.email, c.period_end
+FROM checkout_tokens ct
+JOIN customers c ON c.customer_id = ct.customer_id
+WHERE ct.session_id = ?
+`, sessionID).Scan(&token, &shown, &email, &periodEnd)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", ErrTokenNotFound
+		return CheckoutToken{}, ErrTokenNotFound
 	}
 	if err != nil {
-		return "", fmt.Errorf("store: take checkout token: %w", err)
+		return CheckoutToken{}, fmt.Errorf("store: take checkout token: %w", err)
 	}
 	if shown == 1 || !token.Valid {
-		return "", ErrTokenAlreadyShown
+		return CheckoutToken{}, ErrTokenAlreadyShown
 	}
 
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE checkout_tokens SET token = NULL, shown = 1 WHERE session_id = ? AND shown = 0`,
 		sessionID)
 	if err != nil {
-		return "", fmt.Errorf("store: take checkout token: %w", err)
+		return CheckoutToken{}, fmt.Errorf("store: take checkout token: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return "", fmt.Errorf("store: take checkout token: %w", err)
+		return CheckoutToken{}, fmt.Errorf("store: take checkout token: %w", err)
 	}
 	if n == 0 {
 		// Lost the race to a concurrent request that took it first.
-		return "", ErrTokenAlreadyShown
+		return CheckoutToken{}, ErrTokenAlreadyShown
 	}
-	return token.String, nil
+	return CheckoutToken{Token: token.String, Email: email, PeriodEnd: periodEnd}, nil
 }
 
 // UpdateSubscription applies a customer.subscription.updated or .deleted

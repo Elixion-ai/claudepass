@@ -12,11 +12,21 @@ logs a token anywhere.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/checkout` | Creates a Stripe Checkout Session for the $9.99/month price and redirects the browser to it. Optional `email` form/query value prefills the Checkout form. |
-| `POST` | `/webhook` | Stripe webhook receiver. Handles `checkout.session.completed` (issue the first token), `customer.subscription.updated` (refresh the known period end/status), `customer.subscription.deleted` (mark canceled — the next `/reissue` for that customer is refused). Every other event type is acknowledged (200) and ignored. |
-| `GET` | `/license?session_id=...` | Stripe Checkout's `success_url` target. Shows the issued token **once**, as the exact `cpass license activate <token>` command to run, then clears it from the database — a reload, or anyone else who gets the URL, sees only an "already shown" page. |
-| `POST` | `/reissue` | Form field `email`. For an active subscriber, mints a fresh token and **emails** it (never returns it in the HTTP response) along with a Stripe customer portal link. Refuses with `402 Payment Required` if the subscription is canceled, `404` if the email is unknown. |
-| `GET` | `/healthz` | Liveness probe. |
+| `POST` | `/checkout` | Creates a Stripe Checkout Session for the $9.99/month price and redirects the browser to it (`303`). Optional `email` form/query value prefills the Checkout form. A session-creation failure renders the on-brand `COULD NOT START CHECKOUT` page (`502`). |
+| `POST` | `/webhook` | Stripe webhook receiver. Handles `checkout.session.completed` (issue the first token), `customer.subscription.updated` (refresh the known period end/status), `customer.subscription.deleted` (mark canceled — the next `/reissue` for that customer is refused). Every other event type is acknowledged (200) and ignored. No HTML — this endpoint answers Stripe, never a browser. |
+| `GET` | `/license?session_id=...` | Stripe Checkout's `success_url` target. Shows the issued token **once** (`200`), as the exact `cpass license activate <token>` command in a `.terminal-window`-style block with a COPY button, plus the Pro `.badge` and plan/account summary, then clears it from the database — a reload, or anyone else who gets the URL, sees only the on-brand "already shown" page (`200`). A missing/unknown `session_id` renders "session not found" (`400`); a session Stripe hasn't confirmed yet renders "finishing setup…" (`404`, expected to be retried). |
+| `POST` | `/reissue` | Form field `email`. For an active subscriber, mints a fresh token and **emails** it (never returns it in the HTTP response) along with a Stripe customer portal link, then renders "check your email" (`200`). A blank `email` re-renders the reissue form inline with the `.input` Error state (`aria-invalid="true"`, red border) and its `.field-error` message (`400`) rather than a bare failure page. Refuses with `402 Payment Required` (on-brand "subscription not active" page) if the subscription is canceled, `404` ("no subscription found") if the email is unknown, `500` ("could not send the email") if the mailer fails or is unconfigured. |
+| `GET` | `/healthz` | Liveness probe. Plain text, not an HTML page. |
+
+Every HTML response above (every path except `/webhook` and `/healthz`)
+renders through `internal/pages`: the identical header/nav/footer, brand
+glyph, and verbatim non-affiliation disclaimer as the static site under
+`site/`, built from the same `retro.css` component classes (`.status-panel`,
+`.btn-primary`/`.btn-secondary`, `.badge-pro`, `.terminal-titlebar`,
+`.input`/`.field-error`) — a page this service serves is indistinguishable
+from one Caddy serves directly. See `internal/pages/pages.go`'s package doc
+comment for the token-never-logged invariant every one of these responses
+keeps.
 
 Nothing outside these five routes is served by this process — point a
 reverse proxy or your marketing site at `/`, `/checkout/canceled`, and
@@ -104,6 +114,26 @@ recorded is never handed out.
   appears in the captured log output, the same "assert it's absent from
   everything an observer would see" discipline `internal/e2e`'s leak
   tests apply to the CLI.
+
+## Brand voice audit (Figma "Voice & Tone", node 58:2)
+
+`internal/mailer`'s `/reissue` email copy and every page in
+`internal/pages/templates` were checked, word by word, against
+CONTEXT.md / the Brand Book's canonical vocabulary table (Handle, Secret,
+Vault, Exposed, Command Policy, Manifest, Broker, Binding, Intercept,
+Capture, Redaction) and its "avoid" column (never Credential/password as
+the general term, never Store/keychain/database for Vault, never
+Mapping/alias/export for Binding, etc.). **No email or license-page
+surface uses a term from the "avoid" list, and no changes were needed**:
+neither `ReissueEmail`'s text/HTML bodies nor any status page mention a
+Handle or a Secret by value, and the one glossary term either surface does
+use — "Vault", in `reissue_inactive.html`'s and `site/account/index.html`'s
+"a network blip never locks your Vault" line — is capitalized and used
+exactly as CONTEXT.md defines it (the encrypted local store), never as
+"store" or "keychain". This makes email an audited surface, alongside the
+site pages CLA-27 already covered; re-run this check by hand against
+CONTEXT.md's vocabulary table whenever new copy is added to either
+`internal/mailer` or `internal/pages/templates`.
 
 ## Environment variables
 

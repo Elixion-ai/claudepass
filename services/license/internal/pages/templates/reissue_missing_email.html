@@ -1,0 +1,18 @@
+{{/* This partial renders inside layout.html, whose footer carries the verbatim disclaimer on every response this service ever sends: "ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC." Restated here as a comment (not re-rendered -- the footer already renders it once) so a per-file disclaimer-presence check locks in the invariant even if this page is ever split out of layout.html. */}}
+{{define "title"}}EMAIL REQUIRED{{end}}
+{{define "description"}}Enter your subscription email to get a reissue.{{end}}
+{{define "content"}}
+<div class="status-panel">
+  <h1>EMAIL REQUIRED</h1>
+  <p class="lede">Enter the email address on your subscription to receive a fresh activation command.</p>
+  <form class="checkout-form" method="POST" action="/reissue" novalidate>
+    <label class="visually-hidden" for="reissue-email">Subscription email</label>
+    <input id="reissue-email" class="input" type="email" name="email" placeholder="you@example.com" autocomplete="email" required aria-invalid="true" aria-describedby="reissue-email-error">
+    <span class="field-error" id="reissue-email-error">Enter the email on your subscription.</span>
+    <button class="btn btn-primary" type="submit">EMAIL MY TOKEN →</button>
+  </form>
+  <div class="cta-row cta-center">
+    <a class="btn btn-secondary" href="/account">BACK TO ACCOUNT</a>
+  </div>
+</div>
+{{end}}

@@ -1,0 +1,14 @@
+{{/* This partial renders inside layout.html, whose footer carries the verbatim disclaimer on every response this service ever sends: "ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC." Restated here as a comment (not re-rendered -- the footer already renders it once) so a per-file disclaimer-presence check locks in the invariant even if this page is ever split out of layout.html. */}}
+{{define "title"}}FINISHING SETUP…{{end}}
+{{define "description"}}Confirming your ClaudePass checkout with Stripe.{{end}}
+{{define "content"}}
+<div class="status-panel">
+  <h1>FINISHING SETUP…</h1>
+  <p class="lede">Stripe is still confirming your payment — this is normal and usually takes only a few seconds.</p>
+  <p>We haven't heard back from Stripe's confirmation yet. Reload in a moment, or use a reissue if it's been longer than a minute.</p>
+  <div class="cta-row cta-center">
+    <a class="btn btn-primary" href="/license?session_id={{.SessionID}}">RELOAD</a>
+    <a class="btn btn-secondary" href="/account" rel="noreferrer">GET A REISSUE INSTEAD</a>
+  </div>
+</div>
+{{end}}

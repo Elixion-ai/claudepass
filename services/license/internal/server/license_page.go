@@ -3,11 +3,10 @@ package server
 import (
 	"context"
 	"errors"
-	"fmt"
-	"html"
 	"net/http"
 	"time"
 
+	"claudepass/services/license/internal/pages"
 	"claudepass/services/license/internal/store"
 )
 
@@ -19,72 +18,45 @@ import (
 func (s *Server) handleLicensePage(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.URL.Query().Get("session_id")
 	if sessionID == "" {
-		http.Error(w, "missing session_id", http.StatusBadRequest)
+		pages.LicenseInvalid(w)
 		return
 	}
 
-	token, err := s.takeTokenWithRetry(r.Context(), sessionID)
+	ct, err := s.takeTokenWithRetry(r.Context(), sessionID)
 	switch {
 	case err == nil:
-		writeTokenPage(w, token)
+		pages.LicenseReady(w, ct.Token, ct.Email, ct.PeriodEnd)
 	case errors.Is(err, store.ErrTokenAlreadyShown):
-		writeAlreadyShownPage(w)
+		pages.LicenseAlreadyShown(w)
 	case errors.Is(err, store.ErrTokenNotFound):
-		http.Error(w,
-			"checkout is still being processed; reload this page in a few seconds, or use POST /reissue with the email you subscribed with",
-			http.StatusNotFound)
+		pages.LicensePending(w, sessionID)
 	default:
 		s.log.Error("license page", "session_id", sessionID, "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		pages.InternalError(w)
 	}
 }
 
 // takeTokenWithRetry polls the store for a short, bounded window: it
 // retries only on "not found yet" (the webhook has not landed), never on
 // "already shown", which is a terminal answer.
-func (s *Server) takeTokenWithRetry(ctx context.Context, sessionID string) (string, error) {
+func (s *Server) takeTokenWithRetry(ctx context.Context, sessionID string) (store.CheckoutToken, error) {
 	var lastErr error
 	for attempt := 0; attempt < s.tokenPollAttempts; attempt++ {
-		token, err := s.store.TakeCheckoutToken(ctx, sessionID)
+		ct, err := s.store.TakeCheckoutToken(ctx, sessionID)
 		if err == nil {
-			return token, nil
+			return ct, nil
 		}
 		if !errors.Is(err, store.ErrTokenNotFound) {
-			return "", err
+			return store.CheckoutToken{}, err
 		}
 		lastErr = err
 		if attempt < s.tokenPollAttempts-1 {
 			select {
 			case <-ctx.Done():
-				return "", ctx.Err()
+				return store.CheckoutToken{}, ctx.Err()
 			case <-time.After(s.tokenPollInterval):
 			}
 		}
 	}
-	return "", lastErr
-}
-
-func writeTokenPage(w http.ResponseWriter, token string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	// token's alphabet is base64url plus one '.' separator, which needs no
-	// HTML escaping, but this escapes it anyway so nothing here ever
-	// depends on that being true.
-	// Best-effort: the client is what would see a write failure here, and
-	// there is no more response to send it either way.
-	_, _ = fmt.Fprintf(w, `<!doctype html>
-<title>ClaudePass license</title>
-<p>Your ClaudePass license is ready. Run this once, on the machine where you use ClaudePass:</p>
-<pre>cpass license activate %s</pre>
-<p>This page will not show the token again — copy the command now. If you lose it, use <code>POST /reissue</code> with the email you subscribed with, or manage your subscription in the Stripe customer portal.</p>
-`, html.EscapeString(token))
-}
-
-func writeAlreadyShownPage(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = fmt.Fprint(w, `<!doctype html>
-<title>ClaudePass license</title>
-<p>This license was already shown once and cannot be displayed again.</p>
-<p>Lost it? Use <code>POST /reissue</code> with the email you subscribed with.</p>
-`) // best-effort, see writeTokenPage
+	return store.CheckoutToken{}, lastErr
 }

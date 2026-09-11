@@ -97,6 +97,18 @@ claudepass.com {
 		import security_headers
 		@404 expression `{http.error.status_code} == 404`
 		rewrite @404 /404.html
+		# Only Caddy-generated errors ever reach this block — a dead or
+		# unreachable upstream (502/504 from the @licenseService
+		# reverse_proxy above), a malformed request, and the like. A 5xx
+		# the Go license service itself returns (its own 500s, and
+		# checkout's 502 for a failed Stripe call) is a normal, complete
+		# HTTP response from that service's handler chain — Caddy passes
+		# it straight through to the browser and never sees it as an
+		# "error" to redirect. That is exactly why
+		# services/license/internal/pages renders on-brand HTML for those
+		# statuses itself instead of relying on this block to catch them.
+		@5xx expression `{http.error.status_code} >= 500`
+		rewrite @5xx /500.html
 		file_server
 	}
 }

@@ -1,0 +1,39 @@
+{{/* This partial renders inside layout.html, whose footer carries the verbatim disclaimer on every response this service ever sends: "ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC." Restated here as a comment (not re-rendered -- the footer already renders it once) so a per-file disclaimer-presence check locks in the invariant even if this page is ever split out of layout.html. */}}
+{{define "title"}}YOUR LICENSE IS READY{{end}}
+{{define "description"}}Your ClaudePass Pro license is ready to activate.{{end}}
+{{define "content"}}
+<div class="status-panel">
+  <h1>YOUR LICENSE IS READY</h1>
+  <p class="lede">Run this once, on the machine where you use ClaudePass:</p>
+
+  <div class="terminal-titlebar">
+    <span class="terminal-dot red" aria-hidden="true"></span>
+    <span class="terminal-dot yellow" aria-hidden="true"></span>
+    <span class="terminal-dot cyan" aria-hidden="true"></span>
+    <span class="terminal-title">cpass</span>
+  </div>
+  <div class="terminal">
+    <div class="terminal-line">
+      <code>cpass license activate {{.Token}}</code>
+      <button class="copy-btn" type="button">COPY</button>
+    </div>
+  </div>
+  <span class="scroll-hint">SCROLLS → full command continues off-screen</span>
+
+  <div class="callout warn">This is shown once. Copy it now. Reloading this page — or anyone else opening this link — will not show it again.</div>
+
+  <dl class="term">
+    <dt>plan</dt>
+    <dd><span class="badge badge-pro">PRO</span> Pro, $9.99/month{{if .RenewsOn}}, renews {{.RenewsOn}}{{end}}</dd>
+    {{if .Email}}<dt>account</dt>
+    <dd>{{.Email}}</dd>{{end}}
+  </dl>
+
+  <p>Next: run the command above, then check anytime with <code>cpass license status</code>.</p>
+
+  <div class="cta-row cta-center">
+    <a class="btn btn-secondary" href="/docs" rel="noreferrer">READ THE DOCS</a>
+    <a class="btn btn-secondary" href="/account" rel="noreferrer">MANAGE ACCOUNT</a>
+  </div>
+</div>
+{{end}}

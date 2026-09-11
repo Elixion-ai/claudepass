@@ -1,0 +1,13 @@
+{{/* This partial renders inside layout.html, whose footer carries the verbatim disclaimer on every response this service ever sends: "ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC." Restated here as a comment (not re-rendered -- the footer already renders it once) so a per-file disclaimer-presence check locks in the invariant even if this page is ever split out of layout.html. */}}
+{{define "title"}}COULD NOT SEND THE EMAIL{{end}}
+{{define "description"}}ClaudePass could not send your reissue email.{{end}}
+{{define "content"}}
+<div class="status-panel">
+  <h1>COULD NOT SEND THE EMAIL</h1>
+  <p class="lede">Something went wrong sending your activation email. Try again shortly.</p>
+  <div class="cta-row cta-center">
+    <a class="btn btn-primary" href="/account">TRY AGAIN</a>
+  </div>
+  <p class="footer-legal">Still stuck? Email <a href="mailto:{{supportEmail}}">{{supportEmail}}</a>.</p>
+</div>
+{{end}}

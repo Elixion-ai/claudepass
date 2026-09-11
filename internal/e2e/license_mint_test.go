@@ -127,9 +127,18 @@ func TestMintNotReachableFromCpassCLI(t *testing.T) {
 }
 
 // TestMintPackageNotInCpassBuildGraph is the same bullet at the build-graph
-// level: cmd/cpass must not import services/license/cmd/mint (or anything
-// under it), so the tool literally cannot end up compiled into the cpass
-// binary by accident.
+// level: cmd/cpass must not import services/license/cmd/mint or
+// services/license/cmd/render-pages (or anything under services/license
+// at all), so neither tool — nor the internal/pages or internal/mailer
+// packages render-pages pulls in for its fixture capture — can end up
+// compiled into the cpass binary by accident. render-pages' own doc
+// comment (services/license/cmd/render-pages/main.go) claims this same
+// isolation "mirrors" mint's; asserting on the whole services/license
+// prefix, not just the two cmd packages by name, is what actually backs
+// that claim: a future change that made cmd/cpass import
+// services/license/internal/pages or internal/mailer directly (both
+// already in render-pages' own dependency graph) would trip this check
+// too, not just an import of the cmd packages themselves.
 func TestMintPackageNotInCpassBuildGraph(t *testing.T) {
 	out, err := exec.Command("go", "list", "-deps", "claudepass/cmd/cpass").CombinedOutput()
 	if err != nil {
@@ -137,5 +146,11 @@ func TestMintPackageNotInCpassBuildGraph(t *testing.T) {
 	}
 	if strings.Contains(string(out), "claudepass/services/license/cmd/mint") {
 		t.Fatalf("cmd/cpass's build graph must not include services/license/cmd/mint:\n%s", out)
+	}
+	if strings.Contains(string(out), "claudepass/services/license/cmd/render-pages") {
+		t.Fatalf("cmd/cpass's build graph must not include services/license/cmd/render-pages:\n%s", out)
+	}
+	if strings.Contains(string(out), "claudepass/services/license") {
+		t.Fatalf("cmd/cpass's build graph must not include any claudepass/services/license package:\n%s", out)
 	}
 }

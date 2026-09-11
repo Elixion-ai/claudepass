@@ -71,13 +71,13 @@ func TestReissueActiveCustomerSendsTokenAndPortalLink(t *testing.T) {
 	if sent.To != "active@example.com" {
 		t.Fatalf("sent to %q, want active@example.com", sent.To)
 	}
-	if !strings.Contains(sent.Body, "cpass license activate ") {
-		t.Fatalf("email body should carry the activate command: %s", sent.Body)
+	if !strings.Contains(sent.Text, "cpass license activate ") {
+		t.Fatalf("email body should carry the activate command: %s", sent.Text)
 	}
-	if !strings.Contains(sent.Body, d.Portal.url) {
-		t.Fatalf("email body should carry the customer portal link: %s", sent.Body)
+	if !strings.Contains(sent.Text, d.Portal.url) {
+		t.Fatalf("email body should carry the customer portal link: %s", sent.Text)
 	}
-	token := extractToken(t, sent.Body)
+	token := extractToken(t, sent.Text)
 	verifyWithKey(t, token, d.PubKey)
 }
 

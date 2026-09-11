@@ -1,0 +1,14 @@
+{{/* This partial renders inside layout.html, whose footer carries the verbatim disclaimer on every response this service ever sends: "ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC." Restated here as a comment (not re-rendered -- the footer already renders it once) so a per-file disclaimer-presence check locks in the invariant even if this page is ever split out of layout.html. */}}
+{{define "title"}}SESSION NOT FOUND{{end}}
+{{define "description"}}This ClaudePass checkout link is missing its session.{{end}}
+{{define "content"}}
+<div class="status-panel">
+  <h1>SESSION NOT FOUND</h1>
+  <p class="lede">This link is missing its checkout session, so we can't show a license here.</p>
+  <p>If you just paid, use the link Stripe redirected you to. Otherwise, get a reissue from your account, or start again from pricing.</p>
+  <div class="cta-row cta-center">
+    <a class="btn btn-primary" href="/account">REISSUE FROM ACCOUNT</a>
+    <a class="btn btn-secondary" href="/pricing">BACK TO PRICING</a>
+  </div>
+</div>
+{{end}}

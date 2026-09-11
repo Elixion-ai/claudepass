@@ -110,10 +110,10 @@ func newRecordingMailer() *recordingMailer {
 	return m
 }
 
-func (m *recordingMailer) Send(_ context.Context, to, subject, body string) error {
+func (m *recordingMailer) Send(_ context.Context, to, subject, text, html string) error {
 	<-m.mu
 	defer func() { m.mu <- struct{}{} }()
-	m.last = body
+	m.last = text
 	return nil
 }
 

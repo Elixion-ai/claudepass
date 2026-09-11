@@ -1,0 +1,86 @@
+{{/* layout is the one shared shell every license-service HTML response
+     renders through: the same <head> tags, header nav, and footer
+     (verbatim disclaimer included) as the static site under site/, so a
+     page rendered by this Go service is indistinguishable from one served
+     by Caddy directly. Every concrete page defines "title", "description"
+     and "content"; this file only lays them into the shell. No inline
+     <script> or style="" anywhere — the production CSP is script-src
+     'self', and retro.css is the only stylesheet. */}}
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{template "title" .}} — ClaudePass</title>
+<meta name="description" content="{{template "description" .}}">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23ff8a1f'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%230e0a06'/%3E%3Crect x='12' y='6' width='2' height='5' fill='%230e0a06'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/retro.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="ClaudePass">
+  <meta property="og:title" content="ClaudePass — the Agent sees a Handle, never the Secret">
+  <meta property="og:description" content="A secret manager for AI coding agents. Your agent uses a Secret without ever reading it.">
+  <meta property="og:image" content="https://claudepass.com/assets/og.png">
+  <meta property="og:url" content="https://claudepass.com/">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://claudepass.com/assets/og.png">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+</head>
+<body class="inner-page">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="arcade-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <svg class="brand-glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <rect x="0" y="0" width="16" height="16" fill="currentColor"/>
+        <circle cx="8" cy="8" r="3" fill="var(--bg-void)"/>
+        <rect x="12" y="6" width="2" height="5" fill="var(--bg-void)"/>
+      </svg>
+      CLAUDEPASS
+    </a>
+    <nav class="arcade-nav" aria-label="Primary">
+      <a href="/install">INSTALL</a>
+      <a href="/pricing">PRICING</a>
+      <a href="/docs">DOCS</a>
+      <a href="/security">SECURITY</a>
+    </nav>
+    <div class="header-tools">
+      <button id="mute-toggle" class="icon-btn" type="button" aria-pressed="false" aria-label="Unmute sound">🔇</button>
+      <button id="crt-toggle" class="icon-btn" type="button" aria-pressed="true" aria-label="Toggle CRT scanlines">≈</button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <div class="content">
+    <div class="wrap">
+      {{template "content" .}}
+    </div>
+  </div>
+  <div id="crt-overlay" class="crt-overlay page-wide" aria-hidden="true" hidden></div>
+</main>
+
+<footer class="arcade-footer">
+  <div class="wrap">
+    <nav aria-label="Footer">
+      <a href="/install">INSTALL</a>
+      <a href="/pricing">PRICING</a>
+      <a href="/docs">DOCS</a>
+      <a href="/security">SECURITY</a>
+      <a href="/privacy">PRIVACY</a>
+      <a href="/terms">TERMS</a>
+      <a href="/account">ACCOUNT</a>
+    </nav>
+    <p class="footer-legal">
+      ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.
+    </p>
+    <p class="footer-copyright">© 2026 ClaudePass. High scores live in your browser's localStorage only.</p>
+    <button id="crt-text-toggle" class="crt-text-toggle" type="button">CRT: ON</button>
+  </div>
+</footer>
+
+<script src="/js/site.js"></script>
+</body>
+</html>
+{{end}}
