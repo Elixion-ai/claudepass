@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Install — ClaudePass</title>
-<meta name="description" content="Install cpass via Homebrew (brew install softorize/tap/cpass) or curl -fsSL https://claudepass.com/install.sh | sh.">
+<title>Manage subscription — ClaudePass</title>
+<meta name="description" content="Free holds 3 Secrets. Pro is $9.99/month for unlimited Secrets, verified entirely offline.">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230e0a06'/%3E%3Crect x='7' y='0' width='2' height='4' fill='%23ff8a1f'/%3E%3Crect x='6' y='4' width='4' height='1' fill='%23ff8a1f'/%3E%3Crect x='3' y='5' width='10' height='1' fill='%23ff8a1f'/%3E%3Crect x='0' y='6' width='3' height='8' fill='%23ff8a1f'/%3E%3Crect x='3' y='6' width='10' height='8' fill='%23ff8a1f'/%3E%3Crect x='13' y='6' width='3' height='8' fill='%23ff8a1f'/%3E%3Crect x='3' y='14' width='10' height='1' fill='%23ff8a1f'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/retro.css">
   <meta property="og:type" content="website">
@@ -36,7 +36,7 @@
       CLAUDEPASS
     </a>
     <nav class="arcade-nav" aria-label="Primary">
-      <a href="/install" aria-current="page">INSTALL</a>
+      <a href="/install">INSTALL</a>
       <a href="/pricing">PRICING</a>
       <a href="/docs">DOCS</a>
       <a href="/security">SECURITY</a>
@@ -51,47 +51,34 @@
 <main id="main">
   <div class="content">
     <div class="wrap">
-      <h1>INSTALL</h1>
-      <p class="lede">Two ways to get <code>cpass</code> — pick whichever fits your setup. No account and no GitHub credentials needed.</p>
+      <h1>YOUR SUBSCRIPTION</h1>
+      <p class="lede">Check your plan, get a fresh activation command, or manage billing.</p>
 
-      <h2>Homebrew</h2>
-      <div class="terminal">
-        <div class="terminal-line">
-          <code>brew install softorize/tap/cpass</code>
-          <button class="copy-btn" type="button">COPY</button>
-        </div>
+      <div class="cab-panel">
+        <h3>CHECK YOUR PLAN</h3>
+        <p>Your license is verified entirely offline, so the fastest check is the CLI:</p>
+        <pre class="term"><code>cpass license status</code></pre>
+        <p>It prints your plan, the account it is issued to, and the expiry — no network call, ever.</p>
       </div>
 
-      <h2>curl</h2>
-      <div class="terminal">
-        <div class="terminal-line">
-          <code>curl -fsSL https://claudepass.com/install.sh | sh</code>
-          <button class="copy-btn" type="button">COPY</button>
-        </div>
-      </div>
-      <p>
-        The script detects your OS and architecture, downloads the
-        matching release archive and its <code>checksums.txt</code>, verifies
-        the sha256 before installing, and puts <code>cpass</code> on your
-        <code>PATH</code> (<code>/usr/local/bin</code> if writable, otherwise
-        <code>~/.local/bin</code>).
-      </p>
-
-      <h2>Verify</h2>
-      <div class="terminal">
-        <div class="terminal-line">
-          <code>cpass version</code>
-          <button class="copy-btn" type="button">COPY</button>
-        </div>
+      <div class="cab-panel">
+        <h3>LOST YOUR ACTIVATION COMMAND?</h3>
+        <p>Enter the email on your subscription. We email a fresh <code>cpass license activate</code>
+        command and a link to the billing portal. The token is never shown in this page or its address.</p>
+        <form class="checkout-form" method="POST" action="/reissue">
+          <label class="visually-hidden" for="acct-email">Subscription email</label>
+          <input id="acct-email" type="email" name="email" placeholder="you@example.com" autocomplete="email" required>
+          <button class="btn btn-primary" type="submit">EMAIL MY TOKEN →</button>
+        </form>
+        <p class="footer-legal">An active subscription gets a mail within a minute. A cancelled one is declined — resubscribe from <a href="/pricing">pricing</a>.</p>
       </div>
 
-      <h2>Next</h2>
-      <p>
-        Once <code>cpass</code> is installed, the
-        <a href="/docs">60-second quickstart</a> takes you from an empty
-        Vault to a real command that uses a Secret without ever printing
-        it.
-      </p>
+      <div class="cab-panel">
+        <h3>MANAGE OR CANCEL BILLING</h3>
+        <p>Billing runs on Stripe. The reissue email above carries a customer-portal link where you can
+        update your card, download invoices, or cancel. Cancelling keeps your token working through its
+        grace period — a network blip never locks your Vault.</p>
+      </div>
     </div>
   </div>
   <div id="crt-overlay" class="crt-overlay page-wide" aria-hidden="true" hidden></div>
@@ -106,6 +93,7 @@
       <a href="/security">SECURITY</a>
       <a href="/privacy">PRIVACY</a>
       <a href="/terms">TERMS</a>
+      <a href="/account">ACCOUNT</a>
     </nav>
     <p class="footer-legal">
       ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.
