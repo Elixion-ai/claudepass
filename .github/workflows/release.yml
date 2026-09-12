@@ -1,7 +1,7 @@
 name: release
 
 # Runs GoReleaser on every vX.Y.Z tag push and publishes a GitHub Release on
-# this (private) repo. Build/test-on-every-commit CI lives in a separate
+# this repo. Build/test-on-every-commit CI lives in a separate
 # workflow (see CLA-18) — this one only cuts releases.
 on:
   push:

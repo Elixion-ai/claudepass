@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>License service unavailable — ClaudePass</title>
-<meta name="description" content="The license service is temporarily unavailable.">
+<title>Something went wrong — ClaudePass</title>
+<meta name="description" content="Something went wrong loading this page.">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23ff8a1f'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%230e0a06'/%3E%3Crect x='12' y='6' width='2' height='5' fill='%230e0a06'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/retro.css">
   <meta property="og:type" content="website">
@@ -33,9 +33,9 @@
     </a>
     <nav class="arcade-nav" aria-label="Primary">
       <a href="/install">INSTALL</a>
-      <a href="/pricing">PRICING</a>
       <a href="/docs">DOCS</a>
       <a href="/security">SECURITY</a>
+      <a href="https://github.com/gumruyanzh/claudepass">GITHUB</a>
     </nav>
     <div class="header-tools">
       <button id="mute-toggle" class="icon-btn" type="button" aria-pressed="false" aria-label="Unmute sound">🔇</button>
@@ -49,19 +49,17 @@
     <div class="wrap">
       <div class="status-500">
         <h1 class="code">500</h1>
-        <p class="redacted-line"><span class="redacted redacted--breach">[REDACTED: /license-service]</span></p>
-        <p class="lede">The license service is temporarily unavailable — checkout, license, and reissue pages won't load right now.</p>
+        <p class="redacted-line"><span class="redacted redacted--breach">[REDACTED: /error]</span></p>
+        <p class="lede">Something went wrong on our end.</p>
         <p>
-          The <code>cpass</code> binary and your Vault are unaffected: they run
-          entirely on your own machine and don't need this service to work.
-          A license you've already activated keeps working through its grace
-          period regardless.
+          The <code>cpass</code> binary and your Vault are unaffected: they
+          run entirely on your own machine and don't need this site to work.
         </p>
         <div class="cta-row cta-center">
           <a class="btn btn-primary" href="/">TRY AGAIN</a>
           <a class="btn btn-secondary" href="/docs">READ THE DOCS</a>
         </div>
-        <p class="footer-legal">Still stuck? Email <a href="mailto:support@claudepass.com">support@claudepass.com</a>.</p>
+        <p class="footer-legal">Still stuck? Open an issue on <a href="https://github.com/gumruyanzh/claudepass" target="_blank" rel="noopener">GitHub</a>.</p>
       </div>
     </div>
   </div>
@@ -72,12 +70,11 @@
   <div class="wrap">
     <nav aria-label="Footer">
       <a href="/install">INSTALL</a>
-      <a href="/pricing">PRICING</a>
       <a href="/docs">DOCS</a>
       <a href="/security">SECURITY</a>
+      <a href="https://github.com/gumruyanzh/claudepass">GITHUB</a>
       <a href="/privacy">PRIVACY</a>
       <a href="/terms">TERMS</a>
-      <a href="/account">ACCOUNT</a>
     </nav>
     <p class="footer-legal">
       ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.

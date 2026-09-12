@@ -34,9 +34,9 @@
     </a>
     <nav class="arcade-nav" aria-label="Primary">
       <a href="/install">INSTALL</a>
-      <a href="/pricing">PRICING</a>
       <a href="/docs">DOCS</a>
       <a href="/security">SECURITY</a>
+      <a href="https://github.com/gumruyanzh/claudepass">GITHUB</a>
     </nav>
     <div class="header-tools">
       <button id="mute-toggle" class="icon-btn" type="button" aria-pressed="false" aria-label="Unmute sound">🔇</button>
@@ -287,7 +287,7 @@
         <h3>Elevation effect styles</h3>
         <div class="elevation-row">
           <div class="elevation-swatch elevation-1">Elevation/1 (Subtle)<br>1px lift — inline chips</div>
-          <div class="elevation-swatch elevation-2">Elevation/2 (Medium)<br>2px lift — cards, pricing tiles</div>
+          <div class="elevation-swatch elevation-2">Elevation/2 (Medium)<br>2px lift — cards, panels</div>
           <div class="elevation-swatch elevation-3">Elevation/3 (Strong)<br>3px ember glow — modal / active dialog</div>
         </div>
       </section>
@@ -345,8 +345,6 @@
 
         <h3>Badge</h3>
         <div class="cta-row">
-          <span class="badge badge-free">FREE</span>
-          <span class="badge badge-pro">PRO</span>
           <span class="badge badge-exposed">EXPOSED</span>
         </div>
 
@@ -407,7 +405,7 @@
         </div>
 
         <h3>Nav Header</h3>
-        <p class="muted">Live at the top of this page; reproduced here (non-sticky, no duplicate control IDs) purely as a labeled component reference. No <code>GITHUB</code> link, no header CTA — see the Trademark/decisions note in <code>docs/WEB-HANDOFF.md</code> and <code>docs/adr/0010-nav-footer-no-github-dark-footer.md</code>.</p>
+        <p class="muted">Live at the top of this page; reproduced here (non-sticky, no duplicate control IDs) purely as a labeled component reference. Includes the <code>GITHUB</code> link added when ClaudePass went open source (ADR-0010's amendment); still no header CTA button — page-level CTAs cover that.</p>
         <header class="arcade-header static-demo">
           <div class="wrap">
             <a class="brand" href="/">
@@ -420,9 +418,9 @@
             </a>
             <nav class="arcade-nav" aria-label="Primary (reference copy)">
               <a href="/install">INSTALL</a>
-              <a href="/pricing">PRICING</a>
               <a href="/docs">DOCS</a>
               <a href="/security">SECURITY</a>
+              <a href="https://github.com/gumruyanzh/claudepass">GITHUB</a>
             </nav>
           </div>
         </header>
@@ -433,9 +431,9 @@
           <div class="wrap">
             <nav aria-label="Footer (reference copy, Dark)">
               <a href="/install">INSTALL</a>
-              <a href="/pricing">PRICING</a>
               <a href="/docs">DOCS</a>
               <a href="/security">SECURITY</a>
+              <a href="https://github.com/gumruyanzh/claudepass">GITHUB</a>
             </nav>
             <p class="footer-legal">ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.</p>
           </div>
@@ -444,42 +442,11 @@
           <div class="wrap">
             <nav aria-label="Footer (reference copy, Light)">
               <a href="/install">INSTALL</a>
-              <a href="/pricing">PRICING</a>
               <a href="/docs">DOCS</a>
               <a href="/security">SECURITY</a>
+              <a href="https://github.com/gumruyanzh/claudepass">GITHUB</a>
             </nav>
             <p>ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.</p>
-          </div>
-        </div>
-
-        <h3>Pricing Card</h3>
-        <p class="muted">Copy is the canon-worked-examples text (verbatim match to <code>/pricing</code>) — see the W19 decision in <code>docs/WEB-HANDOFF.md</code>, not <code>dc-25:42</code>'s invented feature list.</p>
-        <div class="pricing-grid">
-          <div class="plan cab-panel">
-            <div class="plan-accent"></div>
-            <span class="badge badge-free">FREE</span>
-            <h3>FREE — $0</h3>
-            <ul>
-              <li>Up to 3 Secrets</li>
-              <li>Env and file Bindings</li>
-              <li>Command Policy &amp; Redaction</li>
-              <li>Claude Code, Codex, and MCP integrations</li>
-              <li>Manifest, Capture, and Intercept</li>
-            </ul>
-            <div class="cta-row"><span class="btn btn-secondary">INSTALL FREE</span></div>
-          </div>
-          <div class="plan cab-panel pro">
-            <div class="plan-accent"></div>
-            <span class="badge badge-pro">PRO</span>
-            <h3>PRO — $9.99/MO</h3>
-            <ul>
-              <li>Unlimited Secrets</li>
-              <li>Everything in Free</li>
-              <li>Ed25519-signed license, checked entirely offline</li>
-              <li>A network blip never locks your Vault</li>
-              <li>Cancel anytime — your token keeps working through its grace period</li>
-            </ul>
-            <div class="cta-row"><span class="btn btn-primary">CONTINUE →</span></div>
           </div>
         </div>
 
@@ -528,35 +495,8 @@
           </div>
           <div class="trust-panel-copy">
             <h4 class="section-h2"><span class="glyph">▶</span>SECURITY, BY DESIGN</h4>
-            <p class="lede">ClaudePass is closed source, so trust has to come from documentation rather than from reading the code yourself.</p>
+            <p class="lede">ClaudePass is free and open source under the MIT license — read the code yourself on GitHub.</p>
           </div>
-        </div>
-
-        <h3>Paywall / Upgrade Banner <span class="badge badge-free">REFERENCE ONLY</span></h3>
-        <p class="muted">W18: "3 of 3 Secrets used" is local CLI state, never transmitted to the website — there is no logged-in web dashboard today. This banner has no real web surface to sit on yet; flagged to product/design whether the trigger belongs in <code>cpass list</code>/<code>cpass add</code> terminal output instead (it already exists there — see <code>internal/cli/licensecmds.go</code>'s free-plan message).</p>
-        <div class="paywall-banner">
-          <div class="paywall-copy">
-            <p class="used">3 of 3 Secrets used</p>
-            <p class="pitch">Upgrade to Pro for unlimited Secrets — $9.99/mo</p>
-          </div>
-          <span class="btn btn-primary">INSERT COIN</span>
-        </div>
-
-        <h3>License Checkout Fields <span class="badge badge-free">REFERENCE ONLY</span></h3>
-        <div class="callout warn">
-          Stripe hosts the real card form. The real checkout (<code>/pricing</code>) posts only an optional email and redirects to Stripe-hosted Checkout — ClaudePass never collects or renders a card-number field, per Stripe's PCI model. This block is a spec-only mock, not a <code>&lt;form&gt;</code>; it can't be submitted.
-        </div>
-        <div class="checkout-mock">
-          <div class="field">
-            <span class="field-label">EMAIL</span>
-            <span class="field-mock">you@company.com</span>
-          </div>
-          <div class="field">
-            <span class="field-label">CARD NUMBER</span>
-            <span class="field-mock">4242 4242 4242 4242</span>
-          </div>
-          <p class="fine-print">Ed25519-signed license, checked entirely offline — a network blip never locks your Vault.</p>
-          <span class="btn btn-primary">CONTINUE →</span>
         </div>
       </section>
 
@@ -689,12 +629,11 @@
   <div class="wrap">
     <nav aria-label="Footer">
       <a href="/install">INSTALL</a>
-      <a href="/pricing">PRICING</a>
       <a href="/docs">DOCS</a>
       <a href="/security">SECURITY</a>
+      <a href="https://github.com/gumruyanzh/claudepass">GITHUB</a>
       <a href="/privacy">PRIVACY</a>
       <a href="/terms">TERMS</a>
-      <a href="/account">ACCOUNT</a>
     </nav>
     <p class="footer-legal">
       ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.

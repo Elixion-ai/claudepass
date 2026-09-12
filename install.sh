@@ -8,8 +8,8 @@
 # deploy/Caddyfile and deploy/README.md — the archives themselves are
 # GoReleaser's output, CLA-16), verifies the archive's sha256 against
 # checksums.txt, and installs the cpass binary. No GitHub credentials are
-# needed: the source repo stays private (ADR-0006), but built binaries are
-# served publicly from the site.
+# needed: cpass downloads prebuilt archives from claudepass.com's own /dl/
+# release mirror, not from GitHub directly.
 #
 # Env vars (all optional):
 #   CPASS_VERSION       "latest" or an explicit tag, e.g. v0.1.2 (default latest)

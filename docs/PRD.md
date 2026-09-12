@@ -6,7 +6,7 @@ Developers working with AI coding agents (Claude Code, Codex, and similar) const
 
 ## Solution
 
-ClaudePass is a secret manager for AI coding agents. A developer stores Secrets in a local encrypted Vault. The Agent only ever sees Handles, opaque names like `stripe/live`. When the Agent runs a command through `cpass run`, the Broker injects the real values into the child process, redacts them from everything that comes back, and refuses commands whose purpose is to reveal rather than use them. A committed Manifest declares which Handles a project needs so the Agent never guesses. Secrets born in tool output are Captured straight into the Vault; secrets pasted by mistake are Intercepted before the model sees them; anything that did reach Context is marked Exposed and nagged for rotation. It ships as one `cpass` binary plus a Claude Code plugin, a Codex snippet, and an MCP server. The free tier holds 3 Secrets; unlimited is $9.99/month.
+ClaudePass is a secret manager for AI coding agents. A developer stores Secrets in a local encrypted Vault. The Agent only ever sees Handles, opaque names like `stripe/live`. When the Agent runs a command through `cpass run`, the Broker injects the real values into the child process, redacts them from everything that comes back, and refuses commands whose purpose is to reveal rather than use them. A committed Manifest declares which Handles a project needs so the Agent never guesses. Secrets born in tool output are Captured straight into the Vault; secrets pasted by mistake are Intercepted before the model sees them; anything that did reach Context is marked Exposed and nagged for rotation. It ships as one `cpass` binary plus a Claude Code plugin, a Codex snippet, and an MCP server. ClaudePass is free and open source under the MIT license (ADR-0011).
 
 ## User Stories
 
@@ -78,18 +78,15 @@ ClaudePass is a secret manager for AI coding agents. A developer stores Secrets 
 49. As a user of any tool-first Agent, I want `cpass mcp` to expose `run_with_secrets`, `capture`, and `list_handles` over stdio MCP, so that agents without a shell still go through the Broker.
 50. As a developer, I want the MCP server to apply the same Redaction and Command Policy as the CLI, so that there is one behaviour regardless of surface.
 
-### Licensing and distribution
-51. As a new user, I want to install `cpass` via Homebrew or a curl script and use it immediately with up to 3 Secrets, so that trying it costs nothing.
-52. As a free user, I want a clear message when I add a fourth Secret telling me the limit and how to upgrade, so that the paywall is honest.
-53. As a paying user, I want `cpass license activate <key>` to unlock unlimited Secrets and keep working offline, so that a network blip never locks my Vault.
-54. As the owner, I want license keys to be verifiable offline via a signature, so that the hosted component is only needed to issue keys, never to run the tool.
-55. As the owner, I want a small hosted license service that issues keys after Stripe checkout at $9.99/month and revokes on cancellation, so that billing is automatic.
-56. As a security-conscious user, I want a published document describing exactly what the hooks, Broker, and license check do and a no-telemetry guarantee beyond the license check, so that I can trust a closed-source tool.
+### Distribution
+51. As a new user, I want to install `cpass` via Homebrew or a curl script with no account, license key, or payment, so that trying it costs nothing and stays that way.
+52. As a contributor, I want the source on a public GitHub repository under the MIT license, so that I can read, audit, and fork it.
+53. As a security-conscious user, I want a published document describing exactly what the hooks and Broker do and a no-telemetry guarantee, so that I can verify the claims myself against the source rather than trust them on faith.
 
 ### Quality
-57. As the owner, I want an end-to-end test suite that drives the `cpass` binary against a fixture Vault and asserts on child environment, stdout, stderr, and exit code, so that every guarantee is tested at the boundary the Agent actually uses.
-58. As the owner, I want a dedicated leak test suite that tries every known reveal path and asserts nothing reaches stdout, so that Redaction and Command Policy regressions are caught.
-59. As the owner, I want CI to build and test on macOS and Linux and produce release binaries, so that every commit is shippable.
+54. As the owner, I want an end-to-end test suite that drives the `cpass` binary against a fixture Vault and asserts on child environment, stdout, stderr, and exit code, so that every guarantee is tested at the boundary the Agent actually uses.
+55. As the owner, I want a dedicated leak test suite that tries every known reveal path and asserts nothing reaches stdout, so that Redaction and Command Policy regressions are caught.
+56. As the owner, I want CI to build and test on macOS and Linux and produce release binaries, so that every commit is shippable.
 
 ## Implementation Decisions
 
@@ -105,14 +102,13 @@ ClaudePass is a secret manager for AI coding agents. A developer stores Secrets 
 - **Claude Code plugin.** A plugin directory with hooks (UserPromptSubmit → `cpass intercept`; PreToolUse matcher Bash → `cpass policy --hook`) and a skill file. Installable via the plugin marketplace mechanism or `cpass integrate claude`.
 - **Codex.** `cpass integrate codex` writes or updates a delimited section in `AGENTS.md`.
 - **MCP server.** `cpass mcp` speaks MCP over stdio with three tools; it calls the same internal run/capture functions as the CLI.
-- **Licensing.** Ed25519-signed license tokens containing plan, email, and expiry; the public key ships in the binary; verification is offline. Free tier: 3 Secrets. The license service is a separate small Go service with Stripe Checkout and webhooks, deployed to Cloudflare or Fly, issuing and revoking tokens. See ADR-0006.
-- **Distribution.** Private GitHub repo, GoReleaser producing signed binaries, Homebrew formula in the owner's existing tap, and a curl installer.
+- **Distribution.** Public GitHub repo under the MIT license, GoReleaser producing signed binaries, Homebrew formula in the owner's existing tap, and a curl installer. See ADR-0011.
 
 ## Testing Decisions
 
 - **The seam is the binary.** Almost every test drives the built `cpass` executable as a subprocess with `CPASS_HOME` pointed at a fixture directory and `CPASS_KEY` set, then asserts on the child's observed environment (via a helper program that prints its env to a file, never to stdout), on stdout/stderr text, and on exit code. This is the exact boundary an Agent uses, so tests test the guarantees, not the internals.
 - **Leak tests are their own suite.** Each known reveal path (env dump, echo, cat of temp file, base64 pipeline, error message echo, chunk-split output, JSON error body) is one test asserting the value is absent from everything the Agent would see.
-- **Unit tests only for pure cores.** The Redactor's streaming matcher, the Command Policy rule evaluator, the Intercept detector, and license token verification get table-driven unit tests because their inputs are easy to enumerate and their bugs are subtle.
+- **Unit tests only for pure cores.** The Redactor's streaming matcher, the Command Policy rule evaluator, and the Intercept detector get table-driven unit tests because their inputs are easy to enumerate and their bugs are subtle.
 - **Hook tests feed real Claude Code JSON.** Fixtures captured from actual hook invocations, asserting exit codes and stderr content.
 - **No prior art in the repo.** Go's standard `testing` package with `os/exec`; no framework.
 
@@ -124,5 +120,5 @@ Sync across machines, teams and sharing, automatic rotation, per-Secret authoriz
 
 - Vocabulary in `CONTEXT.md` is canonical: Secret, Handle, Agent, Broker, Context, Redaction, Command Policy, Vault, Binding, Manifest, Capture, Intercept, Exposed.
 - Redaction is best-effort by design; the honest public framing is "we make leaking hard and detectable, not impossible."
-- The name "ClaudePass" carries trademark exposure on "Claude"; the decision is made and recorded, not to be re-raised.
+- The name ClaudePass is settled and not to be re-raised.
 - 1Password publishes an `agent-hooks` repository for AI agents; assume competition and move quickly.

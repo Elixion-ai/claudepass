@@ -1,5 +1,7 @@
 # The shipped nav has no GITHUB link or header CTA, and the footer stays Dark on every page
 
+> **Amended 2026-09-12 by [ADR-0011](0011-free-and-open-source.md):** the closed-source reasoning below for omitting a GITHUB link no longer holds — ClaudePass is now open source and the nav gains a GITHUB link to the public repo, replacing PRICING. The footer-stays-Dark decision in this ADR is unaffected and still stands.
+
 Two Figma Brand Book nodes flagged themselves as unverified against the live site: Nav Header (24:6, both v1 and v2) independently added a `GITHUB` link (v1 also added a right-aligned Primary CTA button), and Footer (24:28) shipped two Theme variants with an explicit engineer note to "confirm against the live footer before shipping only one as canonical." Neither had been resolved; `grep -rln GITHUB site/ docs/` returns nothing, and `.arcade-footer` has been unconditionally dark on every page, including every `.inner-page`, since it was first built.
 
 We are not adding either. ClaudePass is closed-source (ADR-0006): a `GITHUB` link has nothing to point at, and adding one now would be publishing an artifact of Figma's exploration rather than fixing a gap. A header CTA is also redundant with the shipped page-level CTAs (hero `INSERT COIN`, pricing's own buttons) and would fight the nav's 640px collapse behaviour for space. The shipped four-link nav (`INSTALL / PRICING / DOCS / SECURITY`) plus the mute/CRT icon buttons stays canonical.

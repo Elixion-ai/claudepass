@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Security — ClaudePass</title>
-<meta name="description" content="Exactly what the Vault, the Broker, Redaction, Command Policy, and the license check do — and the no-telemetry guarantee.">
+<meta name="description" content="Exactly what the Vault, the Broker, Redaction, and Command Policy do — and the no-telemetry guarantee.">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23ff8a1f'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%230e0a06'/%3E%3Crect x='12' y='6' width='2' height='5' fill='%230e0a06'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/retro.css">
   <meta property="og:type" content="website">
@@ -33,9 +33,9 @@
     </a>
     <nav class="arcade-nav" aria-label="Primary">
       <a href="/install">INSTALL</a>
-      <a href="/pricing">PRICING</a>
       <a href="/docs">DOCS</a>
       <a href="/security" aria-current="page">SECURITY</a>
+      <a href="https://github.com/gumruyanzh/claudepass">GITHUB</a>
     </nav>
     <div class="header-tools">
       <button id="mute-toggle" class="icon-btn" type="button" aria-pressed="false" aria-label="Unmute sound">🔇</button>
@@ -59,9 +59,11 @@
         <div class="trust-panel-copy">
           <h2 class="section-h2"><span class="glyph">▶</span>SECURITY, BY DESIGN</h2>
           <p class="lede">
-            ClaudePass is closed source, so trust has to come from
-            documentation rather than from reading the code yourself. This
-            page says exactly what each component does and touches.
+            ClaudePass is free and open source under the MIT license —
+            read the code yourself on
+            <a href="https://github.com/gumruyanzh/claudepass" target="_blank" rel="noopener">GitHub</a>.
+            This page still says exactly what each component does and
+            touches, for anyone who'd rather read a summary first.
           </p>
         </div>
       </div>
@@ -69,13 +71,10 @@
       <div class="callout">
         <strong>No telemetry.</strong> The only network call the
         <code>cpass</code> binary ever makes, in any command, at any
-        point, is none. Two things outside the binary do touch the
-        network, and neither is telemetry:
-        <code>install.sh</code> fetches a release archive over HTTPS to
-        install <code>cpass</code> in the first place, and the license
-        service is the separate hosted component that issues license
-        tokens after Stripe Checkout — the <code>cpass</code> binary you
-        run afterwards never talks to it.
+        point, is none. The one thing outside the binary that does
+        touch the network is <code>install.sh</code>, which fetches a
+        release archive over HTTPS to install <code>cpass</code> in the
+        first place — nothing else, ever.
       </div>
 
       <h2><img src="/assets/icons/icon-handle-tag.svg" alt="" width="20" height="20"> The Vault</h2>
@@ -152,15 +151,6 @@
         silent gap.
       </p>
 
-      <h2>The license check is offline</h2>
-      <p>
-        A license token is signed with Ed25519; the public key that
-        verifies it ships inside the <code>cpass</code> binary.
-        <code>cpass license activate</code> verifies the signature
-        entirely locally and, only if it verifies, stores the token — it
-        never sends the token, or anything derived from it, anywhere.
-      </p>
-
       <h2>What this doesn't attempt</h2>
       <p class="muted">
         ClaudePass has no notion of authorization — anyone who can run
@@ -182,12 +172,11 @@
   <div class="wrap">
     <nav aria-label="Footer">
       <a href="/install">INSTALL</a>
-      <a href="/pricing">PRICING</a>
       <a href="/docs">DOCS</a>
       <a href="/security">SECURITY</a>
+      <a href="https://github.com/gumruyanzh/claudepass">GITHUB</a>
       <a href="/privacy">PRIVACY</a>
       <a href="/terms">TERMS</a>
-      <a href="/account">ACCOUNT</a>
     </nav>
     <p class="footer-legal">
       ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.

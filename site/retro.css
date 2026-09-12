@@ -630,9 +630,7 @@ input:focus-visible,
   color: var(--color-accent);
 }
 
-/* ---------- Badge (atoms-root-v1 22:29; dc-25:42) — Free/Pro/Exposed.
-   Pro is deliberately ember (color-accent), never signal-cyan, per the
-   Worked Examples canon note. ---------- */
+/* ---------- Badge (atoms-root-v1 22:29; dc-25:42) — Exposed. ---------- */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -643,16 +641,6 @@ input:focus-visible,
   font-size: 10px; /* Display/HUD-Label — off-scale by design, matches every other shipped HUD-label size */
   text-transform: uppercase;
   white-space: nowrap;
-}
-.badge-free {
-  background: var(--color-bg-surface);
-  color: var(--color-text-secondary);
-  border: var(--bevel-width) solid var(--color-text-secondary);
-}
-.badge-pro {
-  background: var(--color-bg-surface);
-  color: var(--color-accent);
-  border: var(--bevel-width) solid var(--color-accent);
 }
 .badge-exposed {
   background: var(--color-danger);
@@ -815,17 +803,6 @@ input:focus-visible,
 }
 @media (prefers-reduced-motion: reduce) {
   .spinner::after { animation: none; left: 0; width: 100%; }
-}
-/* Small inline variant — embedded in the checkout button's submitting
-   label (CLA-32 "Checkout Hand-off — Redirecting", site.js). */
-.spinner.spinner-inline {
-  width: 60px;
-  max-width: 60px;
-  height: 10px;
-  vertical-align: -1px;
-}
-form.checkout-form.is-submitting button[type="submit"] {
-  cursor: not-allowed;
 }
 
 .cta-row {
@@ -1250,48 +1227,10 @@ section + section { border-top: 2px solid var(--panel-edge-hi); }
 .hiscore-table td { color: var(--ember); }
 .hiscore-table td.score { color: var(--coin-yellow); text-align: right; }
 
-/* ---------- Pricing ---------- */
-
-.pricing-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-  margin: 24px 0;
-}
-@media (max-width: 720px) { .pricing-grid { grid-template-columns: 1fr; } }
-.plan { padding: 28px 22px; }
-.plan-accent {
-  height: 4px;
-  margin: -24px -22px 20px;
-  background: var(--ember-dim);
-}
-.plan.pro { border-color: var(--signal-cyan); border-width: 3px; }
-.plan.pro .plan-accent { background: var(--signal-cyan); }
-.plan ul { list-style: none; padding: 0; margin: 18px 0 24px; }
-.plan li {
-  padding-left: 1.6em;
-  position: relative;
-  margin: 10px 0;
-  font-size: 15px; /* off-scale by design: sits between --text-xs(12) and --text-base(16); not on the 8-step type scale — kept literal per W08 decision */
-}
-.plan li::before {
-  content: "▸";
-  position: absolute;
-  left: 0;
-  color: var(--ember);
-}
-
-form.checkout-form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-top: 4px;
-}
-/* Generalized Input (dc-64:41) — Default/Focus/Error. .checkout-form's
-   own email field is one caller of this; .input is the reusable class
-   for any other input the site adds. */
-.input,
-form.checkout-form input[type="email"] {
+/* Generalized Input (dc-64:41) — Default/Focus/Error. `.input` is the
+   reusable class for any input the site adds; see the Input demo on
+   /brand. */
+.input {
   width: 100%;
   padding: 12px;
   background: var(--bg-void);
@@ -1300,15 +1239,13 @@ form.checkout-form input[type="email"] {
   font-family: var(--font-body);
   font-size: 15px; /* off-scale by design: sits between --text-xs(12) and --text-base(16); not on the 8-step type scale — kept literal per W08 decision */
 }
-.input:focus-visible,
-form.checkout-form input[type="email"]:focus-visible {
+.input:focus-visible {
   outline: var(--focus-ring);
   outline-offset: 1px;
   border-color: var(--signal-cyan);
 }
 .input.is-error,
-.input[aria-invalid="true"],
-form.checkout-form input[aria-invalid="true"] {
+.input[aria-invalid="true"] {
   border-width: 2px;
   border-color: var(--color-danger);
 }
@@ -1319,11 +1256,9 @@ form.checkout-form input[aria-invalid="true"] {
   font-size: var(--text-sm);
   margin: -6px 0 0;
 }
-.input[aria-invalid="true"] + .field-error,
-form.checkout-form input[aria-invalid="true"] + .field-error {
+.input[aria-invalid="true"] + .field-error {
   display: block;
 }
-form.checkout-form button { cursor: pointer; }
 
 /* ---------- Trust panel (composites-root-v1 26:15 Security Trust
    Panel) — two square glyph badges (V vault, CP command policy) in
@@ -1589,7 +1524,7 @@ form.checkout-form button { cursor: pointer; }
 /* Restores .cab-panel h3's own size/spacing (font-size: text-sm,
    margin-bottom only) against the generic ".inner-page .content h3"
    rule above, which would otherwise win on specificity and resize every
-   cab-panel heading (pricing cards, account page) sitewide. */
+   cab-panel heading (/install, /docs, /security, /brand) sitewide. */
 .inner-page .content .cab-panel h3 { color: var(--color-accent); font-size: var(--text-sm); margin: 0 0 12px; }
 .inner-page .content .cab-panel p { color: var(--color-text-primary); }
 /* .cab-kicker has no live use inside a light .inner-page today (only
@@ -1707,30 +1642,6 @@ form.checkout-form button { cursor: pointer; }
 }
 .inner-page .status-404 .code { color: var(--color-accent); }
 .inner-page .status-500 .code { color: var(--color-danger); }
-
-/* ---------- Checkout status pages ---------- */
-/* Used by the license service's own HTML responses
-   (services/license/internal/pages): every GET/POST /license, /checkout
-   and /reissue state that isn't the full "ready" page reuses this one
-   narrow, centered treatment instead of the wide .content flow the docs
-   and account pages use. */
-
-.status-panel {
-  max-width: 560px;
-  margin: 0 auto;
-  text-align: center;
-  padding: 36px 28px;
-}
-.status-panel h1 { margin-bottom: 14px; }
-/* dl.term (site/docs) is normally full-width; inside a centered
-   .status-panel its dt/dd pairs read better left-aligned, so the "plan"
-   / "account" summary on the license-ready page doesn't inherit the
-   panel's text-align: center. */
-.status-panel dl.term {
-  text-align: left;
-  max-width: 340px;
-  margin: 20px auto;
-}
 
 /* =========================================================================
    Brand / living style guide (site/brand/index.html ONLY)
@@ -1983,34 +1894,6 @@ form.checkout-form button { cursor: pointer; }
 .icon-tile .cap { font-family: var(--font-family-mono); font-size: 12px; color: var(--color-text-secondary); text-align: center; }
 .icon-tile.ink-accent { color: var(--color-accent); }
 .icon-tile.ink-danger { color: var(--color-danger); }
-
-/* Paywall / Upgrade Banner (dc-66:25, W18 — /brand only) */
-.paywall-banner {
-  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-5);
-  padding: var(--space-5);
-  background: var(--color-bg-surface);
-  border: 2px solid var(--color-accent);
-}
-.paywall-copy { display: flex; flex-direction: column; gap: 4px; flex: 1 1 240px; }
-.paywall-copy .used { font-family: var(--font-family-mono); font-size: var(--text-sm); color: var(--color-text-secondary); margin: 0; }
-.paywall-copy .pitch { font-family: var(--font-family-mono); font-size: var(--text-base); color: var(--color-text-primary); margin: 0; }
-
-/* License Checkout Fields (dc-66:32, W20 — spec-only mock, /brand only).
-   Reuses .input's visual treatment on non-input elements so it never
-   behaves like a real, submittable card-number field. */
-.checkout-mock { display: flex; flex-direction: column; gap: var(--space-3); align-items: flex-start; padding: var(--space-5); background: var(--color-bg-surface); border: 2px solid var(--color-border); max-width: 340px; }
-.checkout-mock .field { display: flex; flex-direction: column; gap: 6px; width: 100%; }
-.checkout-mock .field-label { font-family: var(--font-family-mono); font-size: 12px; color: var(--color-text-secondary); }
-.checkout-mock .field-mock {
-  width: 100%;
-  padding: 12px;
-  background: var(--color-bg-canvas);
-  color: var(--color-text-primary);
-  border: 1px solid var(--steel);
-  font-family: var(--font-body);
-  font-size: 14px;
-}
-.checkout-mock .fine-print { font-family: var(--font-family-mono); font-size: 12px; color: var(--color-text-secondary); margin: 0; }
 
 /* Trademark comparison swatches */
 .tm-swatch-row { display: flex; flex-wrap: wrap; gap: 32px; margin: 16px 0; }

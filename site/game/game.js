@@ -516,9 +516,10 @@
   }
 
   window.addEventListener("keydown", function (e) {
-    // The landing page's own pricing form has a real email <input>; a
-    // global shortcut listener must not steal keystrokes ("m", "p", ...)
-    // typed into it or any other field on the page.
+    // If a future page ever adds a real <input> here, a global shortcut
+    // listener must not steal keystrokes ("m", "p", ...) typed into it —
+    // isTypingTarget below is the guard for that, kept even though no
+    // input currently ships on the landing page.
     if (isTypingTarget(e.target)) return;
     var k = e.key;
     var isGameKey = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Enter", "w", "a", "s", "d", "W", "A", "S", "D"].indexOf(k) !== -1;

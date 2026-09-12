@@ -30,10 +30,10 @@ The actors in that sentence, precisely:
   asking" exists to keep an Agent from doing these things, not to keep a
   human out of their own Vault.
 - **The Vault, the Broker, and the two hooks** are the trusted computing
-  base: code you did not write and cannot audit (ClaudePass is closed
-  source, see [ADR-0006](adr/0006-closed-source-paid.md)), running as your
-  own user, which this threat model assumes behaves as `docs/SECURITY.md`
-  describes.
+  base: running as your own user, and — because ClaudePass is free and
+  open source (see [ADR-0011](adr/0011-free-and-open-source.md)) — code
+  you can read and audit yourself rather than take on faith, which this
+  threat model assumes behaves as `docs/SECURITY.md` describes.
 
 The mechanisms that hold this property, each mapped to the piece of it they
 address:
@@ -96,7 +96,7 @@ and the PRD's own Out of Scope section).
   threat-model in a design that doesn't exist.
 - **Telemetry.** There isn't any — see `docs/SECURITY.md`'s no-telemetry
   statement. This document isn't defending against ClaudePass's own
-  servers, because outside license issuance there are none it talks to.
+  servers, because there are none it talks to.
 
 ## Known leak paths that remain
 

@@ -6,7 +6,7 @@
 #
 # Real releases: pushing a `vX.Y.Z` tag runs .github/workflows/release.yml,
 # which needs GITHUB_TOKEN (the workflow's default token, scoped to this
-# repo, is sufficient since the release target is this same private repo).
+# repo, is sufficient since the release target is this same repo).
 #
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 version: 2
@@ -58,9 +58,10 @@ release:
   github:
     owner: gumruyanzh
     name: claudepass
-  # This repo is private (ADR-0006: closed source); the release itself is
-  # only reachable by users with access to the repo or a token. See the
-  # Homebrew formula and install.sh comments for how consumers authenticate.
+  # This repo is public and MIT-licensed (ADR-0011); GitHub Releases are
+  # downloadable by anyone. install.sh and the Homebrew formula still pull
+  # from claudepass.com's own /dl/ mirror rather than GitHub directly (see
+  # install.sh).
   footer: >-
 
     ClaudePass {{ .Tag }} — a secret manager for AI coding agents.

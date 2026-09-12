@@ -29,12 +29,8 @@ Intercept's are deliberately different shapes for different situations.
 
 ## Exit codes
 `0` ok · `1` error · `2` usage / hook-block · `3` refused — a Command Policy
-block, or `CheckFreeLimit` (`internal/cli/licensecmds.go`) refusing a new
-Secret past the free plan's limit. Both are refusals in the general sense;
-only the Command-Policy path uses the `cpass: refused: <what> — <do instead>`
-grammar (`CheckFreeLimit`'s message is its own plain sentence, matched
-character-for-character by `internal/e2e/license_test.go`'s `freeLimitMsg`).
-These exit codes are contract; do not repurpose `0`/`1`/`2`/`3` for anything
+block, using the `cpass: refused: <what> — <do instead>` grammar. These
+exit codes are contract; do not repurpose `0`/`1`/`2`/`3` for anything
 outside what is already listed here.
 
 ## Colour (ANSI, TTY only)

@@ -1,6 +1,6 @@
 # ClaudePass
 
-Secret manager for AI coding agents. Read `CONTEXT.md` for vocabulary and `docs/adr/` for decisions before changing anything. The PRD is `docs/PRD.md`.
+Secret manager for AI coding agents. Free and open source under the MIT license (see `LICENSE` and `docs/adr/0011-free-and-open-source.md`). Read `CONTEXT.md` for vocabulary and `docs/adr/` for decisions before changing anything. The PRD is `docs/PRD.md`.
 
 ## Agent skills
 

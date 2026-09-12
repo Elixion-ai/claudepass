@@ -2,11 +2,9 @@
 #
 # Two server blocks:
 #   - www.claudepass.com: permanent redirect to the apex.
-#   - claudepass.com: five routes reverse-proxy to the license service
-#     (services/license, running locally as the "license" systemd unit,
-#     see deploy/license.service); /dl/* is the static release mirror
-#     install.sh and the Homebrew formula download from; everything else
-#     is the static site (site/) with a custom 404 page.
+#   - claudepass.com: /dl/* is the static release mirror install.sh and
+#     the Homebrew formula download from; everything else is the static
+#     site (site/) with custom 404/500 pages.
 #
 # No ACME `email` directive: Caddy's automatic HTTPS works without one,
 # it only forgoes renewal-problem notices. See deploy/README.md for how
@@ -40,8 +38,6 @@
 		# Press Start 2P face is self-hosted under site/fonts, so
 		# font-src is 'self' with no webfont CDN. img-src adds data:
 		# for inline data-URI art without opening up remote images.
-		# form-action 'self' is still what lets /pricing's form POST to
-		# /checkout on the same origin.
 		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'self'; frame-ancestors 'none'"
 		-Server
 	}
@@ -62,25 +58,6 @@ claudepass.com {
 
 	root * /srv/claudepass/site
 
-	# The license service (services/license/README.md): Checkout, the
-	# post-checkout token page, reissue, Stripe's webhook, and the health
-	# probe. Nothing else is proxied — every other path is the static site.
-	#
-	# This MUST be a `handle` block, not a bare `reverse_proxy` directive:
-	# Caddy's Caddyfile adapter sorts directives of different names by a
-	# fixed global order, not by their position in this file, and that
-	# order places the catch-all `handle {}` file_server below BEFORE a
-	# same-level bare `reverse_proxy` — so a bare `reverse_proxy` here
-	# would never run (every request, including /healthz and /checkout,
-	# would instead hit the catch-all file_server and 404). Grouping all
-	# three branches as `handle` blocks makes them one mutually-exclusive
-	# set evaluated top-to-bottom in the order written, which is what the
-	# comment above always assumed.
-	@licenseService path /checkout /license /reissue /webhook /healthz
-	handle @licenseService {
-		reverse_proxy 127.0.0.1:8080
-	}
-
 	# The release mirror install.sh and the Homebrew formula pull from
 	# (CLA-16) — plain static files, directory listing off.
 	handle /dl/* {
@@ -97,16 +74,10 @@ claudepass.com {
 		import security_headers
 		@404 expression `{http.error.status_code} == 404`
 		rewrite @404 /404.html
-		# Only Caddy-generated errors ever reach this block — a dead or
-		# unreachable upstream (502/504 from the @licenseService
-		# reverse_proxy above), a malformed request, and the like. A 5xx
-		# the Go license service itself returns (its own 500s, and
-		# checkout's 502 for a failed Stripe call) is a normal, complete
-		# HTTP response from that service's handler chain — Caddy passes
-		# it straight through to the browser and never sees it as an
-		# "error" to redirect. That is exactly why
-		# services/license/internal/pages renders on-brand HTML for those
-		# statuses itself instead of relying on this block to catch them.
+		# Only Caddy-generated errors ever reach this block — a malformed
+		# request, a file_server error, and the like from the static site
+		# served above. There is no upstream or proxied service that
+		# could itself return a 5xx here.
 		@5xx expression `{http.error.status_code} >= 500`
 		rewrite @5xx /500.html
 		file_server

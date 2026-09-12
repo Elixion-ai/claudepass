@@ -134,9 +134,6 @@ func cmdAdd(e *env) int {
 	if code != ExitOK {
 		return code
 	}
-	if err := CheckFreeLimit(e, v); err != nil {
-		return e.fail(ExitRefused, "%v", err)
-	}
 	value, err := e.readSecret(fmt.Sprintf("value for %s: ", handle),
 		"add needs a terminal to type the value into; from an Agent, use `cpass capture <handle> -- <command>` so the value never enters its context")
 	if err != nil {

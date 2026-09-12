@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Terms — ClaudePass</title>
-<meta name="description" content="The plain-language terms for the ClaudePass service and Pro subscription.">
+<meta name="description" content="The plain-language terms for the ClaudePass service.">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23ff8a1f'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%230e0a06'/%3E%3Crect x='12' y='6' width='2' height='5' fill='%230e0a06'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/retro.css">
   <meta property="og:type" content="website">
@@ -33,9 +33,9 @@
     </a>
     <nav class="arcade-nav" aria-label="Primary">
       <a href="/install">INSTALL</a>
-      <a href="/pricing">PRICING</a>
       <a href="/docs">DOCS</a>
       <a href="/security">SECURITY</a>
+      <a href="https://github.com/gumruyanzh/claudepass">GITHUB</a>
     </nav>
     <div class="header-tools">
       <button id="mute-toggle" class="icon-btn" type="button" aria-pressed="false" aria-label="Unmute sound">🔇</button>
@@ -50,24 +50,14 @@
 
 
       <h1>Terms of Service</h1>
-      <p class="lede">Plain-language summary of how the ClaudePass service and subscription work.</p>
+      <p class="lede">Plain-language summary of how the ClaudePass service works.</p>
 
       <h2>The service</h2>
       <p>
-        ClaudePass is a closed-source, locally-run secret manager
-        (<code>cpass</code>) plus a small hosted license service that
-        issues and manages Pro subscriptions. The Free plan holds up to 3
-        Secrets; the Pro plan is $9.99/month for unlimited Secrets.
-      </p>
-
-      <h2>Billing</h2>
-      <p>
-        Pro subscriptions are billed monthly through Stripe. You can
-        cancel anytime; canceling stops future renewals but does not
-        revoke a license token already activated on your machine —
-        <code>cpass</code> verifies tokens entirely offline, so a token
-        keeps working until its current billing period plus a short grace
-        window ends.
+        ClaudePass is a free, open source (MIT-licensed), locally-run
+        secret manager (<code>cpass</code>). There's no account, no
+        subscription, and no paid plan — every feature is free for
+        everyone, forever. Source: <a href="https://github.com/gumruyanzh/claudepass" target="_blank" rel="noopener">github.com/gumruyanzh/claudepass</a>.
       </p>
 
       <h2>Acceptable use</h2>
@@ -81,11 +71,11 @@
 
       <h2>No warranty</h2>
       <p>
-        ClaudePass is provided "as is," without warranty of any kind.
-        Redaction is best-effort by design — it makes leaking a Secret
-        through a wrapped command's own output hard and detectable, not
-        impossible. See <a href="/security">Security</a> for exactly what
-        that does and doesn't cover.
+        ClaudePass is provided "as is," under the MIT license, without
+        warranty of any kind. Redaction is best-effort by design — it
+        makes leaking a Secret through a wrapped command's own output hard
+        and detectable, not impossible. See <a href="/security">Security</a>
+        for exactly what that does and doesn't cover.
       </p>
 
       <h2>Trademarks</h2>
@@ -111,12 +101,11 @@
   <div class="wrap">
     <nav aria-label="Footer">
       <a href="/install">INSTALL</a>
-      <a href="/pricing">PRICING</a>
       <a href="/docs">DOCS</a>
       <a href="/security">SECURITY</a>
+      <a href="https://github.com/gumruyanzh/claudepass">GITHUB</a>
       <a href="/privacy">PRIVACY</a>
       <a href="/terms">TERMS</a>
-      <a href="/account">ACCOUNT</a>
     </nav>
     <p class="footer-legal">
       ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.

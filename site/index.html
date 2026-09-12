@@ -38,9 +38,9 @@
     </a>
     <nav class="arcade-nav" aria-label="Primary">
       <a href="/install">INSTALL</a>
-      <a href="/pricing">PRICING</a>
       <a href="/docs">DOCS</a>
       <a href="/security">SECURITY</a>
+      <a href="https://github.com/gumruyanzh/claudepass">GITHUB</a>
     </nav>
     <div class="header-tools">
       <button id="mute-toggle" class="icon-btn" type="button" aria-pressed="false" aria-label="Unmute sound">🔇</button>
@@ -91,7 +91,7 @@
 
         <div class="cta-row cta-center game-over-cta" id="game-over-cta" hidden>
           <a class="btn btn-primary" href="/install">CONTINUE? → INSTALL CLAUDEPASS</a>
-          <a class="btn btn-secondary" href="/pricing">UNLIMITED CONTINUES → SEE PRICING</a>
+          <a class="btn btn-secondary" href="#opensource">UNLIMITED CONTINUES → IT'S FREE</a>
         </div>
       </div>
 
@@ -108,7 +108,7 @@
           </p>
           <div class="cta-row">
             <a class="btn btn-primary" href="/install">INSERT COIN → INSTALL CPASS</a>
-            <a class="btn btn-secondary" href="/pricing">VIEW PRICING</a>
+            <a class="btn btn-secondary" href="#opensource">FREE &amp; OPEN SOURCE</a>
           </div>
         </div>
       </noscript>
@@ -122,7 +122,7 @@
 
       <div class="cta-row cta-center">
         <a class="btn btn-primary" href="/install">INSERT COIN → INSTALL CPASS</a>
-        <a class="btn btn-secondary" href="/pricing">VIEW PRICING</a>
+        <a class="btn btn-secondary" href="#opensource">FREE &amp; OPEN SOURCE</a>
       </div>
     </div>
   </section>
@@ -186,7 +186,7 @@
     <div class="wrap">
       <span class="section-eyebrow">INSERT COIN</span>
       <h2 class="section-h2"><span class="glyph">▶</span>INSTALL</h2>
-      <p class="section-lede">One command. No account required for Free.</p>
+      <p class="section-lede">One command. No account, ever.</p>
       <div class="terminal-titlebar">
         <span class="terminal-dot red" aria-hidden="true"></span>
         <span class="terminal-dot yellow" aria-hidden="true"></span>
@@ -206,44 +206,22 @@
     </div>
   </section>
 
-  <section id="pricing">
+  <section id="opensource">
     <div class="wrap">
-      <span class="section-eyebrow">CONTINUE?</span>
-      <h2 class="section-h2"><span class="glyph">▶</span>PRICING</h2>
-      <p class="section-lede">Start free. Upgrade when 3 Secrets isn't enough.</p>
-      <div class="pricing-grid">
-        <div class="plan cab-panel">
-          <div class="plan-accent"></div>
-          <span class="badge badge-free">FREE</span>
-          <h3>FREE — $0</h3>
-          <ul>
-            <li>Up to 3 Secrets</li>
-            <li>Env and file Bindings</li>
-            <li>Command Policy &amp; Redaction</li>
-            <li>Claude Code, Codex, and MCP integrations</li>
-            <li>Manifest, Capture, and Intercept</li>
-          </ul>
-          <div class="cta-row">
-            <a class="btn btn-secondary" href="/install">INSTALL FREE</a>
-          </div>
-        </div>
-        <div class="plan cab-panel pro">
-          <div class="plan-accent"></div>
-          <span class="badge badge-pro">PRO</span>
-          <h3>PRO — $9.99/MO</h3>
-          <ul>
-            <li>Unlimited Secrets</li>
-            <li>Everything in Free</li>
-            <li>Ed25519-signed license, checked entirely offline</li>
-            <li>A network blip never locks your Vault</li>
-            <li>Cancel anytime — your token keeps working through its grace period</li>
-          </ul>
-          <form class="checkout-form" method="POST" action="/checkout" novalidate>
-            <label class="visually-hidden" for="pro-email">Email address (optional)</label>
-            <input id="pro-email" class="input" type="email" name="email" placeholder="you@example.com (optional)" autocomplete="email" aria-describedby="pro-email-error">
-            <span class="field-error" id="pro-email-error">Enter a valid email address, or leave it blank.</span>
-            <button class="btn btn-primary" type="submit">CONTINUE →</button>
-          </form>
+      <span class="section-eyebrow">FREE PLAY</span>
+      <h2 class="section-h2"><span class="glyph">▶</span>FREE &amp; OPEN SOURCE</h2>
+      <p class="section-lede">No plans, no paywall, no account. Every Secret, every integration — MIT licensed, forever.</p>
+      <div class="cab-panel">
+        <ul>
+          <li>Unlimited Secrets</li>
+          <li>Env and file Bindings</li>
+          <li>Command Policy &amp; Redaction</li>
+          <li>Claude Code, Codex, and MCP integrations</li>
+          <li>Manifest, Capture, and Intercept</li>
+        </ul>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="/install">INSTALL FREE</a>
+          <a class="btn btn-secondary" href="https://github.com/gumruyanzh/claudepass" target="_blank" rel="noopener">VIEW SOURCE ON GITHUB</a>
         </div>
       </div>
     </div>
@@ -260,15 +238,13 @@
         <div class="trust-panel-copy">
           <h2 class="section-h2"><span class="glyph">▶</span>SECURITY, BY DESIGN</h2>
           <p class="section-lede">
-            ClaudePass is closed-source software with a paid plan from day
-            one — the same model 1Password and LastPass use, not open-core.
-            Since you can't read the code yourself, trust has to come from
-            documentation instead: exactly what the Vault, the Broker, both
-            hooks, and the license check do and touch, every environment
-            variable and on-disk path, and a plain no-telemetry statement
-            beyond the license check.
+            ClaudePass is free and open source under the MIT license —
+            read every line yourself. This page still documents exactly
+            what the Vault, the Broker, and both hooks do and touch,
+            every environment variable and on-disk path, and a plain
+            no-telemetry statement.
           </p>
-          <p><a href="/security">READ THE FULL SECURITY BREAKDOWN →</a></p>
+          <p><a href="/security">READ THE FULL SECURITY BREAKDOWN →</a> · <a href="https://github.com/gumruyanzh/claudepass" target="_blank" rel="noopener">VIEW SOURCE ON GITHUB →</a></p>
         </div>
       </div>
     </div>
@@ -285,12 +261,11 @@
   <div class="wrap">
     <nav aria-label="Footer">
       <a href="/install">INSTALL</a>
-      <a href="/pricing">PRICING</a>
       <a href="/docs">DOCS</a>
       <a href="/security">SECURITY</a>
+      <a href="https://github.com/gumruyanzh/claudepass">GITHUB</a>
       <a href="/privacy">PRIVACY</a>
       <a href="/terms">TERMS</a>
-      <a href="/account">ACCOUNT</a>
     </nav>
     <p class="footer-legal">
       ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.

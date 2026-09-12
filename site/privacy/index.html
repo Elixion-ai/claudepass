@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Privacy — ClaudePass</title>
-<meta name="description" content="What claudepass.com and the license service do and don't collect. The cpass binary itself makes no network calls at all.">
+<meta name="description" content="claudepass.com collects nothing but ordinary server logs. The cpass binary itself makes no network calls at all.">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23ff8a1f'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%230e0a06'/%3E%3Crect x='12' y='6' width='2' height='5' fill='%230e0a06'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/retro.css">
   <meta property="og:type" content="website">
@@ -33,9 +33,9 @@
     </a>
     <nav class="arcade-nav" aria-label="Primary">
       <a href="/install">INSTALL</a>
-      <a href="/pricing">PRICING</a>
       <a href="/docs">DOCS</a>
       <a href="/security">SECURITY</a>
+      <a href="https://github.com/gumruyanzh/claudepass">GITHUB</a>
     </nav>
     <div class="header-tools">
       <button id="mute-toggle" class="icon-btn" type="button" aria-pressed="false" aria-label="Unmute sound">🔇</button>
@@ -50,36 +50,31 @@
 
 
       <h1>Privacy</h1>
-      <p class="lede">Short version: the <code>cpass</code> binary makes no network calls at all. The website and the license service handle only what's needed to sell and support a subscription.</p>
+      <p class="lede">Short version: the <code>cpass</code> binary makes no network calls at all, and there's no account, no billing, and nothing to collect on this site beyond ordinary web server logs.</p>
 
       <h2>The cpass binary: no telemetry</h2>
       <p>
         The only network call the <code>cpass</code> binary ever makes, in
         any command, at any point, is none. It stores your Secrets in a
         local, encrypted Vault on your own machine and never uploads,
-        syncs, or transmits it or its contents anywhere. The one exception
-        is activating a license: <code>cpass license activate</code>
-        verifies a token's signature entirely offline against a public key
-        baked into the binary — it does not call home to do so.
+        syncs, or transmits it or its contents anywhere.
       </p>
 
-      <h2>What claudepass.com and the license service see</h2>
+      <h2>What claudepass.com sees</h2>
       <ul>
-        <li><strong>Checkout.</strong> If you provide an email on <a href="/pricing">the pricing page</a>, it prefills Stripe Checkout. Payment details are handled entirely by Stripe — we never see or store your card number.</li>
-        <li><strong>Subscription records.</strong> The license service keeps a minimal record tied to your Stripe customer id (a correlation id for an issued token, and subscription status) so it can issue a fresh activation command if you ever need one. It does not keep a copy of your activated license token after it's shown to you once.</li>
-        <li><strong>Reissue emails.</strong> If you request a new activation command via <code>/reissue</code>, we send it to the email address on file with your subscription.</li>
-        <li><strong>Server logs.</strong> Standard web server logs (method, path, status, timestamp) for operating the site and the license service — never a Secret, license token, or Vault content, because those never reach us in the first place.</li>
+        <li><strong>Server logs.</strong> Standard web server logs (method, path, status, timestamp) for operating this static site — never a Secret or Vault content, because those never reach us in the first place.</li>
       </ul>
 
       <h2>Third parties</h2>
       <p>
-        Stripe processes payment and subscription billing under its own
-        privacy policy. SMTP delivery is used only to send reissue emails
-        to the address already on file with your subscription.
+        This site has no third-party trackers, analytics, or payment
+        processor. The release mirror it serves from is fetched by
+        <code>install.sh</code> and the Homebrew formula, both over plain
+        HTTPS.
       </p>
 
       <h2>Contact</h2>
-      <p class="muted">Questions about this policy: reach out through the contact details on your Stripe receipt or subscription confirmation.</p>
+      <p class="muted">Questions about this policy: open an issue on <a href="https://github.com/gumruyanzh/claudepass" target="_blank" rel="noopener">GitHub</a>.</p>
 
     
     </div>
@@ -91,12 +86,11 @@
   <div class="wrap">
     <nav aria-label="Footer">
       <a href="/install">INSTALL</a>
-      <a href="/pricing">PRICING</a>
       <a href="/docs">DOCS</a>
       <a href="/security">SECURITY</a>
+      <a href="https://github.com/gumruyanzh/claudepass">GITHUB</a>
       <a href="/privacy">PRIVACY</a>
       <a href="/terms">TERMS</a>
-      <a href="/account">ACCOUNT</a>
     </nav>
     <p class="footer-legal">
       ClaudePass is an independent product and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic, PBC.

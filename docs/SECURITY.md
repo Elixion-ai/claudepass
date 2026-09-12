@@ -1,16 +1,22 @@
 # Security
 
-ClaudePass is closed source (see [ADR-0006](adr/0006-closed-source-paid.md)),
-so trust in it has to come from documentation rather than from reading the
-code yourself. This page says exactly what each component does and touches
-— the Vault's format and cipher, where the unlock key lives on each
-platform, what the two Claude Code hooks read and block, what `cpass run`
-does to a child process and its output, what Redaction can and cannot
-guarantee, the redaction log, the license check, and a no-telemetry
-guarantee. `docs/THREATS.md` covers the threat model and the leak paths
-this design deliberately leaves open; this page is the "what actually
-happens" reference underneath it. Vocabulary follows
+ClaudePass is free and open source under the MIT license (see
+[ADR-0011](adr/0011-free-and-open-source.md)) — you can read the code
+yourself, and this page still says exactly what each component does and
+touches so you don't have to. This page covers the Vault's format and
+cipher, where the unlock key lives on each platform, what the two Claude
+Code hooks read and block, what `cpass run` does to a child process and its
+output, what Redaction can and cannot guarantee, the redaction log, and a
+no-telemetry guarantee. `docs/THREATS.md` covers the threat model and the
+leak paths this design deliberately leaves open; this page is the "what
+actually happens" reference underneath it. Vocabulary follows
 [`CONTEXT.md`](../CONTEXT.md).
+
+## Reporting a vulnerability
+
+This page documents what ClaudePass does and touches, not how to report a
+security issue — see [`.github/SECURITY.md`](../.github/SECURITY.md) for
+that.
 
 ## The Vault
 
@@ -441,39 +447,20 @@ The Secret's value itself is never written to this file, in any form or
 encoding — only that a redaction happened, for which Handle, in which
 encoding, on which stream, for which command's basename.
 
-## The license check is offline
-
-A license token is `base64url(JSON{sub, plan, exp, iat, jti})` + `.` +
-`base64url(Ed25519 signature)`. The Ed25519 public key that verifies it
-ships baked into the `cpass` binary (`internal/license/publickey.go`);
-`cpass license activate <token>` verifies the signature **entirely
-locally** and, only if it verifies, writes the token verbatim to
-`$CPASS_HOME/license` (mode `0600`) — it never sends the token, or anything
-derived from it, anywhere. `cpass license status`, `cpass license
-deactivate`, and every command that gates a new Secret on the free-plan
-limit read that same local file and do the arithmetic (plan, expiry) in
-the `cpass` process itself. Issuing a token in the first place —
-`services/license/`, a separate small Go service behind Stripe Checkout —
-is a different binary this CLI never talks to; `cpass` only ever verifies,
-never issues or phones home to check.
-
 ## No telemetry
 
 **The only network call the `cpass` binary ever makes, in any command, at
 any point, is none.** `cmd/cpass`, `internal/cli`, `internal/vault`,
 `internal/broker`, `internal/run`, `internal/redact`, `internal/policy`,
 `internal/manifest`, `internal/detect`, `internal/dotenv`, `internal/mcp`,
-`internal/integrate`, and `internal/license` import no `net/http` and open
-no outbound network connection anywhere — the only networking primitive in
-the whole binary is `internal/broker`'s own Unix domain socket to the local
-Broker process (loopback-only, machine-local, never a network address).
-Two things outside the `cpass` binary itself do touch the network, and
-neither is telemetry: `install.sh` fetches a release archive and its
-`checksums.txt` over HTTPS from `claudepass.com` (verifying the archive's
-sha256 before installing it) to install `cpass` in the first place, and
-`services/license/` is the separate hosted service that issues license
-tokens after a Stripe Checkout — the `cpass` binary you run afterwards
-never talks to it (see above).
+and `internal/integrate` import no `net/http` and open no outbound network
+connection anywhere — the only networking primitive in the whole binary is
+`internal/broker`'s own Unix domain socket to the local Broker process
+(loopback-only, machine-local, never a network address). One thing outside
+the `cpass` binary itself does touch the network, and it isn't telemetry
+either: `install.sh` fetches a release archive and its `checksums.txt` over
+HTTPS from `claudepass.com` (verifying the archive's sha256 before
+installing it) to install `cpass` in the first place.
 
 ## Every `CPASS_*` environment variable
 
@@ -487,7 +474,6 @@ never talks to it (see above).
 | `CI` | `broker.CIMode` | Not a `CPASS_*` variable, but consulted alongside `CPASS_CI`: `CI=true` with no Vault file present at the resolved path also triggers CI mode. |
 | `CPASS_TEST_STDIN` | `cli.testStdin` | **Test-only** — compiled in only by binaries built with `-tags e2e`. Lets a non-terminal stdin satisfy `cpass add`/`cpass capture`'s terminal gate, so the e2e suite can drive prompts without a real TTY. A release binary has no way to read this variable at all. |
 | `CPASS_TEST_TTY` | `cli.testTTY` | **Test-only**, same `-tags e2e` gate as above. Forces `humanPresent()` true, for exercising `--unsafe-allow` and similar human-only paths from a test harness. |
-| `CPASS_TEST_LICENSE_PUBKEY` | `license.trustedPublicKey` | **Test-only**, same `-tags e2e` gate. Base64 of a throwaway 32-byte Ed25519 public key, so tests can mint and verify their own license tokens without the real signing key (which is not in this repository) or the real trusted key. |
 | `CPASS_VERSION` | `install.sh` only | Not read by the compiled `cpass` binary. `latest` (default) or an explicit release tag (e.g. `v0.1.2`) for the installer to fetch from `claudepass.com/dl/<version>/`. |
 | `CPASS_INSTALL_DIR` | `install.sh` only | Not read by the compiled `cpass` binary. Where the installer places the downloaded `cpass` binary. |
 | `CPASS_BASE_URL` | `install.sh` only | Not read by the compiled `cpass` binary. Overrides the download origin the installer fetches the release archive and `checksums.txt` from (default `https://claudepass.com`) — for a mirror or a test fixture server. |
@@ -504,7 +490,6 @@ All paths below are relative to `$CPASS_HOME` unless stated otherwise.
 | `$CPASS_HOME/cpass.sock` (or `$XDG_RUNTIME_DIR/cpass.sock` if set) | The Broker process's Unix domain socket (Linux/CI unlock path only). | `0600` |
 | `$CPASS_HOME/redactions.log` | The append-only redaction event log described above. | `0600` |
 | `$CPASS_HOME/run/<16-hex-char id>/` | One per-invocation temp directory for `cpass run`'s file Bindings; holds a `.pid` file and one file per file-bound Secret, all shredded on exit. | `0700` (files `0600`) |
-| `$CPASS_HOME/license` | The activated license token, stored verbatim after local signature verification. | `0600` |
 | `.claudepass.toml` (repo root, found by walking up from the current directory) | The Manifest: which Handles this project needs and their Bindings. Contains no values; meant to be committed. | `0644` |
 | `<skills-dir>/claudepass/` (default `~/.claude/skills/claudepass`, overridable with `cpass integrate claude --path`) | The installed Claude Code plugin: `.claude-plugin/plugin.json`, `hooks/hooks.json`, `skills/claudepass/SKILL.md`. | `0644` (dirs `0755`) |
 | `AGENTS.md` (repo root, or `cpass integrate codex --path`) | A delimited, idempotent section `cpass integrate codex` writes teaching Codex the CLI. Everything outside the `<!-- cpass:begin/end -->` markers is preserved untouched. | `0644` |

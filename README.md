@@ -1,7 +1,8 @@
 <p align="center"><img src="site/assets/readme-header.png" alt="ClaudePass — the Agent sees a Handle, never the Secret" width="820"></p>
 
 
-A secret manager for AI coding agents.
+A secret manager for AI coding agents. Free and open source under the
+[MIT license](LICENSE).
 
 ## The problem
 
@@ -9,10 +10,11 @@ Developers working with AI coding agents constantly need the agent to run comman
 
 ## Install
 
-`gumruyanzh/claudepass` is a private repository (closed source, see
-[ADR-0006](docs/adr/0006-closed-source-paid.md)) — but built binaries are
-published publicly at [claudepass.com](https://claudepass.com), so
-installing needs no GitHub credentials.
+`gumruyanzh/claudepass` is a public repository on GitHub, open source
+under the [MIT license](LICENSE) (see
+[ADR-0011](docs/adr/0011-free-and-open-source.md)). Built binaries are
+also published at [claudepass.com](https://claudepass.com), so installing
+needs no GitHub credentials either way.
 
 **curl:**
 
@@ -137,24 +139,15 @@ does and doesn't catch. Command Policy refuses, before the command even
 starts, anything whose only real purpose is to reveal a Secret rather than
 use it: `env`, `printenv`, reading a `.env` file, and the like.
 
-## Pricing
-
-Free holds 3 Secrets — enough to try the whole flow above. `cpass license
-activate <token>` unlocks unlimited Secrets for $9.99/month; the token is an
-Ed25519-signed value verified entirely offline against a public key baked
-into the binary, so a network blip never locks you out of Secrets you
-already have. See [ADR-0006](docs/adr/0006-closed-source-paid.md) for why
-ClaudePass is closed source and paid from v1, and
-[`docs/SECURITY.md`](docs/SECURITY.md) for exactly what the license check
-does (and doesn't) touch.
-
 ## Documentation
 
 - [`CONTEXT.md`](CONTEXT.md) — the vocabulary this repo and this README use throughout (Secret, Handle, Agent, Broker, Context, Redaction, Command Policy, Vault, Binding, Manifest, Capture, Intercept, Exposed).
 - [`docs/PRD.md`](docs/PRD.md) — the product spec.
 - [`docs/adr/`](docs/adr/) — the design decisions and why alternatives were rejected.
-- [`docs/SECURITY.md`](docs/SECURITY.md) — exactly what the Vault, the Broker, both hooks, `cpass run`, Redaction, and the license check do and touch, every `CPASS_*` environment variable, and the no-telemetry guarantee.
+- [`docs/SECURITY.md`](docs/SECURITY.md) — exactly what the Vault, the Broker, both hooks, `cpass run`, and Redaction do and touch, every `CPASS_*` environment variable, and the no-telemetry guarantee.
 - [`docs/THREATS.md`](docs/THREATS.md) — the threat model, what's deliberately out of scope, and the leak paths that honestly remain.
+- [`LICENSE`](LICENSE) — MIT.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to build, test, and contribute.
 
 ## Build from source
 

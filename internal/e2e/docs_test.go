@@ -237,7 +237,6 @@ var knownPathConstants = []struct {
 	{"cpass.sock", "internal/broker/process_unix.go: socketFileName"},
 	{"redactions.log", "internal/run/run.go: logPath"},
 	{"CPASS_HOME/run", "internal/run/files.go: runRoot (the file-Binding temp-dir root)"},
-	{"CPASS_HOME/license", "internal/license/store.go: Path (FileName \"license\")"},
 	{".claudepass.toml", "internal/manifest/manifest.go: FileName"},
 }
 
