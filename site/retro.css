@@ -964,13 +964,28 @@ section + section { border-top: 2px solid var(--panel-edge-hi); }
 }
 .terminal-line code {
   white-space: pre;
-  overflow-x: auto;
+  /* No overflow-x here: as a flex item, an overflow:auto <code> shrinks to
+     the space left beside the COPY button and becomes an invisible inner
+     scroll box that cuts the command off mid-word on phones. Letting it
+     keep its natural width means the whole .terminal panel (overflow-x:
+     auto above) scrolls as one visible unit instead. */
   /* Cancel the global inline Code Chip treatment: this <code> already
      sits inside a full .terminal panel, so it must not get a second,
      nested background/padding chip on top of it. */
   background: none;
   color: inherit;
   padding: 0;
+}
+/* Phones: let a long one-liner wrap under its own COPY button instead of
+   forcing a horizontal scroll. The button keeps copying the full
+   textContent, so wrapping is presentational only. */
+@media (max-width: 640px) {
+  .terminal-line { flex-wrap: wrap; }
+  .terminal-line code {
+    flex: 1 1 100%;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
 }
 .terminal-line + .terminal-line {
   border-top: 1px dashed var(--panel-edge-hi);
