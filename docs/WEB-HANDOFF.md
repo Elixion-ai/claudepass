@@ -149,7 +149,7 @@ width centered in it, Handle = a thin vertical bar right-of-center).
 | `/dl/*` `/install.sh` `/assets/*` | static (releases, installer, brand assets) | CLA-31/35 |
 
 The nav's `GITHUB` link (ADR-0011) points at
-`https://github.com/gumruyanzh/claudepass` — an external URL, not a route
+`https://github.com/Elixion-ai/claudepass` — an external URL, not a route
 this site serves.
 
 ## Accessibility & SEO contract

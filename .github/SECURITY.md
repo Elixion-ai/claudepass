@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Please report vulnerabilities privately through GitHub's private vulnerability reporting: open
-https://github.com/gumruyanzh/claudepass/security/advisories/new and describe how to reproduce the issue. Do not open a public issue for a security problem. We aim to acknowledge reports within a few days.
+https://github.com/Elixion-ai/claudepass/security/advisories/new and describe how to reproduce the issue. Do not open a public issue for a security problem. We aim to acknowledge reports within a few days.
 
 ## What counts
 

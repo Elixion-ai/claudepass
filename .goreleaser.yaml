@@ -56,7 +56,7 @@ changelog:
 
 release:
   github:
-    owner: gumruyanzh
+    owner: Elixion-ai
     name: claudepass
   # This repo is public and MIT-licensed (ADR-0011); GitHub Releases are
   # downloadable by anyone. install.sh and the Homebrew formula still pull

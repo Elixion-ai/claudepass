@@ -10,7 +10,7 @@ Developers working with AI coding agents constantly need the agent to run comman
 
 ## Install
 
-`gumruyanzh/claudepass` is a public repository on GitHub, open source
+`Elixion-ai/claudepass` is a public repository on GitHub, open source
 under the [MIT license](LICENSE) (see
 [ADR-0011](docs/adr/0011-free-and-open-source.md)). Built binaries are
 also published at [claudepass.com](https://claudepass.com), so installing
