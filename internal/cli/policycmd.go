@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"claudepass/internal/policy"
+	"github.com/Elixion-ai/claudepass/internal/policy"
 )
 
 func init() {

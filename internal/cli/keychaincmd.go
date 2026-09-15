@@ -6,7 +6,7 @@ import (
 	"io"
 	"runtime"
 
-	"claudepass/internal/broker"
+	"github.com/Elixion-ai/claudepass/internal/broker"
 )
 
 func init() {

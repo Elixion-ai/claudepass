@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"claudepass/internal/vault"
+	"github.com/Elixion-ai/claudepass/internal/vault"
 )
 
 // FileName is the Manifest file at a project root.

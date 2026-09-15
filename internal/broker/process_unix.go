@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"claudepass/internal/vault"
+	"github.com/Elixion-ai/claudepass/internal/vault"
 )
 
 const socketFileName = "cpass.sock"

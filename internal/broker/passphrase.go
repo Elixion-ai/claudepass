@@ -8,7 +8,7 @@ import (
 
 	"golang.org/x/crypto/scrypt"
 
-	"claudepass/internal/vault"
+	"github.com/Elixion-ai/claudepass/internal/vault"
 )
 
 // Scrypt parameters for deriving the wrapping key from a master passphrase.

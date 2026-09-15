@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"claudepass/internal/broker"
-	"claudepass/internal/vault"
+	"github.com/Elixion-ai/claudepass/internal/broker"
+	"github.com/Elixion-ai/claudepass/internal/vault"
 )
 
 // TestExposedReminderUsesFormatExposedWhenSet is the regression test for

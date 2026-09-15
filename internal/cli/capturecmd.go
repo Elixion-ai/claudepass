@@ -7,10 +7,10 @@ import (
 	"io"
 	"strings"
 
-	"claudepass/internal/broker"
-	"claudepass/internal/policy"
-	"claudepass/internal/run"
-	"claudepass/internal/vault"
+	"github.com/Elixion-ai/claudepass/internal/broker"
+	"github.com/Elixion-ai/claudepass/internal/policy"
+	"github.com/Elixion-ai/claudepass/internal/run"
+	"github.com/Elixion-ai/claudepass/internal/vault"
 )
 
 func init() {

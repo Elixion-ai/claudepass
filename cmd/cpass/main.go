@@ -4,7 +4,7 @@ package main
 import (
 	"os"
 
-	"claudepass/internal/cli"
+	"github.com/Elixion-ai/claudepass/internal/cli"
 )
 
 func main() {

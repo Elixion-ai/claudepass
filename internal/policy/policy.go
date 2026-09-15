@@ -16,8 +16,8 @@ import (
 	"regexp"
 	"strings"
 
-	"claudepass/internal/detect"
-	"claudepass/internal/vault"
+	"github.com/Elixion-ai/claudepass/internal/detect"
+	"github.com/Elixion-ai/claudepass/internal/vault"
 )
 
 // Var is an environment variable a Secret is bound to.

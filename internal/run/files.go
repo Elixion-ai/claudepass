@@ -9,7 +9,7 @@ import (
 	"strings"
 	"syscall"
 
-	"claudepass/internal/broker"
+	"github.com/Elixion-ai/claudepass/internal/broker"
 )
 
 // runRoot is where file Bindings are materialised: $CPASS_HOME/run/<id>/.

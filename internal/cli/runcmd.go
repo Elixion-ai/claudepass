@@ -6,10 +6,10 @@ import (
 	"io"
 	"strings"
 
-	"claudepass/internal/broker"
-	"claudepass/internal/manifest"
-	"claudepass/internal/policy"
-	"claudepass/internal/run"
+	"github.com/Elixion-ai/claudepass/internal/broker"
+	"github.com/Elixion-ai/claudepass/internal/manifest"
+	"github.com/Elixion-ai/claudepass/internal/policy"
+	"github.com/Elixion-ai/claudepass/internal/run"
 )
 
 func init() {

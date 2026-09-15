@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"claudepass/internal/vault"
+	"github.com/Elixion-ai/claudepass/internal/vault"
 )
 
 func TestRoundTripAndFind(t *testing.T) {

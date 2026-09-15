@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"claudepass/internal/vault"
+	"github.com/Elixion-ai/claudepass/internal/vault"
 )
 
 // EnvHome overrides the ClaudePass home directory.

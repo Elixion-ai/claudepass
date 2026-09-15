@@ -29,11 +29,11 @@ builds:
     goarch:
       - amd64
       - arm64
-    # Injects claudepass/internal/cli.Version (see internal/cli/cli.go); the
+    # Injects github.com/Elixion-ai/claudepass/internal/cli.Version (see internal/cli/cli.go); the
     # binary defaults to "dev" when built without these ldflags.
     ldflags:
       - -s -w
-      - -X claudepass/internal/cli.Version={{ .Version }}
+      - -X github.com/Elixion-ai/claudepass/internal/cli.Version={{ .Version }}
 
 archives:
   - id: cpass

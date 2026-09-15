@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"claudepass/internal/broker"
-	"claudepass/internal/vault"
+	"github.com/Elixion-ai/claudepass/internal/broker"
+	"github.com/Elixion-ai/claudepass/internal/vault"
 )
 
 // mcpRequestLine marshals one JSON-RPC 2.0 request/notification line for

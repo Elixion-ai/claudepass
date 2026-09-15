@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"claudepass/internal/broker"
-	"claudepass/internal/detect"
-	"claudepass/internal/vault"
+	"github.com/Elixion-ai/claudepass/internal/broker"
+	"github.com/Elixion-ai/claudepass/internal/detect"
+	"github.com/Elixion-ai/claudepass/internal/vault"
 )
 
 func init() {

@@ -53,7 +53,7 @@ has one named source instead of a fresh literal, and are marked as such in
 **`site/tokens.json`** is a committed, trimmed export of all eight
 collections (name, type, per-mode values, WEB code syntax), derived from
 the design handoff's `figma-tokens.json`. **`internal/site/tokens_test.go`**
-(package `claudepass/internal/site`, runs with the rest of `go test ./...`,
+(package `github.com/Elixion-ai/claudepass/internal/site`, runs with the rest of `go test ./...`,
 no build tag) parses `retro.css`'s `:root` and `.inner-page main` blocks,
 resolves each token's `var()` alias chain the way a browser would, and
 fails if a resolved value drifts from `tokens.json`, or if any color

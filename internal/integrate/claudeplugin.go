@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	pluginfiles "claudepass/plugins/claude-code"
+	pluginfiles "github.com/Elixion-ai/claudepass/plugins/claude-code"
 )
 
 // WriteClaudePlugin materialises the embedded Claude Code plugin

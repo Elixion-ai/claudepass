@@ -1,4 +1,4 @@
-module claudepass
+module github.com/Elixion-ai/claudepass
 
 go 1.26.0
 

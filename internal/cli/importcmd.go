@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"claudepass/internal/dotenv"
-	"claudepass/internal/manifest"
-	"claudepass/internal/vault"
+	"github.com/Elixion-ai/claudepass/internal/dotenv"
+	"github.com/Elixion-ai/claudepass/internal/manifest"
+	"github.com/Elixion-ai/claudepass/internal/vault"
 )
 
 func init() {

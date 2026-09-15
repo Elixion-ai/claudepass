@@ -1,7 +1,7 @@
 package e2e
 
 // Confirms the exact mechanism .goreleaser.yaml relies on: building cmd/cpass
-// with -ldflags "-X claudepass/internal/cli.Version=..." (CLA-16) actually
+// with -ldflags "-X github.com/Elixion-ai/claudepass/internal/cli.Version=..." (CLA-16) actually
 // changes what `cpass version` prints, and that an unflagged build falls
 // back to "dev" rather than silently printing an empty string.
 
@@ -16,8 +16,8 @@ func TestVersionIsInjectedAtBuildTime(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "cpass")
 	cmd := exec.Command("go", "build",
-		"-ldflags", "-X claudepass/internal/cli.Version=1.2.3-test",
-		"-o", bin, "claudepass/cmd/cpass")
+		"-ldflags", "-X github.com/Elixion-ai/claudepass/internal/cli.Version=1.2.3-test",
+		"-o", bin, "github.com/Elixion-ai/claudepass/cmd/cpass")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build with injected version: %v: %s", err, out)
 	}

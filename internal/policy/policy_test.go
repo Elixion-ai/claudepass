@@ -3,7 +3,7 @@ package policy
 import (
 	"testing"
 
-	"claudepass/internal/vault"
+	"github.com/Elixion-ai/claudepass/internal/vault"
 )
 
 var bound = []Var{{"STRIPE_LIVE", vault.BindEnv}, {"GCP_SA", vault.BindFile}}

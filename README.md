@@ -28,11 +28,19 @@ curl -fsSL https://claudepass.com/install.sh | sh
 brew install softorize/tap/cpass
 ```
 
-Both installers download a GoReleaser-built archive and its `checksums.txt`
-straight from claudepass.com (see [`deploy/`](deploy/) for how release
-binaries reach the site) and verify sha256 before installing. The release
-pipeline that produces them is `.goreleaser.yaml` and
-`.github/workflows/release.yml` at the repo root — see CLA-16.
+**Go** (1.26 or newer, builds from source):
+
+```bash
+go install github.com/Elixion-ai/claudepass/cmd/cpass@latest
+```
+
+The curl and Homebrew installers download a GoReleaser-built archive and
+its `checksums.txt` straight from claudepass.com (see [`deploy/`](deploy/)
+for how release binaries reach the site) and verify sha256 before
+installing. The release pipeline that produces them is `.goreleaser.yaml`
+and `.github/workflows/release.yml` at the repo root — see CLA-16. A
+`go install` build reports its version as `dev`; the release archives
+carry the tagged version.
 
 ## 60-second quickstart
 

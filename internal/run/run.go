@@ -14,10 +14,10 @@ import (
 	"path/filepath"
 	"sort"
 
-	"claudepass/internal/broker"
-	"claudepass/internal/policy"
-	"claudepass/internal/redact"
-	"claudepass/internal/vault"
+	"github.com/Elixion-ai/claudepass/internal/broker"
+	"github.com/Elixion-ai/claudepass/internal/policy"
+	"github.com/Elixion-ai/claudepass/internal/redact"
+	"github.com/Elixion-ai/claudepass/internal/vault"
 )
 
 // Spec describes one wrapped command.

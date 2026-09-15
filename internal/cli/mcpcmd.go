@@ -4,7 +4,7 @@ import (
 	"flag"
 	"io"
 
-	"claudepass/internal/mcp"
+	"github.com/Elixion-ai/claudepass/internal/mcp"
 )
 
 func init() {

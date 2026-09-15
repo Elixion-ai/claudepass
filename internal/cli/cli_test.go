@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"claudepass/internal/broker"
-	"claudepass/internal/policy"
-	"claudepass/internal/vault"
+	"github.com/Elixion-ai/claudepass/internal/broker"
+	"github.com/Elixion-ai/claudepass/internal/policy"
+	"github.com/Elixion-ai/claudepass/internal/vault"
 )
 
 // refusalGrammar is docs/CLI-STYLE.md's Message grammar row for a Command

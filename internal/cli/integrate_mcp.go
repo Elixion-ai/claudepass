@@ -4,7 +4,7 @@ import (
 	"flag"
 	"io"
 
-	"claudepass/internal/integrate"
+	"github.com/Elixion-ai/claudepass/internal/integrate"
 )
 
 func init() {

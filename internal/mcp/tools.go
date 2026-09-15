@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"strings"
 
-	"claudepass/internal/broker"
-	"claudepass/internal/manifest"
-	"claudepass/internal/run"
-	"claudepass/internal/vault"
+	"github.com/Elixion-ai/claudepass/internal/broker"
+	"github.com/Elixion-ai/claudepass/internal/manifest"
+	"github.com/Elixion-ai/claudepass/internal/run"
+	"github.com/Elixion-ai/claudepass/internal/vault"
 )
 
 // toolDef is one entry of a tools/list response.

@@ -3,7 +3,7 @@ package policy
 import (
 	"strings"
 
-	"claudepass/internal/detect"
+	"github.com/Elixion-ai/claudepass/internal/detect"
 )
 
 // EvaluateHook judges a raw Bash command string from Claude Code's

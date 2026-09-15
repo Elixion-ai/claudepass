@@ -30,7 +30,7 @@ func TestMain(m *testing.M) {
 	}
 	cpassBin = filepath.Join(dir, "cpass")
 	helperBin = filepath.Join(dir, "helper")
-	for _, b := range [][2]string{{cpassBin, "claudepass/cmd/cpass"}, {helperBin, "claudepass/internal/e2e/helper"}} {
+	for _, b := range [][2]string{{cpassBin, "github.com/Elixion-ai/claudepass/cmd/cpass"}, {helperBin, "github.com/Elixion-ai/claudepass/internal/e2e/helper"}} {
 		cmd := exec.Command("go", "build", "-tags", "e2e", "-o", b[0], b[1])
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
@@ -88,7 +88,7 @@ func buildRelease(t *testing.T) string {
 	t.Helper()
 	releaseOnce.Do(func() {
 		releaseBin = filepath.Join(filepath.Dir(cpassBin), "cpass-release")
-		cmd := exec.Command("go", "build", "-o", releaseBin, "claudepass/cmd/cpass")
+		cmd := exec.Command("go", "build", "-o", releaseBin, "github.com/Elixion-ai/claudepass/cmd/cpass")
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			releaseErr = err

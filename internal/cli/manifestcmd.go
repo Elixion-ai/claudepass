@@ -7,9 +7,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"claudepass/internal/broker"
-	"claudepass/internal/manifest"
-	"claudepass/internal/vault"
+	"github.com/Elixion-ai/claudepass/internal/broker"
+	"github.com/Elixion-ai/claudepass/internal/manifest"
+	"github.com/Elixion-ai/claudepass/internal/vault"
 )
 
 func init() {
