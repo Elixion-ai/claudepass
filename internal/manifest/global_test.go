@@ -50,6 +50,60 @@ func TestSaveGlobalCreatesTheHomeDirectory(t *testing.T) {
 	}
 }
 
+// TestSaveGlobalTightensExistingDirPermissions is CLA-98 item 7's
+// regression test for the SaveGlobal call site: unlike
+// TestSaveGlobalCreatesTheHomeDirectory above (a missing home directory),
+// this pre-creates CPASS_HOME at 0755 — a stray umask, or a directory that
+// already existed for some other reason before `cpass` ever touched it —
+// and SaveGlobal must still tighten it to 0700, not leave it as MkdirAll
+// alone (a no-op on an existing directory) would.
+func TestSaveGlobalTightensExistingDirPermissions(t *testing.T) {
+	home := t.TempDir()
+	if err := os.Chmod(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CPASS_HOME", home)
+	m, err := LoadGlobal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Add(Entry{Handle: "openai/key"})
+	if err := m.SaveGlobal(); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o700 {
+		t.Fatalf("ClaudePass home mode = %v, want 0700", fi.Mode().Perm())
+	}
+}
+
+// TestUpdateGlobalTightensExistingDirPermissions is item 7's regression
+// test for UpdateGlobal's own ensurePrivateDir call, separate from (and
+// reached before) SaveGlobal's.
+func TestUpdateGlobalTightensExistingDirPermissions(t *testing.T) {
+	home := t.TempDir()
+	if err := os.Chmod(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CPASS_HOME", home)
+	if _, err := UpdateGlobal(func(m *Manifest) error {
+		m.Add(Entry{Handle: "openai/key"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o700 {
+		t.Fatalf("ClaudePass home mode = %v, want 0700", fi.Mode().Perm())
+	}
+}
+
 // TestUpdateGlobalConcurrentDeclarationsAllSurvive is CLA-93's regression
 // test: N goroutines each declaring a distinct Handle through UpdateGlobal
 // must all survive in global.toml — before the fix, LoadGlobal -> Add ->

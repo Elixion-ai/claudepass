@@ -49,9 +49,10 @@ func LoadGlobal() (*Manifest, error) {
 
 // SaveGlobal writes the Global Manifest, creating the ClaudePass home if it
 // does not exist yet (0700, matching the Vault's own directory mode — the
-// file itself is 0644 like any Manifest, since it carries no values).
+// file itself is 0644 like any Manifest, since it carries no values) and
+// tightening it to 0700 even if it already existed looser (CLA-98).
 func (m *Manifest) SaveGlobal() error {
-	if err := os.MkdirAll(filepath.Dir(m.Path), 0o700); err != nil {
+	if err := ensurePrivateDir(filepath.Dir(m.Path)); err != nil {
 		return err
 	}
 	m.global = true
@@ -71,7 +72,7 @@ func UpdateGlobal(fn func(m *Manifest) error) (*Manifest, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+	if err := ensurePrivateDir(filepath.Dir(p)); err != nil {
 		return nil, err
 	}
 	lock, err := lockfile.Acquire(p+".lock", lockfile.DefaultTimeout)

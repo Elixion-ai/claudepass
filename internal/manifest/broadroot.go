@@ -133,7 +133,7 @@ func shouldWarnBroadRoot(root string) bool {
 	if err != nil {
 		return true
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := ensurePrivateDir(dir); err != nil {
 		return true
 	}
 	marker := broadRootWarnedMarkerPath(dir, root)
