@@ -259,16 +259,26 @@ const maxStaticScriptSize = 1 << 20 // 1 MiB
 // resolve is refuse, not allow (see docs/THREATS.md's "what is and is not
 // statically inspected").
 //
-// Recognised options, matching real shells' own getopt-style parsing: -e
-// -u -x -l -i -n -v -p -s -a -b -f -h -k -m -t (any combination, e.g. -euo
-// pipefail), -o/-O/+o/+O <arg> (the arg is consumed as a separate word,
-// whether given alone or as the last letter of a combined group), and the
-// long forms --noprofile --norc --login --posix. -c may appear anywhere in
-// a combined short-flag group (-xc, -euc) and always takes the next word
-// as its string, matching shellCommandString's pre-CLA-62 behaviour for
-// that shape.
+// Recognised options, matching real shells' own getopt-style parsing (see
+// shell.c's parse_shell_options for the real thing this mirrors): -e -u -x
+// -l -i -n -v -p -s -a -b -f -h -k -m -t (any combination, e.g. -euo
+// pipefail), -o/-O/+o/+O (each occurrence consumes the next not-yet-claimed
+// argv word as its own option-name argument, wherever it falls in a
+// combined group — -co, -oc, -euo pipefail and +co all consume exactly one
+// word for the o/O), and the long forms --noprofile --norc --login
+// --posix. -c may appear anywhere in a combined short-flag group (-xc,
+// -euc, -co, -oc) and, unlike o/O, does not itself consume a word — a real
+// shell only reads the pending command string once the *entire* run of
+// option tokens ends, so it always names the first word after every
+// flag's own argument(s) have been claimed, never "the next word after
+// wherever c happened to sit" (see shellCommandString's doc comment and
+// CLA-62's review fix: the previous combined-group handling returned the
+// word immediately after 'c' the instant it saw the letter, so `-co
+// pipefail 'cat .env'` read "pipefail" as the command string and the real
+// command never got evaluated at all).
 func shellCommandString(args []string) (content string, refuse bool) {
 	i := 0
+	cSeen := false
 	for i < len(args) {
 		a := args[i]
 		if a == "--" {
@@ -279,11 +289,6 @@ func shellCommandString(args []string) (content string, refuse bool) {
 			break
 		}
 		switch {
-		case a == "-o" || a == "+o" || a == "-O" || a == "+O":
-			if i+1 >= len(args) {
-				return "", true
-			}
-			i += 2
 		case a == "--noprofile" || a == "--norc" || a == "--login" || a == "--posix":
 			i++
 		case strings.HasPrefix(a, "--"):
@@ -294,24 +299,38 @@ func shellCommandString(args []string) (content string, refuse bool) {
 			if letters == "" {
 				return "", true
 			}
-			if strings.ContainsRune(letters, 'c') {
-				if i+1 >= len(args) {
-					return "", true
-				}
-				return args[i+1], false
-			}
-			if !isKnownShortOpts(letters) {
-				return "", true
-			}
-			last := letters[len(letters)-1]
 			i++
-			if last == 'o' || last == 'O' {
-				if i >= len(args) {
+			// Walk this token's letters left to right: o/O each claim the
+			// next unclaimed argv word right here (matching real getopt
+			// behaviour, and matching every ordering this package has
+			// live-verified against an actual shell: -co, -oc, +co, +oc,
+			// -cO all consume exactly one word for the o/O regardless of
+			// which side of 'c' it's on), c is only noted as seen — its
+			// word, if any, is claimed once the whole run of option
+			// tokens ends, below.
+			for _, r := range letters {
+				switch r {
+				case 'e', 'u', 'x', 'l', 'i', 'n', 'v', 'p', 's', 'a', 'b', 'f', 'h', 'k', 'm', 't':
+					// No argument of its own.
+				case 'c':
+					cSeen = true
+				case 'o', 'O':
+					if i >= len(args) {
+						return "", true
+					}
+					i++
+				default:
+					// An unrecognised letter: fail closed rather than guess.
 					return "", true
 				}
-				i++
 			}
 		}
+	}
+	if cSeen {
+		if i >= len(args) {
+			return "", true
+		}
+		return args[i], false
 	}
 	if i >= len(args) {
 		// No -c, no script path: nothing statically visible to check (an
@@ -319,25 +338,6 @@ func shellCommandString(args []string) (content string, refuse bool) {
 		return "", true
 	}
 	return scriptFileContent(args[i])
-}
-
-// isKnownShortOpts reports whether every letter in a combined short-flag
-// group (the "euo" of "-euo", the "x" of "-x") is one shellCommandString
-// recognises as taking no argument of its own. "o"/"O" must be the last
-// letter in the group, since its argument is the next argv word —
-// matching a real shell's own getopt behaviour.
-func isKnownShortOpts(letters string) bool {
-	for j, r := range letters {
-		switch r {
-		case 'e', 'u', 'x', 'l', 'i', 'n', 'v', 'p', 's', 'a', 'b', 'f', 'h', 'k', 'm', 't':
-			continue
-		case 'o', 'O':
-			return j == len(letters)-1
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // scriptFileContent reads path as the shell script a bare `<shell>
@@ -394,6 +394,31 @@ func (ev *evaluator) simple(words []word, depth int) error {
 		for _, inner := range w.subs {
 			if err := ev.shell(inner, depth+1); err != nil {
 				return err
+			}
+		}
+	}
+	// CLA-61: an unquoted-delimiter heredoc body is parameter-expanded by
+	// a real shell exactly like a double-quoted string before it ever
+	// reaches the reading program's stdin, so a bound/tainted variable
+	// referenced in it (`cat <<EOF
+	// $STRIPE_LIVE
+	// EOF`) resolves to the Secret's real value there precisely the way
+	// `echo $STRIPE_LIVE` does — refused here regardless of which program
+	// the heredoc is attached to, since a reading program given no file
+	// operand generally does nothing but echo its stdin back out. A
+	// quoted delimiter's body is never checked here: it is genuinely
+	// inert data in a real shell, byte-for-byte, never expanded. (A shell
+	// reading its own heredoc as a *script* — the shells[prog] case below
+	// — is unaffected by this check finding nothing to say about it
+	// either way: that path already re-parses the whole body as commands
+	// and catches a reveal there on its own terms.)
+	for _, w := range words {
+		if w.hasHeredoc && !w.heredocQuoted {
+			if v := ev.references(w.heredoc); v != "" {
+				return &Refusal{
+					Rule:   fmt.Sprintf("this command's heredoc body would print $%s", v),
+					Advice: "pass the variable to the tool that needs it instead",
+				}
 			}
 		}
 	}

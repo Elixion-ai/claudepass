@@ -173,6 +173,109 @@ func TestPolicyRunShellInvocationHeredocDoesNotShadowCString(t *testing.T) {
 	}
 }
 
+// TestPolicyRunShellInvocationCombinedOptionOrdering is CLA-62's review-fix
+// e2e proof: `bash -co pipefail 'cat .env'` and `bash -oc pipefail 'cat
+// .env'` (either letter order, either sign) must have the real command
+// checked, not the -o value that happens to sit next to 'c' in the group.
+// Live-reproduced before this fix: shellCommandString returned "pipefail" as
+// the -c string the instant it saw 'c' anywhere in a combined group, so the
+// actual `cat .env` never got evaluated and its content reached stdout
+// unrefused and unredacted.
+func TestPolicyRunShellInvocationCombinedOptionOrdering(t *testing.T) {
+	ve := leakVault(t)
+	cases := []struct {
+		name    string
+		argv    []string
+		refused bool
+	}{
+		{"-co: o's value first, c's string is the real command", []string{"bash", "-co", "pipefail", "cat .env"}, true},
+		{"-oc: same result with the letters swapped", []string{"bash", "-oc", "pipefail", "cat .env"}, true},
+		{"+co: plus form", []string{"bash", "+co", "pipefail", "cat .env"}, true},
+		{"+oc: plus form, letters swapped", []string{"bash", "+oc", "pipefail", "cat .env"}, true},
+		// Paired benign shapes: the same combined-option groups, pointed
+		// at a command with nothing dangerous in it, must still run.
+		{"-co with a safe command is allowed", []string{"bash", "-co", "pipefail", "echo hello"}, false},
+		{"-oc with a safe command is allowed", []string{"bash", "-oc", "pipefail", "echo hello"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			args := append([]string{"run", "--with", "stripe/live", "--"}, c.argv...)
+			r := ve.run(nil, args...)
+			if c.refused {
+				if r.code != 3 || !strings.Contains(r.stderr, "Secret-bearing file") {
+					t.Fatalf("the real command must be checked, not the -o value beside it: %s", r)
+				}
+			} else if r.code != 0 {
+				t.Fatalf("a safe command behind the same combined options must still run: %s", r)
+			}
+			if strings.Contains(r.stdout+r.stderr, leakVal) {
+				t.Fatalf("leaked: %s", r)
+			}
+		})
+	}
+}
+
+// TestPolicyRunHeredocUnquotedExpansionAnyProgram is CLA-61's review-fix e2e
+// proof: a real shell expands an UNQUOTED heredoc delimiter's body — command
+// substitutions and parameter expansions alike — before it ever reaches the
+// reading program's stdin, so this must be caught regardless of which
+// program the heredoc is attached to, not only a shell. Live-reproduced
+// before this fix: `cat <<EOF
+// $(cat .env)
+// EOF` reached stdout unrefused and unredacted, since splitCommands stored a
+// heredoc's body as opaque text and never populated its subs.
+func TestPolicyRunHeredocUnquotedExpansionAnyProgram(t *testing.T) {
+	ve := leakVault(t)
+
+	r := sh(ve, "cat <<EOF\n$(cat .env)\nEOF\n")
+	if r.code != 3 || !strings.Contains(r.stderr, "Secret-bearing file") {
+		t.Fatalf("an unquoted heredoc's command substitution must be evaluated regardless of program: %s", r)
+	}
+	if strings.Contains(r.stdout+r.stderr, leakVal) {
+		t.Fatalf("leaked: %s", r)
+	}
+
+	// The same substitution, attached to a program that isn't a reader at
+	// all: the fix walks every word's subs unconditionally.
+	r = sh(ve, "wc -l <<EOF\n$(cat .env)\nEOF\n")
+	if r.code != 3 || !strings.Contains(r.stderr, "Secret-bearing file") {
+		t.Fatalf("the substitution must still be caught behind a non-reader program: %s", r)
+	}
+
+	// Paired benign: the quoted-delimiter counterpart of the exact same
+	// body is genuinely inert data in a real shell — .env is never read,
+	// only the literal text "$(cat .env)" is ever printed.
+	r = sh(ve, "cat <<'EOF'\n$(cat .env)\nEOF\n")
+	if r.code != 0 || !strings.Contains(r.stdout, "$(cat .env)") {
+		t.Fatalf("a quoted-delimiter heredoc's body is inert data and must run: %s", r)
+	}
+
+	// A reveal-only bound variable in an unquoted heredoc body resolves
+	// to the Secret's real value before cat (given no file operand) ever
+	// starts — exactly like `echo $STRIPE_LIVE`.
+	r = sh(ve, "cat <<EOF\n$STRIPE_LIVE\nEOF\n")
+	if r.code != 3 {
+		t.Fatalf("an unquoted heredoc revealing a bound variable must be refused: %s", r)
+	}
+	if strings.Contains(r.stdout+r.stderr, leakVal) {
+		t.Fatalf("leaked: %s", r)
+	}
+
+	// Paired benign: the quoted-delimiter counterpart never expands
+	// $STRIPE_LIVE — cat just prints the four literal characters.
+	r = sh(ve, "cat <<'EOF'\n$STRIPE_LIVE\nEOF\n")
+	if r.code != 0 || !strings.Contains(r.stdout, "$STRIPE_LIVE") {
+		t.Fatalf("a quoted-delimiter heredoc naming a bound variable as literal text must run: %s", r)
+	}
+
+	// Paired benign: an unquoted heredoc with nothing dangerous in it at
+	// all must stay allowed.
+	r = sh(ve, "cat <<EOF\nhello world\nEOF\n")
+	if r.code != 0 || !strings.Contains(r.stdout, "hello world") {
+		t.Fatalf("a benign heredoc body must run normally: %s", r)
+	}
+}
+
 func TestPolicyProcEnviron(t *testing.T) {
 	ve := leakVault(t)
 	r := ve.run(nil, "run", "--with", "stripe/live", "--", "cat", "/proc/self/environ")

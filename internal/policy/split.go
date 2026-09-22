@@ -6,7 +6,12 @@ import "strings"
 // as written) and any command substitutions it contained. A word that
 // represents a heredoc/here-document body instead (see splitCommands) has
 // raw == "" and hasHeredoc == true; every other word has hasHeredoc ==
-// false.
+// false. A heredoc word's own subs (populated only when its delimiter was
+// unquoted — see below) are walked by every consumer that already walks an
+// ordinary word's subs (ev.simple's "command substitutions are commands
+// too" loop, hookWalk's identical loop), so a $(...) or backtick buried in
+// an unquoted heredoc body is evaluated exactly like one anywhere else,
+// with no separate plumbing needed.
 type word struct {
 	raw  string
 	subs []string
@@ -20,6 +25,18 @@ type word struct {
 	// file`, `> file`, `<< <-`'s here-string `<<< word`) is not this: it
 	// flows through the ordinary word logic below as a ordinary checkable
 	// word instead, exactly like a bare argument.
+	//
+	// CLA-61: a real shell expands an UNQUOTED delimiter's body — command
+	// substitutions, backticks, and parameter expansions — exactly like a
+	// double-quoted string, before ever handing it to the reading
+	// program's stdin; only a QUOTED delimiter's body is genuine inert
+	// data. That expansion happens regardless of which program the
+	// heredoc is attached to (`cat <<EOF` is exactly as live a leak path
+	// as `sh <<EOF`, since $(cat .env) inside the body already ran, and
+	// its output already became cat's stdin, before cat ever starts) —
+	// see splitCommands' extractHeredocBody call site for where subs gets
+	// populated, and ev.simple's heredoc-reveal check for the parameter-
+	// expansion half.
 	hasHeredoc    bool
 	heredoc       string
 	heredocQuoted bool
@@ -185,7 +202,21 @@ func splitCommands(s string) [][]word {
 				pos := i + 1
 				for _, ph := range pending {
 					body, next := extractHeredocBody(s, pos, ph.delim, ph.strip)
-					cur = append(cur, word{hasHeredoc: true, heredoc: body, heredocQuoted: ph.quoted})
+					w := word{hasHeredoc: true, heredoc: body, heredocQuoted: ph.quoted}
+					if !ph.quoted {
+						// CLA-61: an unquoted delimiter's body is expanded
+						// by a real shell before it ever reaches the
+						// reading program's stdin — the same command
+						// substitutions a double-quoted string carries
+						// (see scanUnquotedSubs), so every existing
+						// subs-walking consumer (this package's own
+						// "command substitutions are commands too" loops)
+						// picks them up with no extra plumbing. A quoted
+						// delimiter's body stays exactly as inert as it
+						// is in a real shell: no subs, ever.
+						w.subs = scanUnquotedSubs(body)
+					}
+					cur = append(cur, w)
 					pos = next
 				}
 				pending = nil
@@ -338,6 +369,45 @@ func extractHeredocBody(s string, start int, delim string, strip bool) (string, 
 		i = next
 	}
 	return body.String(), i
+}
+
+// scanUnquotedSubs extracts every $(...) and backtick command substitution
+// from s the same way splitCommands' own double-quote branch does (backslash
+// escapes a single following byte and is otherwise inert; a $( opens a
+// matchParen-balanced span; a backtick pair delimits the other backtick
+// form) — for text that was never itself inside a shell word, namely an
+// unquoted heredoc's body (CLA-61). A real shell performs exactly this
+// expansion on such a body before handing it to the reading program's
+// stdin, whatever that program is — the shell has already run $(cat .env)
+// and already handed its output to cat's stdin before cat ever starts, so
+// this must be found regardless of which program the heredoc is attached
+// to, not only a shell (which already gets its whole body re-parsed as a
+// script by ev.shell — this function exists for every *other* program a
+// heredoc can be attached to). A bare, unmatched backtick or an
+// unterminated $( reads to end of string, same as the double-quote branch.
+func scanUnquotedSubs(s string) []string {
+	var subs []string
+	for i := 0; i < len(s); {
+		switch {
+		case s[i] == '\\' && i+1 < len(s):
+			i += 2
+		case s[i] == '$' && i+1 < len(s) && s[i+1] == '(':
+			inner, n := matchParen(s[i+2:])
+			subs = append(subs, inner)
+			i += 2 + n
+		case s[i] == '`':
+			j := strings.IndexByte(s[i+1:], '`')
+			if j < 0 {
+				i++
+				continue
+			}
+			subs = append(subs, s[i+1:i+1+j])
+			i += j + 2
+		default:
+			i++
+		}
+	}
+	return subs
 }
 
 // matchParen returns the text up to the parenthesis matching an already

@@ -248,6 +248,45 @@ func TestShellInvocationFlagsBeforeC(t *testing.T) {
 	}
 }
 
+// TestShellInvocationCombinedOptionOrdering is CLA-62's review fix:
+// shellCommandString's combined-short-option branch used to return the word
+// immediately after wherever 'c' fell in the group as the -c string, the
+// instant it saw the letter — but a real shell (verified live against
+// /bin/bash) doesn't read the pending command string until the *entire* run
+// of option tokens ends, and o/O each claim the next unclaimed word as they
+// are encountered, regardless of which side of 'c' they land on. `-co
+// pipefail 'cat .env'` therefore checked "pipefail" as if it were the -c
+// string — a string with nothing dangerous in it — and the real command,
+// `cat .env`, was never evaluated at all: a full, silent bypass reachable
+// with either letter order, either sign.
+func TestShellInvocationCombinedOptionOrdering(t *testing.T) {
+	cases := []struct {
+		name    string
+		argv    []string
+		refused bool
+	}{
+		{"-co: o before the pipefail value, c deferred to the real command", []string{"bash", "-co", "pipefail", "cat .env"}, true},
+		{"-oc: o still first in the group, same result", []string{"bash", "-oc", "pipefail", "cat .env"}, true},
+		{"+co: plus form, o-then-c ordering", []string{"bash", "+co", "pipefail", "cat .env"}, true},
+		{"+oc: plus form, o-then-c ordering, letters swapped", []string{"bash", "+oc", "pipefail", "cat .env"}, true},
+		// Paired benign shapes: the exact same combined-option shapes,
+		// pointed at a command with nothing dangerous in it, must stay
+		// allowed — this is Command Policy correctly checking the real
+		// command, not merely refusing every combined-option group on
+		// sight.
+		{"-co with a safe command is allowed", []string{"bash", "-co", "pipefail", "echo hello"}, false},
+		{"-oc with a safe command is allowed", []string{"bash", "-oc", "pipefail", "echo hello"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: c.argv})
+			if (err != nil) != c.refused {
+				t.Fatalf("argv %q: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
 // TestShellInvocationUnrecognizedShapeRefuses is CLA-62's fail-closed
 // default: a shell-invocation shape shellCommandString cannot resolve to
 // concrete content must be refused, never silently allowed.
@@ -337,6 +376,104 @@ func TestShellInvocationHeredoc(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			err := Evaluate(Input{Argv: c.argv})
+			if (err != nil) != c.refused {
+				t.Fatalf("argv %v: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestSplitCommandsUnquotedHeredocSubs is CLA-61's review-fix regression at
+// the tokenizer level: an UNQUOTED heredoc delimiter's body is expanded by a
+// real shell — command substitutions and backticks included — before it
+// ever reaches the reading program's stdin, so splitCommands must populate
+// the heredoc word's own subs exactly like it already does for a
+// double-quoted string. A QUOTED delimiter's body stays genuinely inert:
+// no subs, ever, regardless of what its text looks like.
+func TestSplitCommandsUnquotedHeredocSubs(t *testing.T) {
+	cases := []struct {
+		name       string
+		in         string
+		wantSubs   []string
+		wantQuoted bool
+	}{
+		{"unquoted delimiter, command substitution", "cat <<EOF\n$(cat .env)\nEOF\n", []string{"cat .env"}, false},
+		{"unquoted delimiter, backtick substitution", "cat <<EOF\n`cat .env`\nEOF\n", []string{"cat .env"}, false},
+		{"unquoted delimiter, no substitution at all", "cat <<EOF\nhello world\nEOF\n", nil, false},
+		{"quoted delimiter, would-be substitution stays inert", "cat <<'EOF'\n$(cat .env)\nEOF\n", nil, true},
+		{"double-quoted delimiter, would-be substitution stays inert", "cat <<\"EOF\"\n$(cat .env)\nEOF\n", nil, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cmds := splitCommands(c.in)
+			if len(cmds) != 1 || len(cmds[0]) != 2 {
+				t.Fatalf("got %+v", cmds)
+			}
+			hd := cmds[0][1]
+			if !hd.hasHeredoc {
+				t.Fatalf("word 1 should be the heredoc body: %+v", hd)
+			}
+			if hd.heredocQuoted != c.wantQuoted {
+				t.Fatalf("heredocQuoted = %v, want %v", hd.heredocQuoted, c.wantQuoted)
+			}
+			if len(hd.subs) != len(c.wantSubs) {
+				t.Fatalf("subs = %+v, want %+v", hd.subs, c.wantSubs)
+			}
+			for i := range c.wantSubs {
+				if hd.subs[i] != c.wantSubs[i] {
+					t.Fatalf("subs[%d] = %q, want %q", i, hd.subs[i], c.wantSubs[i])
+				}
+			}
+		})
+	}
+}
+
+// TestShellInvocationHeredocUnquotedExpansionAnyProgram is CLA-61's
+// review-fix regression at the Evaluate level: a real shell expands an
+// UNQUOTED heredoc delimiter's body — command substitutions and parameter
+// expansions alike — before it ever reaches the reading program's stdin, so
+// this must be caught regardless of which program the heredoc is attached
+// to, not only a shell (whose own attached heredoc is already fully
+// re-parsed as a script by the shells[prog] case, quoted or not). Before
+// this fix, splitCommands stored a heredoc's body as opaque text and never
+// populated its subs, so a $(...) or backtick buried in an UNQUOTED body was
+// invisible to Command Policy for every program except a shell.
+func TestShellInvocationHeredocUnquotedExpansionAnyProgram(t *testing.T) {
+	cases := []struct {
+		name    string
+		argv    []string
+		bound   []Var
+		refused bool
+	}{
+		{"unquoted heredoc's $(...) reads .env, attached to cat", []string{"sh", "-c", "cat <<EOF\n$(cat .env)\nEOF\n"}, nil, true},
+		{"unquoted heredoc's backtick sub reads .env, attached to cat", []string{"sh", "-c", "cat <<EOF\n`cat .env`\nEOF\n"}, nil, true},
+		// The same substitution, attached to a program that isn't on the
+		// readers list at all — the fix walks every word's subs
+		// unconditionally, the same way command substitutions elsewhere
+		// in an argument are already evaluated regardless of which
+		// program they sit next to.
+		{"unquoted heredoc's $(...) reads .env, attached to a non-reader program", []string{"sh", "-c", "wc -l <<EOF\n$(cat .env)\nEOF\n"}, nil, true},
+		// Paired benign: the quoted-delimiter counterpart of the exact
+		// same body is genuinely inert data in a real shell — .env is
+		// never read, the literal text "$(cat .env)" is all that's ever
+		// printed.
+		{"quoted heredoc's would-be substitution stays inert", []string{"sh", "-c", "cat <<'EOF'\n$(cat .env)\nEOF\n"}, nil, false},
+		// A reveal-only bound variable reference in an unquoted heredoc
+		// body resolves to the Secret's real value before the reading
+		// program (given no file operand) ever starts — exactly like
+		// `echo $STRIPE_LIVE`.
+		{"unquoted heredoc reveals a bound variable", []string{"sh", "-c", "cat <<EOF\n$STRIPE_LIVE\nEOF\n"}, bound, true},
+		// Paired benign: the quoted-delimiter counterpart never expands
+		// $STRIPE_LIVE at all — cat just prints the four literal
+		// characters, never the Secret's value.
+		{"quoted heredoc naming a bound variable as literal text stays inert", []string{"sh", "-c", "cat <<'EOF'\n$STRIPE_LIVE\nEOF\n"}, bound, false},
+		// Paired benign: an unquoted heredoc with nothing dangerous in it
+		// at all must stay allowed.
+		{"unquoted heredoc with benign text is allowed", []string{"sh", "-c", "cat <<EOF\nhello world\nEOF\n"}, nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: c.argv, Bound: c.bound})
 			if (err != nil) != c.refused {
 				t.Fatalf("argv %v: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
 			}

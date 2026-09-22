@@ -96,6 +96,28 @@ func TestEvaluateHook(t *testing.T) {
 		// fix the heredoc was checked first and, when present, evaluated
 		// instead of -c's own content: a full, silent bypass.
 		{"dangerous -c string alongside a benign heredoc is still refused", "bash -c \"cat .env\" <<'EOF'\necho decoy\nEOF\n", true},
+		// CLA-61 review: an UNQUOTED heredoc delimiter's body is expanded
+		// by a real shell — command substitutions included — before it
+		// ever reaches the reading program's stdin, regardless of which
+		// program that is; a QUOTED delimiter's body stays genuinely
+		// inert. Split from the shell case above since these are
+		// attached to `cat`/`wc`, not a shell.
+		{"unquoted heredoc's command substitution reads .env, attached to cat", "cat <<EOF\n$(cat .env)\nEOF\n", true},
+		{"unquoted heredoc's backtick substitution reads .env, attached to cat", "cat <<EOF\n`cat .env`\nEOF\n", true},
+		{"unquoted heredoc's command substitution reads .env, attached to a non-reader program", "wc -l <<EOF\n$(cat .env)\nEOF\n", true},
+		{"quoted heredoc's would-be command substitution stays inert", "cat <<'EOF'\n$(cat .env)\nEOF\n", false},
+		{"unquoted heredoc with benign text is allowed", "cat <<EOF\nhello world\nEOF\n", false},
+
+		// CLA-62 review: shellCommandString's combined-short-option
+		// branch used to return the word right after wherever 'c' fell
+		// in the group as the -c string the instant it saw the letter —
+		// but a real shell doesn't read the pending command string until
+		// the whole run of option tokens ends, and o/O each claim the
+		// next unclaimed word wherever they fall. `-co pipefail 'cat
+		// .env'` therefore checked "pipefail", never the real command.
+		{"combined -co: o's value first, c's string is the real command", "bash -co pipefail 'cat .env'", true},
+		{"combined -oc: same result with the letters swapped", "bash -oc pipefail 'cat .env'", true},
+		{"combined -co with a safe command is allowed", "bash -co pipefail 'echo hello'", false},
 
 		// refused: raw Secret-shaped literal
 		{"stripe key literal in curl", `curl -H "Authorization: Bearer sk_live_51H8xJ2eZvKYlo2CTvalueabcdefgh"`, true},

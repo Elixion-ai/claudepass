@@ -209,7 +209,21 @@ value can still end up somewhere it shouldn't, today:
       -p -s -a -b -f -h -k -m -t`, `-o`/`-O`/`+o`/`+O <arg>`, or
       `--noprofile --norc --login --posix` before it — the STRING is
       evaluated exactly like the shell string this package already parses
-      everywhere else, including at any nesting depth.
+      everywhere else, including at any nesting depth. This holds for
+      every ordering a real shell accepts, combined short-flag groups
+      included: `-co`, `-oc`, `+co`, and `+oc` all consume exactly one
+      word for `o`/`O` (wherever it falls in the group) and defer `c`'s
+      own word until the entire run of option tokens ends — matching a
+      real shell's own getopt-style parsing, live-verified against
+      `/bin/bash` — not "the word immediately after wherever the letter
+      `c` happens to sit," which is what `shellCommandString`'s combined-
+      group branch actually did before a review fix (CLA-62): `-co
+      pipefail 'cat .env'` checked the harmless word `pipefail` as if it
+      were the `-c` string, so the real command, `cat .env`, was never
+      evaluated at all — a silent, full bypass reachable with either
+      letter order, either sign. See
+      `TestShellInvocationCombinedOptionOrdering` (and its hook/e2e
+      counterparts) for the exact shapes now covered.
     - `<shell> script-path [args...]` (script-by-path) — when script-path
       names a readable regular file no larger than 1 MiB, its own content
       is read and statically evaluated the same way, so `cpass run --
@@ -227,13 +241,40 @@ value can still end up somewhere it shouldn't, today:
       checked, exactly like the no-heredoc case above; the heredoc
       fallback exists only for the genuinely bare `sh <<EOF` shape,
       where the shell would otherwise read its script from stdin
-      interactively. A heredoc attached to anything else (`python3 -
-      <<'EOF'`) is left alone as the data it is, never scanned for
-      commands. (CLA-62's initial heredoc support checked the heredoc
+      interactively. (CLA-62's initial heredoc support checked the heredoc
       first and evaluated it instead of a real -c/script-path argument
       alongside it — a silent bypass fixed in review: see the
       `TestShellInvocationHeredoc`/`TestEvaluateHookShellInvocationShapes`
       "alongside a benign heredoc" cases.)
+    - A heredoc attached to **anything else** — `cat <<EOF`, `python3 -
+      <<EOF`, `wc -l <<EOF` — is **not** simply left alone as inert data,
+      and an earlier version of this page was wrong to say so (CLA-61
+      review). Whether its body is inert depends on its delimiter, exactly
+      as it does for a real shell: a **quoted** delimiter (`<<'EOF'` or
+      `<<"EOF"`) is genuinely inert — the body reaches the program's stdin
+      byte-for-byte, never expanded, so `cat <<'EOF'` followed by
+      `$(cat .env)` prints that literal seven-character-plus text and
+      never touches `.env`. An **unquoted** delimiter's body, though, is
+      expanded by the real shell — command substitutions, backticks, and
+      parameter (variable) expansions — exactly like a double-quoted
+      string, *before* it is ever handed to the reading program's stdin:
+      `cat <<EOF` followed by `$(cat .env)` already ran `cat .env` and
+      already handed its output to the outer `cat`'s stdin before that
+      outer `cat` ever started, and a bound variable reference in such a
+      body (`cat <<EOF` / `$STRIPE_LIVE` / `EOF`) resolves to the Secret's
+      real value there exactly as `echo $STRIPE_LIVE` would, since a
+      reading program given no file operand generally does nothing but
+      echo its stdin back out. Command Policy evaluates both halves of
+      this for an unquoted delimiter — command/backtick substitutions
+      (populated as the word's own `subs`, walked by the same "command
+      substitutions are commands too" step every other word's `subs`
+      already goes through) and a bound/tainted parameter reference
+      (`ev.simple`'s own heredoc-reveal check) — regardless of which
+      program the heredoc is attached to, not only a shell. See
+      `TestShellInvocationHeredocUnquotedExpansionAnyProgram`,
+      `TestSplitCommandsUnquotedHeredocSubs`, and their hook/e2e
+      counterparts for the exact shapes now covered, quoted and unquoted
+      side by side.
     - What it does **not** inspect, and so refuses rather than guesses at:
       an unrecognised option; `-o`/`-c` with no value following it; a
       script path that is not a readable regular file under 1 MiB (an
