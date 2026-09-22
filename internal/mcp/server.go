@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"io"
 	"sync"
+
+	"github.com/Elixion-ai/claudepass/internal/broker"
 )
 
 // protocolVersion is offered only when a client's initialize request omits
@@ -50,6 +52,17 @@ type server struct {
 	mu      sync.Mutex
 	version string
 
+	// keyCache amortises broker.OpenVault()'s unlock cost across every tool
+	// call this server handles (CLA-77): a CLI invocation never gets one of
+	// these, but cpass mcp is one long-lived process for a whole Agent
+	// session, so paying OpenVault()'s per-call cost (a `security`
+	// subprocess on the macOS Keychain path) on every one of list_handles,
+	// run_with_secrets and capture defeats the point of not being the
+	// CLI's one-shot invocation. See broker.KeyCache's own doc comment for
+	// why the idle window it bounds this to is also what keeps it from
+	// bypassing a Touch ID-protected Keychain item's own protection.
+	keyCache *broker.KeyCache
+
 	// wg tracks every goroutine callAsync (tools.go) starts for a
 	// run_with_secrets/capture call, so Serve does not return — dropping
 	// them mid-flight, response and all — the instant stdin hits EOF.
@@ -74,6 +87,7 @@ func newServer(out io.Writer, version string) *server {
 	return &server{
 		out:       out,
 		version:   version,
+		keyCache:  broker.NewKeyCache(broker.DefaultIdleTimeout),
 		inflight:  map[string]chan struct{}{},
 		cancelled: map[string]bool{},
 	}

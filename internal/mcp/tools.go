@@ -150,7 +150,7 @@ func (s *server) callListHandles(id json.RawMessage, raw json.RawMessage) {
 			return
 		}
 	}
-	v, err := broker.OpenVault()
+	v, err := s.keyCache.OpenVault() // CLA-77: reuse this server's cached key
 	if err != nil {
 		s.writeResult(id, textResult(true, err.Error()))
 		return
@@ -224,7 +224,8 @@ func (s *server) callRunWithSecrets(id json.RawMessage, raw json.RawMessage, can
 		// UnsafeAllow is always false: an MCP client is never the human
 		// terminal that --unsafe-allow requires, so Command Policy always
 		// applies here, the same as an Agent-invoked `cpass run`.
-		Cancel: cancel, // CLA-76: notifications/cancelled kills the child
+		Resolver: s.keyCache.Resolve, // CLA-77: reuse this server's cached key
+		Cancel:   cancel,             // CLA-76: notifications/cancelled kills the child
 	})
 	if err != nil {
 		if errors.Is(err, run.ErrNoCommand) {
@@ -303,7 +304,7 @@ func (s *server) callCapture(id json.RawMessage, raw json.RawMessage, cancel <-c
 		s.writeError(id, -32602, "command must be a non-empty array")
 		return
 	}
-	v, err := broker.OpenVault()
+	v, err := s.keyCache.OpenVault() // CLA-77: reuse this server's cached key
 	if err != nil {
 		s.writeResult(id, textResult(true, err.Error()))
 		return

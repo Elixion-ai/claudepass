@@ -255,6 +255,12 @@ type Resolved struct {
 // report, and the rest of the run proceeds. In CI mode each Handle resolves
 // from the environment variable named by its Binding; refs must then carry
 // the Binding (Override, or Kind/Name via Ref.Declared).
+//
+// Resolve always opens the Vault fresh, through OpenVault() (and so
+// UnlockKey()): the right default for every caller that makes at most a
+// couple of Broker calls in its whole process lifetime, which is every
+// caller except cpass mcp — see KeyCache.Resolve for the one that amortises
+// this across many calls in one long-lived process (CLA-77).
 func Resolve(refs []Ref) ([]Resolved, []string, error) {
 	if len(refs) == 0 {
 		return nil, nil, nil
@@ -266,6 +272,13 @@ func Resolve(refs []Ref) ([]Resolved, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	return resolveFromVault(v, refs)
+}
+
+// resolveFromVault is Resolve's vault-backed branch, factored out so
+// KeyCache.Resolve (CLA-77) can reuse it against a Vault opened with a
+// cached key instead of calling OpenVault() itself.
+func resolveFromVault(v *vault.Vault, refs []Ref) ([]Resolved, []string, error) {
 	out := make([]Resolved, 0, len(refs))
 	var skipped []string
 	bound := map[string]Ref{}

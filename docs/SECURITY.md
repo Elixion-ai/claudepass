@@ -186,6 +186,29 @@ Vault (`broker.UnlockKey`):
    implemented there yet (`broker.StartBroker` returns an explicit "not
    supported" error), so only `CPASS_KEY` works.
 
+**`cpass mcp` caches the key across calls (CLA-77).** "Every time it needs
+the Vault" above is exactly once per process for every other surface —
+`cpass run`, `cpass capture`, the CLI in general are each a fresh process
+per invocation. `cpass mcp` is not: it is one long-lived process for a
+whole Agent session, and calling `broker.UnlockKey()` on every one of
+`list_handles`, `run_with_secrets`, and `capture` would defeat the point
+of not being the CLI's one-shot invocation — measured at ~15ms/call on the
+macOS Keychain path above versus ~0.6ms/call with `CPASS_KEY` set. Its
+server struct instead holds the key in a `broker.KeyCache`
+(`internal/broker/keycache.go`) and reuses it across calls within a
+sliding idle window equal to the Broker's own `DefaultIdleTimeout` (4h,
+point 3 above) — the same bounded window every unlock source already
+treats as an acceptable lifetime for a key held in memory. This applies
+uniformly, Touch ID-protected Keychain item or not (see below): the plain,
+`CGO_ENABLED=0` `security`-CLI reader point 2 describes has no way to tell
+a Touch ID-protected item from an unprotected one, only whether the read
+succeeds, so there is nothing to key a "skip the cache for this one" check
+off. Once the window elapses with no calls, the next one re-derives the
+key through `broker.UnlockKey()` exactly as before — which is what makes
+`cpass lock` (the Broker-socket path) or a rotated/removed Keychain item
+eventually take effect against an already-running `cpass mcp` process:
+within one idle window, not instantly.
+
 ## Opting into Touch ID / user-presence Keychain protection (CLA-23)
 
 Everything in point 2 above is what `cpass` does by **default**, in every
@@ -247,6 +270,21 @@ Touch ID or the device passcode the next time anything reads that item —
 `security find-generic-password -w` typed by hand — because the access
 control is a property the OS enforces on the item for any reader, not
 logic `cpass` applies itself.
+
+**One exception: `cpass mcp`.** "The next time anything reads that item"
+above is per-*process* for the CLI, which is per-invocation, but `cpass
+mcp` is one long-lived process for a whole Agent session (see `cpass
+mcp`'s own key cache under "Where the unlock key lives, per platform"
+above). A Touch ID-protected item still gates that process's *first*
+`list_handles`/`run_with_secrets`/`capture` call — the OS prompts exactly
+as described above — but a call within `DefaultIdleTimeout` (4h) of the
+last one reuses that already-authenticated key rather than reading the
+Keychain, and so prompting, again. This was a deliberate choice, not an
+oversight: `cpass` ships `CGO_ENABLED=0` by default (ADR-0007), so the
+reader above has no way to ask the Keychain whether a given item carries
+this access control at all, only whether a read succeeds — there is no
+signal here to build a "never cache a Touch ID item" rule out of, only a
+bound on how long any cached key lives, Touch ID-protected or not.
 
 **The one real deployment requirement this surfaces: code signing.**
 macOS only enforces `kSecAccessControlUserPresence` on an item stored in

@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -597,5 +599,83 @@ func TestMCPCancelledRunWithSecretsUnblocksQueuedPing(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("child process kept running after cancellation instead of being killed")
+	}
+}
+
+// TestMCPKeychainUnlockKeyIsCachedAcrossCalls is CLA-77's acceptance
+// benchmark: on the real macOS Keychain path (no CPASS_KEY), the first
+// list_handles call pays UnlockKey()'s `security` subprocess cost, and
+// every call after it must be dramatically cheaper — served from the
+// server's cached key rather than shelling out again. A unique
+// CPASS_KEYCHAIN_SERVICE means this never touches a real "cpass" Keychain
+// item, and the item is deleted when the test ends (see
+// TestKeychainUnlockRoundTrip in unlock_test.go, the existing pattern this
+// follows).
+func TestMCPKeychainUnlockKeyIsCachedAcrossCalls(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Keychain unlock is macOS-only")
+	}
+	service := fmt.Sprintf("cpass-e2e-test-%d-%d", os.Getpid(), time.Now().UnixNano())
+	ve := lockedVault(t)
+	env := []string{"CPASS_KEYCHAIN_SERVICE=" + service}
+	t.Cleanup(func() {
+		_ = exec.Command("security", "delete-generic-password", "-a", ve.vaultPath(), "-s", service).Run() // best-effort cleanup
+	})
+	if r := ve.runEnv(env, nil, "init"); r.code != 0 {
+		t.Fatalf("init: %s", r)
+	}
+
+	cmd := exec.Command(cpassBin, "mcp")
+	cmd.Env = append(baseEnv(), "CPASS_HOME="+ve.home) // deliberately no CPASS_KEY: exercise the Keychain
+	cmd.Env = append(cmd.Env, env...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	raw := &syncBuffer{}
+	s := &mcpSession{
+		t: t, cmd: cmd, stdin: stdin, rawOut: raw, stderr: &stderr,
+		reader: bufio.NewReaderSize(io.TeeReader(stdoutPipe, raw), 1<<20),
+	}
+	t.Cleanup(func() {
+		_ = s.stdin.Close()
+		_ = s.cmd.Wait()
+	})
+	s.initialize()
+
+	const calls = 10
+	var latencies [calls]time.Duration
+	for i := range latencies {
+		start := time.Now()
+		text, isError := s.callToolText("list_handles", map[string]any{})
+		latencies[i] = time.Since(start)
+		if isError {
+			t.Fatalf("list_handles call %d: %s", i, text)
+		}
+	}
+
+	first := latencies[0]
+	var restTotal time.Duration
+	for _, d := range latencies[1:] {
+		restTotal += d
+	}
+	restAvg := restTotal / time.Duration(len(latencies)-1)
+	t.Logf("first call %s, average of the other %d calls %s", first, len(latencies)-1, restAvg)
+	// The gap this asserts on (first call pays one `security` subprocess,
+	// ~15ms; a cached call is sub-millisecond — CLA-77's own measurement)
+	// is roughly 24x, so a generous fraction of the first call still leaves
+	// a wide, load-tolerant margin against the always-fresh, uncached
+	// behaviour this is a regression test for.
+	if restAvg > first/3 {
+		t.Fatalf("later calls (avg %s) were not meaningfully cheaper than the first (%s): the unlock key does not look cached", restAvg, first)
 	}
 }

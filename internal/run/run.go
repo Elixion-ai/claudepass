@@ -56,6 +56,13 @@ type Spec struct {
 	// the same plain "cpass: <handle> is Exposed since <date>, rotate it"
 	// wording, unchanged.
 	FormatExposed func(handle, since string) string
+	// Resolver, when set, resolves Refs in place of the package-level
+	// broker.Resolve — cpass mcp passes a broker.KeyCache's own Resolve
+	// method here so run_with_secrets reuses that server process's cached
+	// unlock key (CLA-77) instead of paying OpenVault()'s cost on every
+	// call. Left nil (every CLI command), Refs resolve through the always-
+	// fresh broker.Resolve, unchanged.
+	Resolver func(refs []broker.Ref) ([]broker.Resolved, []string, error)
 	// Cancel, when set and then closed, kills the child (see
 	// killProcessGroup) as soon as possible instead of waiting on it to
 	// exit on its own. cpass mcp sets this per call from a request's own
@@ -76,7 +83,11 @@ func Run(spec Spec) (int, error) {
 	if len(spec.Argv) == 0 {
 		return 2, ErrNoCommand
 	}
-	secrets, skipped, err := broker.Resolve(spec.Refs)
+	resolve := broker.Resolve
+	if spec.Resolver != nil {
+		resolve = spec.Resolver
+	}
+	secrets, skipped, err := resolve(spec.Refs)
 	if err != nil {
 		return 1, err
 	}
