@@ -459,7 +459,10 @@ detail.
    *path*, never the value. That directory also carries a `.pid` file
    naming the `cpass` process that created it, so a directory orphaned by a
    `cpass` process that was itself killed gets swept and shredded by the
-   next `cpass run` invocation, not left behind.
+   next `cpass run` invocation, not left behind — bounded, in case that
+   `.pid`'s process ID gets reused by something else entirely before the
+   next sweep runs, by a time-based fallback (see the run-dir table entry
+   below).
 4. Spawns the command with `stdin` passed through unmodified, `stdout` and
    `stderr` piped through the Redactor (unless the caller is `cpass
    capture`, which bypasses redaction on stdout only — see below), and
@@ -626,7 +629,7 @@ All paths below are relative to `$CPASS_HOME` unless stated otherwise.
 | `$CPASS_HOME/broker.salt` | The scrypt salt for deriving the unlock key from a passphrase (Linux/CI unlock path only). | `0600` |
 | `$CPASS_HOME/cpass.sock` (or `$XDG_RUNTIME_DIR/cpass.sock` if set) | The Broker process's Unix domain socket (Linux/CI unlock path only). | `0600` |
 | `$CPASS_HOME/redactions.log` | The append-only redaction event log described above. | `0600` |
-| `$CPASS_HOME/run/<16-hex-char id>/` | One per-invocation temp directory for `cpass run`'s file Bindings; holds a `.pid` file and one file per file-bound Secret, all shredded on exit. | `0700` (files `0600`) |
+| `$CPASS_HOME/run/<16-hex-char id>/` | One per-invocation temp directory for `cpass run`'s file Bindings; holds a `.pid` file and one file per file-bound Secret, all shredded on exit, or swept by the next invocation's `sweepStale` if `cpass` itself was killed before it could clean up (PID-liveness, bounded by a time-based fallback — see `docs/THREATS.md`). | `0700` (files `0600`) |
 | `.claudepass.toml` (repo root, found by walking up from the current directory) | The Manifest: which Handles this project needs and their Bindings. Contains no values; meant to be committed. | `0644` |
 | `$CPASS_HOME/global.toml` | The Global Manifest: the same TOML subset as a project Manifest (`.claudepass.toml`), declaring the Handles this machine gets in every project it reaches. Contains no values. | `0644` (dir `0700`, created like the Vault's own directory if missing) |
 | `<skills-dir>/claudepass/` (default `~/.claude/skills/claudepass`, overridable with `cpass integrate claude --path`) | The installed Claude Code plugin: `.claude-plugin/plugin.json`, `hooks/hooks.json`, `skills/claudepass/SKILL.md`. | `0644` (dirs `0755`) |

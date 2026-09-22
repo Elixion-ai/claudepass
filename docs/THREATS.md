@@ -201,6 +201,28 @@ value can still end up somewhere it shouldn't, today:
    honest, disclosed limitation as 1-8 above, not a defect the gate was
    supposed to close and missed: it is, precisely, a `.git`-presence check,
    stated here as exactly that and nothing stronger.
+10. **The stale run-dir sweep's time-based fallback is a bound, not a
+    guarantee, in either direction.** `sweepStale` (`internal/run/files.go`)
+    decides whether to shred an old `cpass run` file-Binding directory using
+    `syscall.Kill(pid, 0)` against the `.pid` it recorded; if the `cpass`
+    process that owned it was `SIGKILL`ed and the OS later recycles that pid
+    for an unrelated process before the next sweep, PID liveness alone would
+    read "alive" forever and never catch it, leaving a plaintext Secret file
+    on disk indefinitely. `staleRunDirMaxAge` (three times
+    `broker.DefaultIdleTimeout`, currently 12h) closes that gap by shredding
+    any run dir older than the bound regardless of what its `.pid` says —
+    but the bound cuts both ways: a directory that *is* a genuine PID reuse
+    can still sit on disk, plaintext Secret file and all, for up to that
+    long before the fallback catches it, not immediately; and a single
+    `cpass run` invocation that legitimately wraps one command for longer
+    than the bound (an unattended dev server or watcher left running past
+    12h straight, the exact long-running case PRD story #18's
+    no-buffering-delay guarantee exists for) would have its own,
+    still-in-use file-Binding directory shredded out from under it. Neither
+    side of this trade has a sharper fix without either trusting a reused
+    pid forever (today's bug) or tracking process identity more precisely
+    than a bare pid, which no supported platform here gives `cpass` a
+    portable way to do.
 
 ## Intercept precision (v0.1.4)
 
