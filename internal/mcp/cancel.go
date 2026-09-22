@@ -23,6 +23,16 @@ func idKey(id json.RawMessage) string { return string(id) }
 // caller must defer once its call finishes, cancelled or not, so a
 // notifications/cancelled arriving after that point finds nothing left to
 // signal.
+//
+// done also clears cancelled[key] (CLA-98 item 5). Without that, a
+// notifications/cancelled that lands after the call's response has already
+// been written — suppressed (below) already had nothing to consume, since
+// it runs before cancelled[key] could ever be set — but before this done()
+// runs sets cancelled[key] = true in handleCancelled and finds inflight
+// still registered, since removing it is done's job, not
+// handleCancelled's. Nothing will ever call suppressed for this id again,
+// so that entry would otherwise sit in the map for the rest of the
+// session.
 func (s *server) beginCancellable(id json.RawMessage) (cancel chan struct{}, done func()) {
 	cancel = make(chan struct{})
 	key := idKey(id)
@@ -34,6 +44,7 @@ func (s *server) beginCancellable(id json.RawMessage) (cancel chan struct{}, don
 		if s.inflight[key] == cancel { // only remove our own registration
 			delete(s.inflight, key)
 		}
+		delete(s.cancelled, key)
 		s.cancelMu.Unlock()
 	}
 }
