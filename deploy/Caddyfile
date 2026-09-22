@@ -32,13 +32,17 @@
 		# script is now an external file under site/js or site/game, so
 		# script-src drops to 'self' with no 'unsafe-inline' — no inline
 		# <script> or inline event-handler attribute may ship anywhere
-		# under site/. style-src keeps 'unsafe-inline' only because a
-		# couple of existing pages still rely on it; no new page needs
-		# it (retro.css is the one shared, cacheable stylesheet). The
-		# Press Start 2P face is self-hosted under site/fonts, so
-		# font-src is 'self' with no webfont CDN. img-src adds data:
-		# for inline data-URI art without opening up remote images.
-		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'self'; frame-ancestors 'none'"
+		# under site/. style-src is 'self' only too (CLA-92): none of
+		# the 9 real served pages use an inline <style> or style=
+		# attribute — retro.css is the one shared, cacheable stylesheet
+		# every page links — and the only pages that ever needed
+		# 'unsafe-inline' were the unlinked build-time OG/icon-generator
+		# templates, which now live under tools/asset-templates/ outside
+		# site/ and are never published here. The Press Start 2P face is
+		# self-hosted under site/fonts, so font-src is 'self' with no
+		# webfont CDN. img-src adds data: for inline data-URI art without
+		# opening up remote images.
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'self'; frame-ancestors 'none'"
 		-Server
 	}
 }
