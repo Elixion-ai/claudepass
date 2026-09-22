@@ -210,9 +210,29 @@ Vault (`broker.UnlockKey`):
    never the default) and is documented in full below.
 3. **Linux, CI, or macOS with `CPASS_UNLOCK=socket`**: a Broker process.
    `cpass unlock` prompts for a master passphrase on a real terminal,
-   derives the key with **scrypt** (`N=2^15, r=8, p=1`, a random 16-byte
-   salt persisted at `$CPASS_HOME/broker.salt` with mode `0600`, so the same
-   passphrase always re-derives the same key), and hands that key to a
+   derives the key with **scrypt** (`N=2^18, r=8, p=1` for a Vault whose
+   passphrase is derived for the first time on a machine — measured
+   ~335ms and ~256MiB per derivation on ordinary current hardware,
+   `internal/broker/passphrase_test.go`'s `BenchmarkDeriveKey`), targeting an
+   offline-resistant cost (`vault.cpv` is a file an attacker who copies it
+   can brute-force offline with unlimited parallel guesses, unlike a login
+   prompt) that still stays safe on a small CI runner. A random 16-byte salt
+   is persisted at `$CPASS_HOME/broker.salt` with mode `0600` so the same
+   passphrase always re-derives the same key, and the `N`/`r`/`p` used for it
+   are persisted alongside it at `$CPASS_HOME/broker.kdf` (mode `0600`) so a
+   future cost change never has to guess how an existing salt was derived. A
+   `broker.salt` from before this record existed has no `broker.kdf` next to
+   it; that absence itself means "derived with this project's original
+   `N=2^15, r=8, p=1` parameters" (~60ms, ~32MiB — fine for the login this
+   project shipped as v1's threat model, too weak for the offline-copy one
+   above), and it keeps being derived that way indefinitely so the same
+   passphrase keeps reproducing the same key. There is no in-place upgrade
+   of an existing passphrase Vault onto the new parameters yet — raising `N`
+   changes the derived key, which would need the Vault's data key re-wrapped
+   under it — so moving one over today means creating a fresh Vault (`cpass
+   init`, unset `CPASS_HOME` or point it elsewhere first) and re-adding its
+   Handles; a macOS Vault on the default Keychain unlock path is unaffected
+   either way. Once derived, that key is handed to a
    detached `cpass broker-serve` process over a pipe — never a command-line
    argument, so it never appears in `ps`. That process listens on a
    user-only Unix domain socket (mode `0600`) at `$XDG_RUNTIME_DIR/cpass.sock`
@@ -226,6 +246,33 @@ Vault (`broker.UnlockKey`):
 4. Windows is untested beyond building; the Broker process is not
    implemented there yet (`broker.StartBroker` returns an explicit "not
    supported" error), so only `CPASS_KEY` works.
+
+### Zeroing key material in memory
+
+A `Vault`'s unlock key and data key are zeroed (`Vault.Close`) once the
+bounded operation holding them is done — every CLI command, MCP tool call,
+and `cpass run`/`run_with_secrets` resolution opens its own `*vault.Vault`
+and closes it before returning. The Broker process (point 3 above) zeroes
+the key it holds the same way, on every shutdown path: idle timeout,
+`cpass lock`, or an error before it ever starts serving. Each keeps its own
+copy of the key rather than sharing the caller's slice, so zeroing it can
+never corrupt a key a caller is still using (`cpass unlock` hands the same
+key it opened the Vault with on to the Broker right after).
+
+**Read this as best-effort hygiene, not a guarantee.** Go's garbage
+collector and runtime can have already copied these bytes elsewhere by the
+time `Close` or the Broker's shutdown ever runs — a slice that grew and
+reallocated, a value the compiler moved to the heap, a relocated goroutine
+stack — and none of those copies are found or wiped; Go has no
+`mlock`/`madvise(MADV_DONTDUMP)` equivalent in the standard library, and
+`cpass` adds no `unsafe` or cgo dependency to get one. What this buys is
+narrower: the one certain address a key sits at is cleared as soon as
+`cpass` is done with it, rather than left populated for the rest of the
+process's life (the Broker case is the sharpest version of this — without
+it, a killed-but-not-yet-restarted Broker could hold a live key in memory
+for up to its 4-hour default idle timeout). A core dump, a swapped memory
+page, or a forensic memory read taken *before* that point can still recover
+the key; this does not change that.
 
 ## Opting into Touch ID / user-presence Keychain protection (CLA-23)
 
@@ -651,9 +698,10 @@ All paths below are relative to `$CPASS_HOME` unless stated otherwise.
 | `$CPASS_HOME/vault.cpv.tmp-*` | Transient — the Vault's atomic-write staging file, one uniquely-named instance per Save (`os.CreateTemp`, never a fixed name two writers could race); renamed over `vault.cpv` (or `vault.cpv.bak`) on save, never left behind on success. | `0600` |
 | `$CPASS_HOME/vault.cpv.lock` | The sidecar `flock` every Vault writer holds for its whole Open-mutate-Save cycle (`vault.Update`); never removed, never itself holds any Vault data. macOS/Linux only. | `0600` |
 | `$CPASS_HOME/broker.salt` | The scrypt salt for deriving the unlock key from a passphrase (Linux/CI unlock path only). | `0600` |
+| `$CPASS_HOME/broker.kdf` | The scrypt `N`/`r`/`p` cost the salt above was derived with (Linux/CI unlock path only); absent next to a `broker.salt` from before this file existed, which means the legacy `N=2^15` cost. | `0600` |
 | `$CPASS_HOME/cpass.sock` (or `$XDG_RUNTIME_DIR/cpass.sock` if set) | The Broker process's Unix domain socket (Linux/CI unlock path only). | `0600` |
 | `$CPASS_HOME/redactions.log` | The append-only redaction event log described above. | `0600` |
-| `$CPASS_HOME/run/<16-hex-char id>/` | One per-invocation temp directory for `cpass run`'s file Bindings; holds a `.pid` file and one file per file-bound Secret, all shredded on exit. | `0700` (files `0600`) |
+| `$CPASS_HOME/run/<16-hex-char id>/` | One per-invocation temp directory for `cpass run`'s file Bindings; holds a `.pid` file and one file per file-bound Secret, all shredded on exit. | `0700` (files `0600`; shared `run/` parent also tightened to `0700` on every use, the same reused-directory fix as `$CPASS_HOME` itself) |
 | `.claudepass.toml` (repo root, found by walking up from the current directory) | The Manifest: which Handles this project needs and their Bindings. Contains no values; meant to be committed. | `0644` |
 | `$CPASS_HOME/global.toml` | The Global Manifest: the same TOML subset as a project Manifest (`.claudepass.toml`), declaring the Handles this machine gets in every project it reaches. Contains no values. | `0644` (dir `0700`, created like the Vault's own directory if missing) |
 | `$CPASS_HOME/global.toml.lock` | The sidecar `flock` every Global Manifest writer holds for its whole LoadGlobal-mutate-SaveGlobal cycle (`manifest.UpdateGlobal`); never removed, never itself holds any data. macOS/Linux only. | `0600` |

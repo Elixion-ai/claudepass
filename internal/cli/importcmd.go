@@ -62,7 +62,7 @@ func cmdImport(e *env) int {
 		items = append(items, item{handle: handle, binding: en.Name, value: en.Value})
 	}
 
-	_, code := updateVault(e, func(v *vault.Vault) error {
+	code := updateVault(e, func(v *vault.Vault) error {
 		for _, it := range items {
 			if _, err := v.Get(it.handle); err == nil {
 				return fmt.Errorf("handle %s already exists in the Vault", it.handle)

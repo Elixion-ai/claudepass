@@ -84,29 +84,40 @@ func TestLogRecordAfterCloseReopens(t *testing.T) {
 	}
 }
 
-// TestLogRecordManyMatchesFast covers CLA-70's acceptance bar as a real,
-// always-run check rather than a benchmark number someone has to eyeball
-// (mirroring TestThroughputMeetsBar in redact_test.go): the per-event
-// open+write+close overhead this ticket fixes measured ~17.6us/event before
-// the fix, i.e. ~1.76s for 100,000 events; opening the file once and
-// reusing it should leave only the (unavoidable) per-event write syscall,
-// well under a tenth of that old total on any host, loaded or not.
-func TestLogRecordManyMatchesFast(t *testing.T) {
+// TestLogRecordManyMatchesOpensOnce covers CLA-70: the per-event
+// open+write+close this ticket removed measured ~17.6us/event (~1.76s for
+// 100,000 events). It asserts the mechanism — one *os.File, opened on the
+// first Record and reused for every later one — rather than a wall-clock
+// bound, which flaked under -race on a loaded host; the elapsed time is
+// logged for anyone comparing against BenchmarkLogRecord.
+func TestLogRecordManyMatchesOpensOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "redactions.log")
 	l := NewLog(path, "cmd")
 	defer func() { _ = l.Close() }()
 
-	const n = 100_000
-	const bound = 500 * time.Millisecond // generous even under host contention; ~1.76s was the old per-open-per-event cost
+	l.Record(Event{Handle: "h", Encoding: "raw", Stream: "stdout"})
+	first := l.f
+	if first == nil {
+		t.Fatal("Record did not open the log file")
+	}
 
+	const n = 100_000
 	start := time.Now()
-	for i := 0; i < n; i++ {
+	for i := 1; i < n; i++ {
 		l.Record(Event{Handle: "h", Encoding: "raw", Stream: "stdout"})
+		if l.f != first {
+			t.Fatalf("Record %d reopened the log file; it must stay open for the Log's lifetime", i)
+		}
 	}
 	elapsed := time.Since(start)
 	t.Logf("%d Record calls in %v (%.2f us/event)", n, elapsed, float64(elapsed.Microseconds())/n)
-	if elapsed > bound {
-		t.Fatalf("%d Record calls took %v, want under %v — the log file is being reopened per event again", n, elapsed, bound)
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(raw), "handle=h"); got != n {
+		t.Fatalf("log has %d events, want %d", got, n)
 	}
 }
 

@@ -153,6 +153,7 @@ func (s *server) callListHandles(id json.RawMessage, raw json.RawMessage) {
 		s.writeResult(id, textResult(true, err.Error()))
 		return
 	}
+	defer v.Close()
 	// Only read when the caller actually asked about the Global Manifest: an
 	// ordinary listing must not start depending on that file being readable.
 	gm := &manifest.Manifest{}
@@ -300,7 +301,9 @@ func (s *server) callCapture(id json.RawMessage, raw json.RawMessage) {
 		s.writeResult(id, textResult(true, err.Error()))
 		return
 	}
-	if _, err := precheck.Get(a.Handle); err == nil {
+	_, getErr := precheck.Get(a.Handle)
+	precheck.Close()
+	if getErr == nil {
 		s.writeResult(id, textResult(true, fmt.Sprintf("handle %s already exists", a.Handle)))
 		return
 	}
@@ -324,7 +327,7 @@ func (s *server) callCapture(id json.RawMessage, raw json.RawMessage) {
 	value := strings.TrimSuffix(stdout.String(), "\n")
 	value = strings.TrimSuffix(value, "\r")
 	var entry vault.Entry
-	_, err = broker.UpdateVault(func(v *vault.Vault) error {
+	err = broker.UpdateVault(func(v *vault.Vault) error {
 		// Re-checked here, not just above: argv may have run for a while,
 		// and this is the freshly reopened, lock-protected state another
 		// writer could have changed in the meantime (CLA-55).

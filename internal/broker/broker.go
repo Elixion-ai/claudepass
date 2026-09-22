@@ -132,14 +132,14 @@ func OpenVault() (*vault.Vault, error) {
 // broker.OpenVault and needs the lock around a slower step in between —
 // see cmdCapture) rather than its own Open ... Save, so two `cpass`
 // processes can never race each other's write (CLA-55).
-func UpdateVault(fn func(v *vault.Vault) error) (*vault.Vault, error) {
+func UpdateVault(fn func(v *vault.Vault) error) error {
 	p, err := VaultPath()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	key, err := UnlockKey()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	return vault.Update(p, key, fn)
 }
@@ -286,6 +286,7 @@ func Resolve(refs []Ref) ([]Resolved, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	defer v.Close()
 	out := make([]Resolved, 0, len(refs))
 	var skipped []string
 	bound := map[string]Ref{}

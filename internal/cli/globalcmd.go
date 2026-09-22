@@ -111,6 +111,7 @@ func warnUnknownGlobal(e *env, handle string) {
 	if err != nil {
 		return
 	}
+	defer v.Close()
 	if _, err := v.Get(handle); err != nil {
 		e.notice("%s is not in the Vault yet; every run will skip it until you `cpass add %s`", handle, handle)
 	}

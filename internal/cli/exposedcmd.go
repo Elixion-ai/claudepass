@@ -24,6 +24,7 @@ func cmdExposed(e *env) int {
 	if code != ExitOK {
 		return code
 	}
+	defer v.Close()
 	any := false
 	for _, en := range v.List("") {
 		if !en.Exposed {
@@ -54,7 +55,7 @@ func cmdRotateDone(e *env) int {
 		return e.fail(ExitUsage, "usage: cpass rotate-done <handle>")
 	}
 	handle := fs.Arg(0)
-	_, code := updateVault(e, func(v *vault.Vault) error {
+	code := updateVault(e, func(v *vault.Vault) error {
 		return v.ClearExposed(handle)
 	})
 	if code != ExitOK {
@@ -76,7 +77,7 @@ func cmdMarkExposed(e *env) int {
 		return e.fail(ExitUsage, "usage: cpass mark-exposed <handle> [--reason REASON]")
 	}
 	handle := pos[0]
-	_, code := updateVault(e, func(v *vault.Vault) error {
+	code := updateVault(e, func(v *vault.Vault) error {
 		return v.MarkExposed(handle, *reason)
 	})
 	if code != ExitOK {

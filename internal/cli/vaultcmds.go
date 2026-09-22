@@ -37,16 +37,15 @@ func openVault(e *env) (*vault.Vault, int) {
 // freshly opened Vault under broker.UpdateVault's exclusive lock, and the
 // result is saved automatically if fn returns nil, so callers never write
 // their own Open ... Save around a mutation (CLA-55).
-func updateVault(e *env, fn func(v *vault.Vault) error) (*vault.Vault, int) {
-	v, err := broker.UpdateVault(fn)
-	if err != nil {
+func updateVault(e *env, fn func(v *vault.Vault) error) int {
+	if err := broker.UpdateVault(fn); err != nil {
 		if errors.Is(err, broker.ErrLocked) {
 			fprintln(e.stderr, e.locked())
-			return nil, ExitError
+			return ExitError
 		}
-		return nil, e.failErr(err)
+		return e.failErr(err)
 	}
-	return v, ExitOK
+	return ExitOK
 }
 
 // storeKeychainKey stores key as this Vault's macOS Keychain item, plain
@@ -123,9 +122,11 @@ func cmdInit(e *env) int {
 	} else if err != nil {
 		return e.failErr(err)
 	}
-	if _, err := vault.Create(path, key); err != nil {
+	nv, err := vault.Create(path, key)
+	if err != nil {
 		return e.failErr(err)
 	}
+	nv.Close()
 	fprintf(e.stdout, "initialised vault at %s\n", path)
 	return ExitOK
 }
@@ -153,9 +154,11 @@ func cmdAdd(e *env) int {
 	// be stored. The actual write below reopens fresh under the lock
 	// regardless (vault.Update), so this early open is purely for that UX —
 	// it is not where CLA-55's exclusion comes from.
-	if _, code := openVault(e); code != ExitOK {
+	probe, code := openVault(e)
+	if code != ExitOK {
 		return code
 	}
+	probe.Close()
 	value, err := e.readSecret(fmt.Sprintf("value for %s: ", handle),
 		"add needs a terminal to type the value into; from an Agent, use `cpass capture <handle> -- <command>` so the value never enters its context")
 	if err != nil {
@@ -170,7 +173,7 @@ func cmdAdd(e *env) int {
 		opts.Exposed = "added-exposed"
 	}
 	var entry vault.Entry
-	_, code := updateVault(e, func(v *vault.Vault) error {
+	code = updateVault(e, func(v *vault.Vault) error {
 		var err error
 		entry, err = v.Add(handle, value, opts)
 		return err
@@ -212,6 +215,7 @@ func cmdLs(e *env) int {
 	if code != ExitOK {
 		return code
 	}
+	defer v.Close()
 	// Only read once, and only when the listing actually mentions the Global
 	// Manifest: a plain `cpass ls` never touched that file before this
 	// feature existed and must not start depending on it being readable.
@@ -255,7 +259,7 @@ func cmdRm(e *env) int {
 		return e.fail(ExitUsage, "usage: cpass rm <handle>...")
 	}
 	var wasExposed []string
-	_, code := updateVault(e, func(v *vault.Vault) error {
+	code := updateVault(e, func(v *vault.Vault) error {
 		for _, h := range fs.Args() {
 			if en, err := v.Get(h); err == nil && en.Exposed {
 				wasExposed = append(wasExposed, h)
@@ -289,7 +293,7 @@ func cmdMv(e *env) int {
 	if fs.NArg() != 2 {
 		return e.fail(ExitUsage, "usage: cpass mv <from> <to>")
 	}
-	_, code := updateVault(e, func(v *vault.Vault) error {
+	code := updateVault(e, func(v *vault.Vault) error {
 		return v.Rename(fs.Arg(0), fs.Arg(1))
 	})
 	if code != ExitOK {

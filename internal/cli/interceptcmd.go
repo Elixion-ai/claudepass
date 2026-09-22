@@ -58,7 +58,7 @@ func cmdIntercept(e *env) int {
 	}
 
 	var stored []string
-	_, code := updateVault(e, func(v *vault.Vault) error {
+	code := updateVault(e, func(v *vault.Vault) error {
 		used := map[string]bool{}
 		for _, en := range v.List("") {
 			used[en.Handle] = true
@@ -101,7 +101,7 @@ var errNothingToStore = errors.New("intercept: nothing to store")
 // skipped) — any error here is deliberately swallowed.
 func interceptBypass(e *env, matches []detect.Match) {
 	var stored []string
-	_, err := broker.UpdateVault(func(v *vault.Vault) error {
+	err := broker.UpdateVault(func(v *vault.Vault) error {
 		used := map[string]bool{}
 		for _, en := range v.List("") {
 			used[en.Handle] = true

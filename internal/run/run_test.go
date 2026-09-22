@@ -3,6 +3,8 @@ package run
 import (
 	"bytes"
 	"encoding/base64"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -66,5 +68,40 @@ func TestExposedReminderUsesFormatExposedWhenSet(t *testing.T) {
 	})
 	if !strings.HasPrefix(coloured, "COLOURED(stripe/live,") || !strings.HasSuffix(coloured, ")\n") {
 		t.Fatalf("FormatExposed set: got %q, want it to route the reminder through the supplied formatter", coloured)
+	}
+}
+
+// TestNewRunDirTightensExistingRunParentPermissions covers CLA-58: the
+// shared run/ parent directory under CPASS_HOME
+// (runRoot: $CPASS_HOME/run/) must be tightened to 0700 even when it
+// already exists (e.g. left at 0755 by a stray umask, or an install that
+// predates this hardening), matching the same fix already applied to
+// CPASS_HOME itself (vault.Save), the passphrase salt/kdf directory, and
+// the Broker socket directory. MkdirAll is a no-op on a directory that
+// already exists, regardless of its current mode, so without an explicit
+// chmod a loosened run/ parent stays loosened forever, letting another
+// local user list the names (though not the contents — each per-invocation
+// subdirectory is still always freshly created at 0700) of currently-live
+// file-Binding directories.
+func TestNewRunDirTightensExistingRunParentPermissions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(broker.EnvHome, home)
+	root := filepath.Join(home, "run")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := newRunDir()
+	if err != nil {
+		t.Fatalf("newRunDir: %v", err)
+	}
+	defer d.destroy()
+
+	st, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o700 {
+		t.Fatalf("run/ parent mode = %v, want 0700", st.Mode().Perm())
 	}
 }

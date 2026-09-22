@@ -51,7 +51,9 @@ func cmdCapture(e *env) int {
 	if code != ExitOK {
 		return code
 	}
-	if _, err := precheck.Get(handle); err == nil {
+	_, getErr := precheck.Get(handle)
+	precheck.Close()
+	if getErr == nil {
 		return e.fail(ExitError, "handle %s already exists", handle)
 	}
 
@@ -100,7 +102,7 @@ func cmdCapture(e *env) int {
 		opts.Binding.Kind = vault.BindFile
 	}
 	var entry vault.Entry
-	_, code = updateVault(e, func(v *vault.Vault) error {
+	code = updateVault(e, func(v *vault.Vault) error {
 		// Re-checked here, not just above: argv may have run for a while,
 		// and this is the freshly reopened, lock-protected state another
 		// writer could have changed in the meantime (CLA-55).

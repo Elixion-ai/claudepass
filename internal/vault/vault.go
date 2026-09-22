@@ -143,7 +143,11 @@ func Create(path string, key []byte) (*Vault, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := &Vault{path: path, key: key, dataKey: dataKey, entries: map[string]*Entry{}}
+	// A Vault's own copy of key, never the caller's slice: Close zeroes
+	// v.key in place, and a caller (cpass unlock hands the same key on to
+	// StartBroker right after opening the Vault with it, to name one) must
+	// keep using its own slice safely after that.
+	v := &Vault{path: path, key: append([]byte(nil), key...), dataKey: dataKey, entries: map[string]*Entry{}}
 	if err := v.Save(); err != nil {
 		return nil, err
 	}
@@ -188,7 +192,9 @@ func Open(path string, key []byte) (*Vault, error) {
 	if err := json.Unmarshal(plain, &b); err != nil {
 		return nil, ErrTampered
 	}
-	v := &Vault{path: path, key: key, dataKey: dataKey, entries: map[string]*Entry{}}
+	// A Vault's own copy of key, never the caller's slice — see the same
+	// note in Create.
+	v := &Vault{path: path, key: append([]byte(nil), key...), dataKey: dataKey, entries: map[string]*Entry{}}
 	for i := range b.Entries {
 		e := b.Entries[i]
 		v.entries[e.Handle] = &e
@@ -240,7 +246,15 @@ func (v *Vault) Save() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(v.path), 0o700); err != nil {
+	dir := filepath.Dir(v.path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	// MkdirAll is a no-op on a directory that already exists, regardless of
+	// its current mode, so a loosened CPASS_HOME (a stray umask, a reused
+	// directory) would otherwise stay loosened forever. Chmod unconditionally
+	// to make sure it ends up 0700 either way.
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
 	if old, err := os.ReadFile(v.path); err == nil {
@@ -270,30 +284,57 @@ const lockSuffix = ".lock"
 // this: Save's atomic rename already keeps a concurrent read consistent on
 // its own, and making every read wait on the write lock would serialize
 // `cpass ls` behind an unrelated `cpass add` for no reason.
-func Update(path string, key []byte, fn func(v *Vault) error) (*Vault, error) {
+func Update(path string, key []byte, fn func(v *Vault) error) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
+		return err
 	}
 	lock, err := lockfile.Acquire(path+lockSuffix, lockfile.DefaultTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("vault: locking for write: %w", err)
+		return fmt.Errorf("vault: locking for write: %w", err)
 	}
 	defer func() { _ = lock.Release() }()
 	v, err := Open(path, key)
 	if err != nil {
-		return nil, err
+		return err
 	}
+	// Update owns this Vault for exactly the length of the call, so it
+	// zeroes the key material itself (CLA-60) rather than handing an open
+	// Vault back for every caller to remember to Close.
+	defer v.Close()
 	if err := fn(v); err != nil {
-		return nil, err
+		return err
 	}
-	if err := v.Save(); err != nil {
-		return nil, err
-	}
-	return v, nil
+	return v.Save()
 }
 
 // Path is the file the Vault lives in.
 func (v *Vault) Path() string { return v.path }
+
+// Close zeroes the unlock key and data key this Vault holds in memory.
+// Call it on every bounded use of an opened Vault — a CLI command, an MCP
+// tool call, one broker.Resolve — once it is done with the key material,
+// typically deferred right after Open/Create/OpenVault succeeds (Save, if
+// any, always runs first in program order; a deferred Close only ever runs
+// after it).
+//
+// This is best-effort hygiene, not a guarantee: by the time Close runs, Go's
+// garbage collector or the runtime may already have copied these bytes
+// elsewhere (a slice that grew and reallocated, a value that escaped to the
+// heap, a moved goroutine stack), and none of those copies are found or
+// wiped. It shortens how long the key sits at its one certain address, no
+// more — see docs/SECURITY.md. Idempotent: safe to call more than once, and
+// safe to call on a Vault whose key material is already zero.
+func (v *Vault) Close() {
+	zero(v.key)
+	zero(v.dataKey)
+}
+
+// zero overwrites every byte of b in place.
+func zero(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
 
 // Get returns a copy of the Entry for handle.
 func (v *Vault) Get(handle string) (Entry, error) {
