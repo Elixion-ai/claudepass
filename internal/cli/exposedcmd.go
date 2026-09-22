@@ -4,6 +4,8 @@ import (
 	"flag"
 	"io"
 	"time"
+
+	"github.com/Elixion-ai/claudepass/internal/vault"
 )
 
 func init() {
@@ -51,16 +53,12 @@ func cmdRotateDone(e *env) int {
 	if fs.NArg() != 1 {
 		return e.fail(ExitUsage, "usage: cpass rotate-done <handle>")
 	}
-	v, code := openVault(e)
+	handle := fs.Arg(0)
+	_, code := updateVault(e, func(v *vault.Vault) error {
+		return v.ClearExposed(handle)
+	})
 	if code != ExitOK {
 		return code
-	}
-	handle := fs.Arg(0)
-	if err := v.ClearExposed(handle); err != nil {
-		return e.failErr(err)
-	}
-	if err := v.Save(); err != nil {
-		return e.failErr(err)
 	}
 	fprintf(e.stdout, "%s is no longer Exposed\n", handle)
 	return ExitOK
@@ -77,16 +75,12 @@ func cmdMarkExposed(e *env) int {
 	if len(pos) != 1 {
 		return e.fail(ExitUsage, "usage: cpass mark-exposed <handle> [--reason REASON]")
 	}
-	v, code := openVault(e)
+	handle := pos[0]
+	_, code := updateVault(e, func(v *vault.Vault) error {
+		return v.MarkExposed(handle, *reason)
+	})
 	if code != ExitOK {
 		return code
-	}
-	handle := pos[0]
-	if err := v.MarkExposed(handle, *reason); err != nil {
-		return e.failErr(err)
-	}
-	if err := v.Save(); err != nil {
-		return e.failErr(err)
 	}
 	fprintf(e.stdout, "%s marked Exposed (%s)\n", handle, *reason)
 	return ExitOK

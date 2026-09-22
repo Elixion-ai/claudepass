@@ -3,7 +3,9 @@ package vault
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -60,6 +62,53 @@ func TestValidateHandle(t *testing.T) {
 	for _, bad := range []string{"", "/a", "a/", "A", "a b", "a//b", "-a"} {
 		if err := ValidateHandle(bad); err == nil {
 			t.Errorf("%q should be invalid", bad)
+		}
+	}
+}
+
+// TestConcurrentAddsAllSurvive is CLA-55's regression test: N concurrent
+// writers each doing their own Open -> mutate -> Save cycle against the
+// same Vault file must not lose any of the N additions, and must not race
+// each other's Save (a shared, fixed tmp filename made that a second
+// failure mode on top of the lost update). Run under -race.
+func TestConcurrentAddsAllSurvive(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "v.cpv")
+	k := key(9)
+	if _, err := Create(p, k); err != nil {
+		t.Fatal(err)
+	}
+	const n = 30
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			handle := fmt.Sprintf("concurrent/h%02d", i)
+			_, err := Update(p, k, func(v *Vault) error {
+				_, err := v.Add(handle, fmt.Sprintf("value-number-%02d-long-enough", i), AddOptions{})
+				return err
+			})
+			errs[i] = err
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("update %d: %v", i, err)
+		}
+	}
+	v, err := Open(p, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Count() != n {
+		t.Fatalf("vault has %d entries, want %d — a concurrent Save silently lost one", v.Count(), n)
+	}
+	for i := 0; i < n; i++ {
+		h := fmt.Sprintf("concurrent/h%02d", i)
+		if _, err := v.Get(h); err != nil {
+			t.Errorf("missing %s: %v", h, err)
 		}
 	}
 }

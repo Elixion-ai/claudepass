@@ -4,6 +4,10 @@
 // key, and the entry list encrypted under the data key. Both layers use
 // XChaCha20-Poly1305, so a wrong key fails at the unwrap and a modified body
 // fails at the open; the two are reported as distinct errors.
+//
+// Open, mutate the in-memory Entry map, Save is not by itself safe against
+// another process doing the same thing at once — see Update, the one
+// correct way to do that cycle (CLA-55).
 package vault
 
 import (
@@ -17,6 +21,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Elixion-ai/claudepass/internal/lockfile"
 )
 
 // FormatVersion is the on-disk envelope version.
@@ -193,7 +199,15 @@ func aadFor(env envelope) []byte {
 	return []byte(fmt.Sprintf("cpass-vault-v%d:%s:%s", env.Version, env.KeyNonce, env.WrappedKey))
 }
 
-// Save encrypts and atomically writes the Vault to disk with mode 0600.
+// Save encrypts and atomically writes the Vault to disk with mode 0600, via
+// a per-invocation-unique temp file in the same directory (os.CreateTemp,
+// never the fixed v.path+".tmp" two Saves could otherwise race each other's
+// rename on) renamed into place.
+//
+// Save on its own does not make two concurrent writers safe: it guarantees
+// only that the write it was given lands whole or not at all, atomically
+// with respect to a concurrent reader. See Update for the actual
+// read-modify-write serialization (CLA-55).
 func (v *Vault) Save() error {
 	entries := v.List("")
 	plain, err := json.Marshal(body{Entries: entries})
@@ -214,14 +228,68 @@ func (v *Vault) Save() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(v.path), 0o700); err != nil {
+	dir := filepath.Dir(v.path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	tmp := v.path + ".tmp"
-	if err := os.WriteFile(tmp, out, 0o600); err != nil {
+	tmp, err := os.CreateTemp(dir, filepath.Base(v.path)+".tmp-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, v.path)
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(out); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, v.path)
+}
+
+// lockSuffix names the sidecar lock file Update holds for the whole
+// Open -> mutate -> Save cycle: path+".lock", next to the Vault itself.
+const lockSuffix = ".lock"
+
+// Update is the one correct way for a `cpass` process to change the Vault:
+// it holds an exclusive lock (internal/lockfile) for the whole cycle,
+// opens path fresh under that lock (so it always sees the latest state, not
+// whatever a caller happened to Open earlier), runs fn, and Saves if fn
+// returns nil. Every write command funnels through this (directly, or via
+// broker.UpdateVault) so two `cpass` processes writing the same Vault at
+// once can never race each other's Open -> mutate -> Save and silently
+// drop one of their changes (CLA-55).
+//
+// A reader (Get, List, Count, and so broker.Resolve/OpenVault) never calls
+// this: Save's atomic rename already keeps a concurrent read consistent on
+// its own, and making every read wait on the write lock would serialize
+// `cpass ls` behind an unrelated `cpass add` for no reason.
+func Update(path string, key []byte, fn func(v *Vault) error) (*Vault, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	lock, err := lockfile.Acquire(path+lockSuffix, lockfile.DefaultTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("vault: locking for write: %w", err)
+	}
+	defer func() { _ = lock.Release() }()
+	v, err := Open(path, key)
+	if err != nil {
+		return nil, err
+	}
+	if err := fn(v); err != nil {
+		return nil, err
+	}
+	if err := v.Save(); err != nil {
+		return nil, err
+	}
+	return v, nil
 }
 
 // Path is the file the Vault lives in.

@@ -26,7 +26,20 @@ that.
   on macOS, `$XDG_CONFIG_HOME/claudepass` (usually `~/.config/claudepass`) on
   Linux — and can be overridden with the `CPASS_HOME` environment variable.
   The file is written with mode `0600` inside a `0700` directory, atomically
-  (written to `vault.cpv.tmp`, then renamed).
+  (staged in a per-write, uniquely-named `vault.cpv.tmp-*` file, then
+  renamed over `vault.cpv`).
+- **Concurrent writers** (`vault.Update`, `internal/lockfile`): every
+  command that changes the Vault (`add`, `rm`, `mv`, `capture`, `import`,
+  `intercept`, `mark-exposed`, `rotate-done`, and the MCP `capture` tool)
+  holds an exclusive `flock` on a sidecar `vault.cpv.lock` for the whole
+  Open-Vault-mutate-Save cycle, not just the Save itself — without it, two
+  `cpass` processes each doing that cycle at once can silently lose
+  whichever one Saves first, since the second one's Save is a full snapshot
+  of its own now-stale in-memory copy. `flock` is macOS/Linux only (ADR-0007
+  scopes cpass to those platforms); a Windows build skips locking rather
+  than fail every write outright. A read (`ls`, `exposed`, `cpass run`,
+  `cpass capture`'s own pre-check) never takes this lock: the atomic rename
+  above already keeps a concurrent reader consistent on its own.
 - **Format**: a JSON envelope (`internal/vault/vault.go`) holding a format
   version, a random 32-byte data key wrapped by the unlock key, and the
   entry list encrypted under that data key. Both layers use
@@ -596,7 +609,8 @@ All paths below are relative to `$CPASS_HOME` unless stated otherwise.
 | Path | What it is | Mode |
 |---|---|---|
 | `$CPASS_HOME/vault.cpv` | The Vault: the encrypted envelope described above. | `0600` (dir `0700`) |
-| `$CPASS_HOME/vault.cpv.tmp` | Transient — the Vault's atomic-write staging file; renamed over `vault.cpv` on save, never left behind on success. | `0600` |
+| `$CPASS_HOME/vault.cpv.tmp-*` | Transient — the Vault's atomic-write staging file, one uniquely-named instance per Save (`os.CreateTemp`, never a fixed name two writers could race); renamed over `vault.cpv` on save, never left behind on success. | `0600` |
+| `$CPASS_HOME/vault.cpv.lock` | The sidecar `flock` every Vault writer holds for its whole Open-mutate-Save cycle (`vault.Update`); never removed, never itself holds any Vault data. macOS/Linux only. | `0600` |
 | `$CPASS_HOME/broker.salt` | The scrypt salt for deriving the unlock key from a passphrase (Linux/CI unlock path only). | `0600` |
 | `$CPASS_HOME/cpass.sock` (or `$XDG_RUNTIME_DIR/cpass.sock` if set) | The Broker process's Unix domain socket (Linux/CI unlock path only). | `0600` |
 | `$CPASS_HOME/redactions.log` | The append-only redaction event log described above. | `0600` |

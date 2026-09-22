@@ -33,6 +33,22 @@ func openVault(e *env) (*vault.Vault, int) {
 	return v, ExitOK
 }
 
+// updateVault is openVault's write-command counterpart: fn runs against a
+// freshly opened Vault under broker.UpdateVault's exclusive lock, and the
+// result is saved automatically if fn returns nil, so callers never write
+// their own Open ... Save around a mutation (CLA-55).
+func updateVault(e *env, fn func(v *vault.Vault) error) (*vault.Vault, int) {
+	v, err := broker.UpdateVault(fn)
+	if err != nil {
+		if errors.Is(err, broker.ErrLocked) {
+			fprintln(e.stderr, e.locked())
+			return nil, ExitError
+		}
+		return nil, e.failErr(err)
+	}
+	return v, ExitOK
+}
+
 // storeKeychainKey stores key as this Vault's macOS Keychain item, plain
 // (the unchanged default CLA-8 behaviour) unless touchID is set. Asking
 // for touchID falls back gracefully to that same plain item when this
@@ -132,8 +148,12 @@ func cmdAdd(e *env) int {
 	if err := vault.ValidateHandle(handle); err != nil {
 		return e.failErr(err)
 	}
-	v, code := openVault(e)
-	if code != ExitOK {
+	// Fail fast on a locked Vault before prompting for a value: nobody
+	// should have to type a Secret only to be told afterwards it couldn't
+	// be stored. The actual write below reopens fresh under the lock
+	// regardless (vault.Update), so this early open is purely for that UX —
+	// it is not where CLA-55's exclusion comes from.
+	if _, code := openVault(e); code != ExitOK {
 		return code
 	}
 	value, err := e.readSecret(fmt.Sprintf("value for %s: ", handle),
@@ -149,12 +169,14 @@ func cmdAdd(e *env) int {
 	if *exposed {
 		opts.Exposed = "added-exposed"
 	}
-	entry, err := v.Add(handle, value, opts)
-	if err != nil {
-		return e.failErr(err)
-	}
-	if err := v.Save(); err != nil {
-		return e.failErr(err)
+	var entry vault.Entry
+	_, code := updateVault(e, func(v *vault.Vault) error {
+		var err error
+		entry, err = v.Add(handle, value, opts)
+		return err
+	})
+	if code != ExitOK {
+		return code
 	}
 	// docs/CLI-STYLE.md "Stored a Secret (cpass add)": ember Handle, dim
 	// Binding detail, coloured by outMode since this confirmation is
@@ -232,17 +254,16 @@ func cmdRm(e *env) int {
 	if fs.NArg() < 1 {
 		return e.fail(ExitUsage, "usage: cpass rm <handle>...")
 	}
-	v, code := openVault(e)
+	_, code := updateVault(e, func(v *vault.Vault) error {
+		for _, h := range fs.Args() {
+			if err := v.Remove(h); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if code != ExitOK {
 		return code
-	}
-	for _, h := range fs.Args() {
-		if err := v.Remove(h); err != nil {
-			return e.failErr(err)
-		}
-	}
-	if err := v.Save(); err != nil {
-		return e.failErr(err)
 	}
 	fprintf(e.stdout, "removed %s\n", strings.Join(fs.Args(), " "))
 	return ExitOK
@@ -257,15 +278,11 @@ func cmdMv(e *env) int {
 	if fs.NArg() != 2 {
 		return e.fail(ExitUsage, "usage: cpass mv <from> <to>")
 	}
-	v, code := openVault(e)
+	_, code := updateVault(e, func(v *vault.Vault) error {
+		return v.Rename(fs.Arg(0), fs.Arg(1))
+	})
 	if code != ExitOK {
 		return code
-	}
-	if err := v.Rename(fs.Arg(0), fs.Arg(1)); err != nil {
-		return e.failErr(err)
-	}
-	if err := v.Save(); err != nil {
-		return e.failErr(err)
 	}
 	fprintf(e.stdout, "renamed %s -> %s\n", fs.Arg(0), fs.Arg(1))
 	return ExitOK

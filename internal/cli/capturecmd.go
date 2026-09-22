@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"strings"
 
@@ -41,11 +42,16 @@ func cmdCapture(e *env) int {
 		return e.failErr(err)
 	}
 
-	v, code := openVault(e)
+	// Fail fast, before running (possibly slow, possibly untrusted)
+	// argv, and reject the common case of an already-used Handle without
+	// holding the write lock across a child process of arbitrary duration
+	// — see the broker.UpdateVault call below, at the end, for the check
+	// that actually has to be race-free with another writer.
+	precheck, code := openVault(e)
 	if code != ExitOK {
 		return code
 	}
-	if _, err := v.Get(handle); err == nil {
+	if _, err := precheck.Get(handle); err == nil {
 		return e.fail(ExitError, "handle %s already exists", handle)
 	}
 
@@ -93,12 +99,20 @@ func cmdCapture(e *env) int {
 	if *file {
 		opts.Binding.Kind = vault.BindFile
 	}
-	entry, err := v.Add(handle, value, opts)
-	if err != nil {
-		return e.failErr(err)
-	}
-	if err := v.Save(); err != nil {
-		return e.failErr(err)
+	var entry vault.Entry
+	_, code = updateVault(e, func(v *vault.Vault) error {
+		// Re-checked here, not just above: argv may have run for a while,
+		// and this is the freshly reopened, lock-protected state another
+		// writer could have changed in the meantime (CLA-55).
+		if _, err := v.Get(handle); err == nil {
+			return fmt.Errorf("handle %s already exists", handle)
+		}
+		var err error
+		entry, err = v.Add(handle, value, opts)
+		return err
+	})
+	if code != ExitOK {
+		return code
 	}
 	fprintln(e.stdout, entry.Handle)
 	return ExitOK
