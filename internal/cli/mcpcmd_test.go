@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -162,4 +163,65 @@ func TestMCPServeNeverEmitsANSIEvenWithTTYLookingColourMode(t *testing.T) {
 	if !strings.Contains(toolResultText, "[REDACTED:stripe/live]") {
 		t.Fatalf("run_with_secrets tool result missing the plain redaction marker: %q", toolResultText)
 	}
+}
+
+// mcpInitializeServerVersion drives cmdMCP with a single initialize request
+// and returns result.serverInfo.version from its response.
+func mcpInitializeServerVersion(t *testing.T) string {
+	t.Helper()
+	var out, errb bytes.Buffer
+	e := &env{
+		stdin:  strings.NewReader(mcpRequestLine(t, 1, "initialize", map[string]any{"protocolVersion": "2025-06-18"}) + "\n"),
+		stdout: &out,
+		stderr: &errb,
+	}
+	if code := cmdMCP(e); code != ExitOK {
+		t.Fatalf("cmdMCP = %d, want ExitOK (%d); stderr=%s", code, ExitOK, errb.String())
+	}
+	var resp struct {
+		Result struct {
+			ServerInfo struct {
+				Version string `json:"version"`
+			} `json:"serverInfo"`
+		} `json:"result"`
+	}
+	line := strings.TrimSpace(out.String())
+	if err := json.Unmarshal([]byte(line), &resp); err != nil {
+		t.Fatalf("bad initialize response %q: %v", line, err)
+	}
+	return resp.Result.ServerInfo.Version
+}
+
+// TestMCPInitializeReportsEffectiveVersion is CLA-98 item 6's regression
+// test: cmdMCP used to pass the raw Version package var straight to
+// mcp.Serve, so a `go install .../cmd/cpass@<tag>` build — which only ever
+// gets its version from runtime/debug.ReadBuildInfo's Main.Version, never
+// from GoReleaser's ldflags (see effectiveVersion's own doc comment) —
+// reported "dev" in the initialize response even though `cpass version`
+// itself, which already goes through effectiveVersion, correctly named the
+// real tag. Both cases mirror TestVersionFallsBackToBuildInfo's own two
+// subtests, against the same injectable readBuildInfo.
+func TestMCPInitializeReportsEffectiveVersion(t *testing.T) {
+	origVersion, origReadBuildInfo := Version, readBuildInfo
+	t.Cleanup(func() { Version, readBuildInfo = origVersion, origReadBuildInfo })
+
+	t.Run("dev falls back to Main.Version from build info", func(t *testing.T) {
+		Version = "dev"
+		readBuildInfo = func() (*debug.BuildInfo, bool) {
+			return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true
+		}
+		if got := mcpInitializeServerVersion(t); got != "v1.2.3" {
+			t.Fatalf("serverInfo.version = %q, want %q (effectiveVersion's build-info fallback)", got, "v1.2.3")
+		}
+	})
+
+	t.Run("ldflags-injected Version wins over build info", func(t *testing.T) {
+		Version = "v9.9.9"
+		readBuildInfo = func() (*debug.BuildInfo, bool) {
+			return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true
+		}
+		if got := mcpInitializeServerVersion(t); got != "v9.9.9" {
+			t.Fatalf("serverInfo.version = %q, want %q (the ldflags-injected Version)", got, "v9.9.9")
+		}
+	})
 }
