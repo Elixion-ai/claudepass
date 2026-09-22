@@ -50,6 +50,12 @@ func TestEvaluate(t *testing.T) {
 		{"cat dotenv via literal-value variable", []string{"sh", "-c", `f=.env; cat "$f"`}, true},
 		{"cat dotenv via backslash-newline continuation", []string{"sh", "-c", "ca\\\nt .env"}, true},
 		{"source dotenv via literal-value variable", []string{"sh", "-c", `f=.env; source "$f"`}, true},
+		// CLA-65: a public key or a template dotenv was never meant to be
+		// Vaulted, so these must not be refused with a dead-end "use
+		// cpass run instead".
+		{"cat id_rsa pub is not a secret", []string{"cat", "id_rsa.pub"}, false},
+		{"cat dotenv example is not a secret", []string{"cat", ".env.example"}, false},
+		{"cat dotenv sample is not a secret", []string{"cat", ".env.sample"}, false},
 		// refused: raw Secret-shaped literal (CLA-38 — reuses internal/detect)
 		{"raw secret literal in argv", []string{"curl", "-H", "Authorization: Bearer sk_live_51H8xJ2eZvKYlo2CTargvVALUEabcdefgh"}, true},
 		{"raw secret literal in shell string", []string{"sh", "-c", `curl -H "Authorization: Bearer sk_live_51H8xJ2eZvKYlo2CTshellVALUEabcdefgh"`}, true},

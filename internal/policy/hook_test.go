@@ -30,6 +30,9 @@ func TestEvaluateHook(t *testing.T) {
 		{"cpass manifest check", "cpass manifest check", false},
 		{"echo plain text", "echo hello", false},
 		{"cpass run wrapping env is not pre-blocked by the hook", "cpass run -- env", false},
+		// CLA-65: a public key or a template dotenv is not a Secret.
+		{"cat id_rsa pub is not a secret", "cat id_rsa.pub", false},
+		{"cat dotenv example is not a secret", "cat .env.example", false},
 		{"quoted heredoc body fed to a non-shell interpreter is data", "python3 - <<'EOF'\ncat .env\nEOF\n", false},
 		// CLA-64: a reader named as data (not as argv[0] of its own
 		// command) must not be mistaken for one actually running — the
@@ -44,7 +47,6 @@ func TestEvaluateHook(t *testing.T) {
 		{"cat dotenv via home var", "cat $HOME/.env", true},
 		{"less pem file", "less server.pem", true},
 		{"head id_rsa", "head id_rsa", true},
-		{"head id_rsa pub", "head id_rsa.pub", true},
 		{"cat star key", "cat stripe.key", true},
 		{"cat credentials json", "cat credentials.json", true},
 		{"cat netrc", "cat .netrc", true},
@@ -70,10 +72,8 @@ func TestEvaluateHook(t *testing.T) {
 		{"xargs cat via redirect still refused", "xargs cat < .env", true},
 		{"sudo cat .env still refused", "sudo cat .env", true},
 		{"echo piped into a bare shell still refused", "echo cat .env | sh", true},
-		// CLA-62/64: a heredoc attached to a shell is evaluated as the
-		// script it is, whether or not its delimiter is quoted; one
-		// attached to any other program is not (TestEvaluateHook's
-		// allowed list covers that half).
+		// CLA-64: a heredoc attached to a shell is still evaluated as the
+		// script it is, whether or not its delimiter is quoted.
 		{"quoted heredoc body fed to a shell", "sh <<'EOF'\ncat .env\nEOF\n", true},
 		{"unquoted heredoc body fed to a shell", "bash <<EOF\ncat .env\nEOF\n", true},
 

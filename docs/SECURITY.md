@@ -402,10 +402,14 @@ rather than runs unchecked):
 
 - would read a Secret-bearing file directly — matched by basename against
   `.env*`, `*.pem`, `id_rsa*`, `*.key`, `credentials*.json`, `.netrc`,
-  `.npmrc` — via a reader program (`cat`, `less`, `more`, `head`, `tail`,
-  `base64`, `xxd`, `od`, `strings`, `hexdump`, `bat`, `tee`, `cp`, `nl`,
-  `tac`, `rev`, `sort`, `uniq`, `cut`, `awk`, `sed`, `grep`, `jq`, `yq`,
-  `dd`, `install`, `rsync`, `scp`) or a shell `source`/`.` builtin;
+  `.npmrc`, except a conventionally non-secret counterpart of one
+  (`*.pub`, `.env.example`, `.env.sample`, `.env.template`, `.env.dist` —
+  CLA-65: neither a public key nor a template dotenv was ever meant to be
+  Vaulted, so refusing one is a dead end, not a protection) — via a
+  reader program (`cat`, `less`, `more`, `head`, `tail`, `base64`, `xxd`,
+  `od`, `strings`, `hexdump`, `bat`, `tee`, `cp`, `nl`, `tac`, `rev`,
+  `sort`, `uniq`, `cut`, `awk`, `sed`, `grep`, `jq`, `yq`, `dd`,
+  `install`, `rsync`, `scp`) or a shell `source`/`.` builtin;
 - references a live file-Binding's run-directory path by literal path —
   the same `$CPASS_HOME/run` root `cpass run` itself protects (CLA-63);
 - carries a raw Secret-shaped literal anywhere in the command text (the
@@ -450,8 +454,9 @@ detail.
    path of this invocation's own file-Binding temp directory (see next
    point) passed to a reader program; any argument naming a Secret-bearing
    file by the same basename glob the PreToolUse hook matches (`.env*`,
-   `*.pem`, `id_rsa*`, `*.key`, `credentials*.json`, `.netrc`, `.npmrc`),
-   passed to the same reader programs or a shell `source`/`.` builtin; and
+   `*.pem`, `id_rsa*`, `*.key`, `credentials*.json`, `.netrc`, `.npmrc`,
+   with the same non-secret-counterpart exclusions — see above), passed
+   to the same reader programs or a shell `source`/`.` builtin; and
    a raw Secret-shaped literal (the same detector Intercept and the hook
    use) anywhere in the command's arguments — but not in argv[0], the
    program itself, since a Secret value is never the thing being executed

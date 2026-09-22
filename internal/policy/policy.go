@@ -127,6 +127,17 @@ var secretFileGlobs = []string{
 	".env*", "*.pem", "id_rsa*", "*.key", "credentials*.json", ".netrc", ".npmrc",
 }
 
+// secretFileExcludeGlobs are basename patterns that would otherwise match
+// secretFileGlobs but are conventionally the *non*-secret counterpart of
+// one — a public key, or a template meant to be committed and read freely.
+// Checked first, so e.g. id_rsa.pub and .env.example are never refused:
+// neither was ever meant to be Vaulted, so "use cpass run instead" would be
+// a dead end for both.
+var secretFileExcludeGlobs = []string{
+	"*.pub",
+	".env.example", ".env.sample", ".env.template", ".env.dist",
+}
+
 // sourceBuiltins are shell builtins that execute a file's content in the
 // current shell — a second way to pull a Secret-bearing file's content into
 // output or environment besides an ordinary reader program. Only
@@ -139,6 +150,11 @@ func matchesSecretFile(arg string) bool {
 		return false
 	}
 	b := filepath.Base(arg)
+	for _, g := range secretFileExcludeGlobs {
+		if ok, _ := filepath.Match(g, b); ok {
+			return false
+		}
+	}
 	for _, g := range secretFileGlobs {
 		if ok, _ := filepath.Match(g, b); ok {
 			return true
