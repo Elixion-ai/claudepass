@@ -679,3 +679,103 @@ func TestMCPKeychainUnlockKeyIsCachedAcrossCalls(t *testing.T) {
 		t.Fatalf("later calls (avg %s) were not meaningfully cheaper than the first (%s): the unlock key does not look cached", restAvg, first)
 	}
 }
+
+// TestMCPConcurrentCapturesAllSurvive is CLA-76's own regression test.
+// callAsync (cancel.go) makes run_with_secrets/capture run in their own
+// goroutine so a slow child never blocks the stdin read loop — which means
+// a real MCP client, which never has to wait for one response before
+// sending the next request, can now have two capture calls genuinely
+// in flight in this process at once. Nothing before the vaultMu fix
+// serialized callCapture's Open -> mutate -> Save cycle across that new
+// concurrency, so two overlapping captures raced vault.go's fixed
+// vault.cpv.tmp path and each other's in-memory Vault snapshot: silently
+// losing a handle, a hard rename error, or (worst case) a corrupted Vault.
+// Fired back-to-back with a short sleep in each child so their post-sleep
+// Add/Save calls land close together, this reliably reproduced the loss on
+// the unfixed code; run with -race, which also catches any bare data race
+// the fix might introduce, not just the corruption itself.
+func TestMCPConcurrentCapturesAllSurvive(t *testing.T) {
+	ve := newVault(t)
+	s := startMCP(t, ve)
+	s.initialize()
+
+	const n = 6
+	ids := make([]int, n)
+	for i := 0; i < n; i++ {
+		s.nextID++
+		ids[i] = s.nextID
+		s.write(map[string]any{
+			"jsonrpc": "2.0", "id": ids[i], "method": "tools/call",
+			"params": map[string]any{
+				"name": "capture",
+				"arguments": map[string]any{
+					"handle":  fmt.Sprintf("race/handle-%d", i),
+					"command": []string{"sh", "-c", fmt.Sprintf("sleep 0.05; echo captured-value-%d", i)},
+				},
+			},
+		})
+	}
+
+	type callResult struct {
+		text    string
+		isError bool
+	}
+	results := make(map[int]callResult, n)
+	for i := 0; i < n; i++ {
+		line := s.readLine()
+		var resp struct {
+			ID     int `json:"id"`
+			Result struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+				IsError bool `json:"isError"`
+			} `json:"result"`
+			Error *struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(line, &resp); err != nil {
+			t.Fatalf("bad response %q: %v", line, err)
+		}
+		if resp.Error != nil {
+			t.Fatalf("capture id %d: rpc error %d: %s", resp.ID, resp.Error.Code, resp.Error.Message)
+		}
+		text := ""
+		if len(resp.Result.Content) > 0 {
+			text = resp.Result.Content[0].Text
+		}
+		results[resp.ID] = callResult{text: text, isError: resp.Result.IsError}
+	}
+	for i, id := range ids {
+		r, ok := results[id]
+		if !ok {
+			t.Fatalf("no response for capture %d (handle race/handle-%d)", id, i)
+		}
+		if r.isError {
+			t.Fatalf("capture %d (race/handle-%d) reported an error: %s", id, i, r.text)
+		}
+	}
+
+	listText, isError := s.callToolText("list_handles", map[string]any{})
+	if isError {
+		t.Fatalf("list_handles reported an error: %s", listText)
+	}
+	var listed struct {
+		Handles []string `json:"handles"`
+	}
+	if err := json.Unmarshal([]byte(listText), &listed); err != nil {
+		t.Fatalf("bad list_handles result %q: %v", listText, err)
+	}
+	have := map[string]bool{}
+	for _, h := range listed.Handles {
+		have[h] = true
+	}
+	for i := 0; i < n; i++ {
+		want := fmt.Sprintf("race/handle-%d", i)
+		if !have[want] {
+			t.Fatalf("handle %s missing after %d concurrent captures: got %v", want, n, listed.Handles)
+		}
+	}
+}

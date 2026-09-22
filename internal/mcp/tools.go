@@ -289,7 +289,10 @@ type captureArgs struct {
 
 // callCapture runs in its own goroutine (see callAsync in cancel.go) so a
 // slow child does not block the stdin read loop; cancel is documented on
-// callRunWithSecrets above and behaves identically here.
+// callRunWithSecrets above and behaves identically here. Its own Vault
+// write — the only one any tool here makes — is serialized against every
+// other concurrent write tool call by s.vaultMu (server.go, CLA-76): see
+// that section below for why.
 func (s *server) callCapture(id json.RawMessage, raw json.RawMessage, cancel <-chan struct{}) {
 	var a captureArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
@@ -304,12 +307,17 @@ func (s *server) callCapture(id json.RawMessage, raw json.RawMessage, cancel <-c
 		s.writeError(id, -32602, "command must be a non-empty array")
 		return
 	}
-	v, err := s.keyCache.OpenVault() // CLA-77: reuse this server's cached key
+	// Fail fast, before running argv, and reject the common case of an
+	// already-used Handle without holding vaultMu across a child process of
+	// arbitrary duration. This read is not itself race-free against another
+	// concurrent capture — see the locked, re-checked Open/Add/Save below
+	// (CLA-76), which is.
+	precheck, err := s.keyCache.OpenVault() // CLA-77: reuse this server's cached key
 	if err != nil {
 		s.writeResult(id, textResult(true, err.Error()))
 		return
 	}
-	if _, err := v.Get(a.Handle); err == nil {
+	if _, err := precheck.Get(a.Handle); err == nil {
 		s.writeResult(id, textResult(true, fmt.Sprintf("handle %s already exists", a.Handle)))
 		return
 	}
@@ -333,6 +341,27 @@ func (s *server) callCapture(id json.RawMessage, raw json.RawMessage, cancel <-c
 	}
 	value := strings.TrimSuffix(stdout.String(), "\n")
 	value = strings.TrimSuffix(value, "\r")
+
+	// vaultMu (server.go) serializes this whole Open -> mutate -> Save
+	// cycle against any other concurrent write tool call (CLA-76). The
+	// Vault is re-opened here, under the lock, rather than reusing precheck
+	// above, so this always mutates the current on-disk state — including
+	// one just written by another capture call that held the lock first —
+	// and never overwrites it with a snapshot that predates that write.
+	s.vaultMu.Lock()
+	defer s.vaultMu.Unlock()
+	v, err := s.keyCache.OpenVault() // CLA-77: reuse this server's cached key
+	if err != nil {
+		s.writeResult(id, textResult(true, err.Error()))
+		return
+	}
+	// Re-checked here, not just above in precheck: argv may have run for a
+	// while, and another capture call may have taken this same Handle while
+	// it did.
+	if _, err := v.Get(a.Handle); err == nil {
+		s.writeResult(id, textResult(true, fmt.Sprintf("handle %s already exists", a.Handle)))
+		return
+	}
 	entry, err := v.Add(a.Handle, value, vault.AddOptions{})
 	if err != nil {
 		s.writeResult(id, textResult(true, err.Error()))

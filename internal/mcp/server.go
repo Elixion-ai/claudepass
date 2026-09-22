@@ -63,6 +63,25 @@ type server struct {
 	// bypassing a Touch ID-protected Keychain item's own protection.
 	keyCache *broker.KeyCache
 
+	// vaultMu serializes every tool call's Vault Open -> mutate -> Save
+	// cycle (today just callCapture's; keep this in mind for any future
+	// write tool) against every other one in this same process (CLA-76).
+	// callAsync (cancel.go) means run_with_secrets and capture now run in
+	// their own goroutine so a slow child never blocks the stdin read
+	// loop — which means, for the first time, two tool calls can be
+	// genuinely in flight here at once, and a real MCP client never has to
+	// wait for one response before sending the next request. Without this,
+	// two overlapping writers each open their own in-memory *vault.Vault,
+	// mutate it, and Save independently: the second Save silently
+	// overwrites whatever the first just added, or both race
+	// vault.go's fixed vault.cpv.tmp path and one's os.Rename fails
+	// outright. This is an interim, in-process fix; CLA-55 (branch
+	// audit/vault-save) replaces it with a real cross-process file lock at
+	// the Vault layer (internal/lockfile) and should absorb this mutex —
+	// deliberately, not a blind merge resolution — when the two streams
+	// are reconciled, since that diff predates this server's keyCache.
+	vaultMu sync.Mutex
+
 	// wg tracks every goroutine callAsync (tools.go) starts for a
 	// run_with_secrets/capture call, so Serve does not return — dropping
 	// them mid-flight, response and all — the instant stdin hits EOF.
