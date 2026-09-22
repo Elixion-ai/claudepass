@@ -355,3 +355,67 @@ func TestRefsBroadRootStaysQuietWithNoGlobalHandleServed(t *testing.T) {
 		t.Fatalf("no Global Handle was served, so no notice should fire: %v", notices)
 	}
 }
+
+// TestRefsBroadRootStaysQuietWhenProjectOverridesEveryGlobalHandle is the
+// regression test for CLA-96's minor finding: the notice must reflect
+// whether a Global Handle actually survives into the merged Refs list, not
+// merely whether the Global Manifest happens to declare one. A project that
+// has overridden every Handle it shares a name with a broad-root Global
+// Manifest — the supported, documented way to neutralise an unwanted Global
+// default — must not be told a Global Handle reached it, because none did.
+func TestRefsBroadRootStaysQuietWhenProjectOverridesEveryGlobalHandle(t *testing.T) {
+	root := fixture(t,
+		[]Entry{{Handle: "openai/key"}},
+		[]Entry{{Handle: "openai/key", Binding: vault.Binding{Name: "FROM_PROJECT"}}})
+	t.Setenv("HOME", root)
+	refs, notices, err := Refs(root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range refs {
+		if r.FromGlobal {
+			t.Fatalf("the project's own Entry must have replaced the Global one: %+v", refs)
+		}
+	}
+	for _, n := range notices {
+		if strings.Contains(n, "broad ancestor") {
+			t.Fatalf("no Global Handle survived the override, so no broad-root notice should fire: %v", notices)
+		}
+	}
+}
+
+// TestRefsWarnsAboutBroadRootOnlyOnce is the regression test for CLA-96's
+// major finding: the ticket's own acceptance criteria and docs/THREATS.md
+// item 10 both promise the run-time backstop fires "the first time" a
+// broad-root Manifest actually hands a directory a Global Handle, not on
+// every call. Three consecutive Refs calls against the same broad-root
+// Manifest — mirroring three consecutive `cpass run` invocations — must
+// draw the notice only on the first.
+func TestRefsWarnsAboutBroadRootOnlyOnce(t *testing.T) {
+	root := fixture(t, []Entry{{Handle: "openai/key"}}, nil)
+	t.Setenv("HOME", root)
+
+	countBroadRootNotices := func() int {
+		_, notices, err := Refs(root, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, notice := range notices {
+			if strings.Contains(notice, "broad ancestor") {
+				n++
+			}
+		}
+		return n
+	}
+
+	if n := countBroadRootNotices(); n != 1 {
+		t.Fatalf("first call: want 1 broad-root notice, got %d", n)
+	}
+	if n := countBroadRootNotices(); n != 0 {
+		t.Fatalf("second call: want the notice suppressed, got %d", n)
+	}
+	if n := countBroadRootNotices(); n != 0 {
+		t.Fatalf("third call: want the notice suppressed, got %d", n)
+	}
+}

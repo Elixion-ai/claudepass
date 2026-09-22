@@ -25,6 +25,8 @@ an Agent reads it, so it must be legible, quiet, and never leak a Secret.
 | Handle collision involving a Global Handle (MCP `run_with_secrets`) — an `isError: true` tool result, not a process exit code; no `cpass: ` prefix, unlike the CLI | `handle collision: <a> and <b> both bind <VAR>` | `handle collision: stripe/live and stripe/test both bind STRIPE_KEY` |
 | Exposed reminder | `cpass: <handle> is Exposed since <date>, rotate it` | |
 | Locked Vault | `cpass: vault is locked, run cpass unlock` | |
+| Broad-root warning, init time (`cpass manifest init`) | `cpass: <path> is a broad ancestor (your home directory, or /) — every Global Handle you ever declare will reach every directory beneath it, not just this project; consider running cpass manifest init somewhere narrower` | `cpass: /Users/you is a broad ancestor (your home directory, or /) — every Global Handle you ever declare will reach every directory beneath it, not just this project; consider running cpass manifest init somewhere narrower` |
+| Broad-root warning, run-time backstop, once per Manifest (`cpass run`, MCP `run_with_secrets`, `cpass manifest check --effective`) | ``cpass: your Manifest at <path> sits at a broad ancestor (your home directory, or /) — every Global Handle on this machine reaches every directory beneath it; run `cpass manifest init` somewhere narrower if that is not what you want`` | ``cpass: your Manifest at /Users/you sits at a broad ancestor (your home directory, or /) — every Global Handle on this machine reaches every directory beneath it; run `cpass manifest init` somewhere narrower if that is not what you want`` |
 
 `cpass add`'s success line is a confirmation, not a diagnostic — like
 `init`/`rm`/`mv`'s own success lines, it skips the `cpass: ` prefix. It

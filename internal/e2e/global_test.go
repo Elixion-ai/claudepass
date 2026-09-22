@@ -440,3 +440,46 @@ func TestAnUnreadableGlobalManifestDoesNotBreakEverything(t *testing.T) {
 		t.Fatalf("ls --global should surface the corruption: %s", r)
 	}
 }
+
+// TestBroadRootRunTimeNoticeFiresOnlyOnce is the live-reproduction
+// regression test for CLA-96's major review finding: a Manifest sitting at
+// a broad ancestor (here, $HOME — reached the way the ticket describes,
+// hand-copied rather than through `cpass manifest init`, which would have
+// warned and still written it) must draw the run-time backstop notice on
+// the first `cpass run` and stay silent on every one after, exactly as
+// docs/THREATS.md item 10 promises ("the first time"). Unsuppressed, this
+// line rides straight into an Agent's own Context on every tool call
+// (runcmd.go forwards every notice to stderr; the MCP `run_with_secrets`
+// tool rides it into the tool_result content block), which is the noise
+// this regression closes.
+func TestBroadRootRunTimeNoticeFiresOnlyOnce(t *testing.T) {
+	ve := newVault(t)
+	ve.add("openai/key", "openai-key-value-xyz", "-g")
+	root := t.TempDir()
+	env := []string{"HOME=" + root}
+	if r := ve.runIn(root, env, "manifest", "init"); r.code != 0 {
+		t.Fatalf("manifest init: %s", r)
+	}
+	broadRootNotices := func() int {
+		r := ve.runIn(root, env, "run", "--", "true")
+		if r.code != 0 {
+			t.Fatalf("cpass run: %s", r)
+		}
+		return strings.Count(r.stderr, "broad ancestor")
+	}
+	if n := broadRootNotices(); n != 1 {
+		t.Fatalf("first cpass run: want exactly 1 broad-root notice, got %d", n)
+	}
+	if n := broadRootNotices(); n != 0 {
+		t.Fatalf("second cpass run: want the notice suppressed, got %d", n)
+	}
+	if n := broadRootNotices(); n != 0 {
+		t.Fatalf("third cpass run: want the notice suppressed, got %d", n)
+	}
+	// manifest check --effective goes through the same manifest.Refs, so it
+	// must not resurrect the notice either.
+	r := ve.runIn(root, env, "manifest", "check", "--effective")
+	if strings.Count(r.stderr, "broad ancestor") != 0 {
+		t.Fatalf("manifest check --effective: want the notice suppressed, got stderr=%q", r.stderr)
+	}
+}

@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/Elixion-ai/claudepass/internal/broker"
 )
 
 // BroadRoot reports whether dir is the filesystem root or the caller's own
@@ -66,4 +69,63 @@ func broadRootNotice(root string) string {
 	return fmt.Sprintf(
 		"cpass: your Manifest at %s sits at a broad ancestor (your home directory, or /) — every Global Handle on this machine reaches every directory beneath it; run `cpass manifest init` somewhere narrower if that is not what you want",
 		root)
+}
+
+// broadRootWarnedFileName is the sentinel Refs uses to remember which
+// broad-root Manifest directories it has already warned about.
+const broadRootWarnedFileName = "broadroot-warned"
+
+// broadRootWarnedPath is where that sentinel lives: alongside the Vault and
+// the Global Manifest itself, under $CPASS_HOME, so it is per-machine (one
+// warning history per Vault) and respects the same CPASS_HOME override the
+// tests already use to keep every case isolated from a developer's real
+// home.
+func broadRootWarnedPath() (string, error) {
+	home, err := broker.Home()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, broadRootWarnedFileName), nil
+}
+
+// shouldWarnBroadRoot reports whether root (a broad-root Manifest's own
+// directory, not the caller's cwd) has already drawn the run-time backstop
+// notice, recording it as warned if not. This is what makes Refs's notice
+// actually fire once per Manifest, as CLA-96's acceptance criteria and
+// docs/THREATS.md item 10 both promise, rather than on every call — Refs is
+// the Handle source for both `cpass run` (runcmd.go forwards every notice
+// straight to stderr) and the MCP `run_with_secrets` tool (internal/mcp
+// rides every notice into the tool_result content block that lands in an
+// Agent's own Context), so an unsuppressed repeat would inject this line
+// into that Context on literally every tool call.
+//
+// It fails open: when the sentinel file cannot be read or written (a fresh
+// $CPASS_HOME, a read-only filesystem), it reports "not yet warned" so Refs
+// still emits the notice this run — a security-relevant line appearing too
+// often beats it silently never appearing — it just cannot suppress a
+// repeat until the sentinel becomes writable.
+func shouldWarnBroadRoot(root string) bool {
+	p, err := broadRootWarnedPath()
+	if err != nil {
+		return true
+	}
+	existing, err := os.ReadFile(p)
+	if err != nil && !os.IsNotExist(err) {
+		return true
+	}
+	for _, line := range strings.Split(string(existing), "\n") {
+		if line == root {
+			return false
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		return true
+	}
+	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return true
+	}
+	defer func() { _ = f.Close() }()
+	_, _ = f.WriteString(root + "\n")
+	return true
 }

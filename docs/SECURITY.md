@@ -134,6 +134,31 @@ that.
   has no exit code to give). Two Handles a project declares itself into the
   same variable keep today's silent last-write-wins, so no existing project
   starts failing on a version bump it never opted into.
+- **Broad-root warnings** (`manifest.BroadRoot`, `internal/manifest/broadroot.go`):
+  a Manifest planted at the filesystem root or the caller's own home
+  directory turns every Global Handle this machine ever declares into an
+  ambient default for every subdirectory beneath it — scratch checkouts and
+  downloads included, none of them reviewed or introduced to ClaudePass on
+  their own. Two triggers, never fatal: `cpass manifest init` checks
+  `BroadRoot` on the resolved working directory and warns before writing the
+  file if it matches; `manifest.Refs` checks it again at run time, in case a
+  Manifest ended up broad some other way (hand-copied, git-cloned straight
+  into `$HOME`), but only once it has actually placed a surviving
+  `FromGlobal` Ref into the merged list — a project that has overridden
+  every Handle it shares a name with a broad-root Global Manifest draws no
+  notice, because none reached it. That run-time notice fires once per
+  Manifest, not on every call: `shouldWarnBroadRoot` records the Manifest's
+  own directory in a sentinel file at `$CPASS_HOME/broadroot-warned` the
+  first time it fires, and skips every call after. This matters because
+  `manifest.Refs` is the Handle source for both `cpass run` (notices go
+  straight to stderr) and the MCP `run_with_secrets` tool (notices ride into
+  the tool_result content block, landing directly in an Agent's own
+  Context) — unsuppressed, the line would repeat on every single tool call
+  a broad-root project makes. The sentinel check fails open: if it cannot
+  be read or written, the notice fires again rather than silently
+  disappearing. See `docs/THREATS.md` item 10 for what this warning does
+  not catch (a merely-large ancestor, a symlinked or bind-mounted
+  equivalent).
 - **The opt-out's round-trip guarantee, and its one real limit.** `Load` and
   `Save` (`internal/manifest/manifest.go`) keep, verbatim, any `[options]`
   key this binary doesn't itself parse and any whole section that is
