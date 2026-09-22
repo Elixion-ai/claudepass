@@ -58,3 +58,38 @@ ssh claudepass 'rm -rf /srv/claudepass/site/dl/latest && cp -r /srv/claudepass/s
 This is what `install.sh`'s `https://claudepass.com/dl/latest/...` and the
 Homebrew formula's `https://claudepass.com/dl/v<version>/...` URLs read
 from.
+
+`checksums.txt` published here must stay byte-identical to the one
+GoReleaser already uploaded to the GitHub Release for the same tag —
+`install.sh` cross-checks the two and refuses to install on a mismatch
+(CLA-79, `docs/SECURITY.md` "Verifying a release"). Copying `dist/`
+straight from GoReleaser's own output, as the snippet above does, keeps
+that true automatically; hand-editing anything under `/dl/` after the fact
+would not.
+
+### Bumping the Homebrew tap (manual, outside this repo)
+
+`.goreleaser.yaml` has no `brews:` integration, so `brew install
+softorize/tap/cpass` (README.md) is **not** kept current by anything in
+this repo or its CI — it is a separate, manual step in a separate
+repository, [`Softorize/homebrew-tap`](https://github.com/Softorize/homebrew-tap)
+(`Formula/cpass.rb`), kept current by hand through v0.2.1. After
+completing the `/dl/` publish above for a new tag, in a checkout of that
+other repo, edit `Formula/cpass.rb` to match the new release's
+`checksums.txt`:
+
+1. Bump the `version "..."` string to the new tag's version (no leading
+   `v`).
+2. Replace each of the four `sha256 "..."` values (one per
+   `on_macos`/`on_linux` × `on_arm`/`on_intel` block) with that
+   architecture's entry from `checksums.txt` — the formula's own header
+   comment says as much, but nothing enforces it stays true.
+3. Commit and push directly to `Softorize/homebrew-tap`; there is no PR
+   review or CI gate on that repo today, so a mistake here is live the
+   moment it's pushed. `brew install --build-from-source` or a `brew test
+   cpass` against the bumped formula is the only check before that.
+
+The next release-cutter following only *this* repo's own docs would
+otherwise never learn this step exists, and `brew install`/`brew upgrade`
+would keep serving the previous version indefinitely with no error at all
+— silent, not loud, unlike every other verification gap CLA-79 closed.

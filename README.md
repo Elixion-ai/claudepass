@@ -37,14 +37,20 @@ go install github.com/Elixion-ai/claudepass/cmd/cpass@latest
 The curl and Homebrew installers download a GoReleaser-built archive and
 its `checksums.txt` straight from claudepass.com (see [`deploy/`](deploy/)
 for how release binaries reach the site) and verify sha256 before
-installing. The release pipeline that produces them is `.goreleaser.yaml`
-and `.github/workflows/release.yml` at the repo root — see CLA-16. The
-release archives carry the tagged version via GoReleaser's ldflags; a `go
-install .../cmd/cpass@<tag>` build gets no ldflags but reports the same
-real version, read back from the module version Go itself embeds in the
-binary's build info (`cpass version` falls back to
-`runtime/debug.ReadBuildInfo` whenever ldflags didn't set one) — only a
-plain local `go build` with no resolved module version reports `dev`.
+installing. `install.sh` goes further still: it cross-checks that
+`checksums.txt` against the independent copy on the GitHub Release, and
+opportunistically verifies a cosign signature and a build-provenance
+attestation when `cosign`/`gh` are on PATH — see [docs/SECURITY.md
+"Verifying a release"](docs/SECURITY.md#verifying-a-release-cla-79) for
+the full chain and a manual verify recipe. The release pipeline that
+produces them is `.goreleaser.yaml` and `.github/workflows/release.yml`
+at the repo root — see CLA-16. The release archives carry the tagged
+version via GoReleaser's ldflags; a `go install .../cmd/cpass@<tag>` build
+gets no ldflags but reports the same real version, read back from the
+module version Go itself embeds in the binary's build info (`cpass
+version` falls back to `runtime/debug.ReadBuildInfo` whenever ldflags
+didn't set one) — only a plain local `go build` with no resolved module
+version reports `dev`.
 
 ## 60-second quickstart
 

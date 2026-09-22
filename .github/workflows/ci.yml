@@ -5,6 +5,15 @@ name: ci
 # main; release.yml (tag-triggered) is a separate workflow. See CLAUDE.md /
 # CONTEXT.md for the vocabulary (Secret, Handle, Broker, Redaction, ...)
 # this comment and the smoke test below rely on.
+#
+# Every `uses:` below is pinned to a full commit SHA, not a mutable tag
+# (CLA-84) — a force-moved upstream tag (the real-world
+# tj-actions/changed-files pattern) would otherwise run arbitrary code in
+# this secrets-manager repo's own CI. The trailing `# vX.Y.Z` comment
+# names the version currently at that SHA; .github/dependabot.yml keeps
+# both current. Resolved read-only via `gh api repos/<owner>/<repo>/commits/<tag>`
+# and cross-checked against `.../tags` for the matching version — never
+# pushed or otherwise mutated upstream.
 on:
   push:
     branches:
@@ -17,6 +26,13 @@ on:
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+# Least-privilege (CLA-84): this workflow only reads the repo and runs
+# tests, it never pushes, tags, comments, or opens anything — the default
+# broad token this repo's own CI ran with until now had no reason to be
+# able to.
+permissions:
+  contents: read
 
 jobs:
   build-and-test:
@@ -31,10 +47,10 @@ jobs:
         os: [macos-latest, ubuntu-latest]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           # actions/setup-go caches $GOMODCACHE and the build cache keyed
@@ -63,6 +79,43 @@ jobs:
         # cmd/cpass/bin/cpass is what the smoke test below runs.
         run: go build -o bin/ ./...
 
+      - name: touchid build/vet (macOS only, CLA-23/CLA-86)
+        # internal/broker/touchid_darwin.go (docs/SECURITY.md "Opting into
+        # Touch ID...") is guarded `darwin && touchid && cgo` and, before
+        # this step existed, no workflow ever passed -tags touchid — a
+        # future refactor or cgo/Go version bump could silently break it,
+        # discovered only by a real user trying --touch-id. This is a
+        # compile/vet signal only, not the interactive Touch ID prompt
+        # itself: TestTouchIDUserPresence stays manual-only (see that
+        # test's own doc comment and CLA-8's constraint carried forward),
+        # and no code-signing or entitlement is needed for either command
+        # below.
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          go build -tags touchid ./...
+
+          # go vet's unsafeptr heuristic has exactly one known false
+          # positive here (cfPtr's cgo CF-type bridging — see that
+          # function's own doc comment in touchid_darwin.go and
+          # docs/SECURITY.md's "What was verified for CLA-23" for the full
+          # argument); .golangci.yml already excludes the touchid tag from
+          # golangci-lint for the same reason. Treat exactly that one line
+          # as expected and let anything else vet reports fail the job, so
+          # this step still catches a real new finding instead of training
+          # everyone to ignore an ever-red check.
+          known='internal/broker/touchid_darwin.go:47:53: possible misuse of unsafe.Pointer'
+          if ! vet_out="$(go vet -tags touchid ./internal/broker/... 2>&1)"; then
+            unexpected="$(printf '%s\n' "$vet_out" | grep -Fxv "$known" || true)"
+            if [ -n "$unexpected" ]; then
+              echo "$unexpected"
+              echo "::error::go vet -tags touchid found something beyond the documented cfPtr false positive — see docs/SECURITY.md"
+              exit 1
+            fi
+            echo "::warning::go vet -tags touchid reported only the documented cfPtr false positive (docs/SECURITY.md) — not failing the build"
+          fi
+
       - name: golangci-lint
         # NOT the `curl .../install.sh | sh` one-liner some docs suggest:
         # that script has a live checksum-matching bug on this exact
@@ -72,7 +125,7 @@ jobs:
         # The action downloads the same GitHub release asset through
         # actions/toolkit's tool-cache instead, which doesn't go through
         # that code path.
-        uses: golangci/golangci-lint-action@v9.3.0
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.13.2
 
@@ -118,6 +171,62 @@ jobs:
             exit 1
           fi
           echo "ok: cpass run resolved the Manifest from the environment with no Vault"
+
+  coverage:
+    # Reports *real* coverage for internal/broker, internal/run,
+    # internal/cli and internal/mcp (CLA-88) — this project's own testing
+    # philosophy (CONTRIBUTING.md) exercises almost all of those four
+    # through the internal/e2e subprocess, which `go test -coverprofile`'s
+    # self-instrumentation cannot see at all: self-coverage reads 17.7%,
+    # 48.0%, 35.4% and 30.9% respectively purely as a tooling artifact,
+    # not because that code goes untested. A separate job from
+    # build-and-test above, not an extra step in it, so an ordinary
+    # `go test ./...` — there, in build-and-test, and for anyone running
+    # it locally — stays exactly as fast as before: the -cover build and
+    # GOCOVERDIR housekeeping only happen when E2E_COVERDIR is set, and
+    # only this job sets it (see internal/e2e/harness_test.go's
+    # e2eCoverDir doc comment, and CONTRIBUTING.md's "Real coverage,
+    # including the e2e subprocess" for the identical recipe run locally).
+    # continue-on-error: a coverage number is information, not a merge
+    # gate — build-and-test above is what actually fails on a broken test.
+    name: coverage (real, incl. e2e subprocess)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Combined coverage (unit tests + e2e subprocess binaries)
+        shell: bash
+        run: |
+          set -euo pipefail
+          covdir="$PWD/coverdata"
+          mkdir -p "$covdir"
+
+          # -test.gocoverdir makes `go test -cover` write every package's
+          # own unit-test coverage in the new binary format instead of a
+          # classic -coverprofile file; E2E_COVERDIR makes
+          # internal/e2e's TestMain build cpass/helper with -cover and
+          # point their GOCOVERDIR at the same directory, so the
+          # subprocess coverage internal/e2e's own suite drives lands
+          # right alongside it. One directory, one `covdata` read below —
+          # no separate merge step needed.
+          E2E_COVERDIR="$covdir" go test -cover ./... -args -test.gocoverdir="$covdir"
+
+          {
+            echo "### Real coverage (unit tests + e2e subprocess)"
+            echo '```'
+            go tool covdata percent -i="$covdir" \
+              -pkg=github.com/Elixion-ai/claudepass/internal/broker,github.com/Elixion-ai/claudepass/internal/run,github.com/Elixion-ai/claudepass/internal/cli,github.com/Elixion-ai/claudepass/internal/mcp
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
 # Branch protection (a repo setting, not expressible in this file): once
 # this workflow has run on main at least once, require both

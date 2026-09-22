@@ -23,6 +23,22 @@ var (
 	helperBin string
 )
 
+// e2eCoverDir turns on subprocess coverage collection (CLA-88) when set:
+// cpass/helper (and buildRelease's own binary) are built with `-cover`
+// instead of a plain build, and GOCOVERDIR is set for this test process —
+// which baseEnv() below then carries, via its own fresh os.Environ() call,
+// into every cpass/helper subprocess this suite spawns, so their coverage
+// counters land in the same directory too. `go test`'s own coverage
+// instrumentation (of internal/e2e's package and any other package under
+// direct unit test) is a separate mechanism entirely (-test.gocoverdir);
+// see CONTRIBUTING.md's "Real coverage, including the e2e subprocess" for
+// the full local recipe that combines both, and
+// .github/workflows/ci.yml's "coverage" job for the CI one. Left unset,
+// an ordinary `go test ./...` is unaffected: no -cover build overhead, no
+// GOCOVERDIR housekeeping — this is why it's an env var and not always
+// on.
+var e2eCoverDir = os.Getenv("E2E_COVERDIR")
+
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "cpass-e2e-bin")
 	if err != nil {
@@ -30,11 +46,24 @@ func TestMain(m *testing.M) {
 	}
 	cpassBin = filepath.Join(dir, "cpass")
 	helperBin = filepath.Join(dir, "helper")
+	buildArgs := []string{"build", "-tags", "e2e"}
+	if e2eCoverDir != "" {
+		buildArgs = append(buildArgs, "-cover")
+	}
 	for _, b := range [][2]string{{cpassBin, "github.com/Elixion-ai/claudepass/cmd/cpass"}, {helperBin, "github.com/Elixion-ai/claudepass/internal/e2e/helper"}} {
-		cmd := exec.Command("go", "build", "-tags", "e2e", "-o", b[0], b[1])
+		args := append(append([]string{}, buildArgs...), "-o", b[0], b[1])
+		cmd := exec.Command("go", args...)
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			panic("build " + b[1] + ": " + err.Error())
+		}
+	}
+	if e2eCoverDir != "" {
+		if err := os.MkdirAll(e2eCoverDir, 0o755); err != nil {
+			panic(err)
+		}
+		if err := os.Setenv("GOCOVERDIR", e2eCoverDir); err != nil {
+			panic(err)
 		}
 	}
 	code := m.Run()
@@ -88,7 +117,12 @@ func buildRelease(t *testing.T) string {
 	t.Helper()
 	releaseOnce.Do(func() {
 		releaseBin = filepath.Join(filepath.Dir(cpassBin), "cpass-release")
-		cmd := exec.Command("go", "build", "-o", releaseBin, "github.com/Elixion-ai/claudepass/cmd/cpass")
+		args := []string{"build"}
+		if e2eCoverDir != "" {
+			args = append(args, "-cover")
+		}
+		args = append(args, "-o", releaseBin, "github.com/Elixion-ai/claudepass/cmd/cpass")
+		cmd := exec.Command("go", args...)
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			releaseErr = err

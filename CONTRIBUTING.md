@@ -22,6 +22,19 @@ Those are the checks CI runs on macOS and Linux (CI also builds every package an
 
 The leak test suite in `internal/e2e` tries every known reveal path and asserts nothing reaches stdout. It must stay green: a change that turns one of those tests red is a security regression, not a flaky test to skip.
 
+### Real coverage, including the e2e subprocess (CLA-88)
+
+`go test -coverprofile` alone reads misleadingly low for `internal/broker`, `internal/run`, `internal/cli` and `internal/mcp`: almost everything in those packages is exercised by driving the built `cpass`/`helper` binaries as `os/exec` subprocesses in `internal/e2e`, which self-instrumentation can't see into at all — see `internal/e2e/harness_test.go`'s `e2eCoverDir` doc comment for exactly why. This is a separate, opt-in recipe from the one above; an ordinary `go test ./...` is unaffected by it and no faster or slower for it existing.
+
+```bash
+covdir="$(mktemp -d)"
+E2E_COVERDIR="$covdir" go test -cover ./... -args -test.gocoverdir="$covdir"
+go tool covdata percent -i="$covdir" \
+  -pkg=github.com/Elixion-ai/claudepass/internal/broker,github.com/Elixion-ai/claudepass/internal/run,github.com/Elixion-ai/claudepass/internal/cli,github.com/Elixion-ai/claudepass/internal/mcp
+```
+
+`E2E_COVERDIR` makes `internal/e2e`'s `TestMain` build `cpass`/`helper` with `-cover` and point their `GOCOVERDIR` at `$covdir`; `-args -test.gocoverdir="$covdir"` makes `go test -cover`'s own unit-test coverage (every package's direct tests, `internal/e2e`'s own included) land in the same directory in the same binary format, so one `go tool covdata` read covers both without a separate merge step. `go tool covdata textfmt -i="$covdir" -o=coverage.out` instead produces a classic profile for `go tool cover -html`/`-func`. `.github/workflows/ci.yml`'s `coverage` job runs this same recipe on every push, as a separate, advisory (`continue-on-error`) job from the one that actually gates merges.
+
 ## Submitting a change
 
 - Keep commits and pull requests small and focused, and explain the why.
