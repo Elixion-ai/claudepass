@@ -415,6 +415,158 @@ func TestUnsafeAllowNeedsTerminal(t *testing.T) {
 	}
 }
 
+// TestPolicyRunIFSWordSplitting is command-policy:ifs-word-splitting-bypass's
+// e2e proof (2026-09-22 audit, round 3), driven against a real built cpass
+// binary: `cat${IFS}.env`/`cat$IFS.env` must not evade Command Policy by
+// gluing a reader to a secret file's name through an unquoted $IFS/${IFS}
+// reference — IFS's default value IS whitespace, so a real shell executes
+// this as the two separate words "cat" and ".env".
+func TestPolicyRunIFSWordSplitting(t *testing.T) {
+	ve := leakVault(t)
+	for _, script := range []string{`cat${IFS}.env`, `cat$IFS.env`} {
+		r := sh(ve, script)
+		if r.code != 3 || !strings.Contains(r.stderr, "Secret-bearing file") {
+			t.Fatalf("%q should be refused as a secret-file read: %s", script, r)
+		}
+		if strings.Contains(r.stdout+r.stderr, leakVal) {
+			t.Fatalf("leaked: %s", r)
+		}
+	}
+	// Paired benign: the same splitting mechanism around nothing
+	// dangerous stays allowed.
+	r := sh(ve, `echo${IFS}hello`)
+	if r.code != 0 || !strings.Contains(r.stdout, "hello") {
+		t.Fatalf("IFS splitting around benign text should run normally: %s", r)
+	}
+}
+
+// TestPolicyRunReadBuiltinAndFDRedirection is
+// command-policy:read-builtin-and-fd-redirection-bypass's e2e proof
+// (2026-09-22 audit, round 3), driven against a real built cpass binary,
+// for both halves of the fix: the read/mapfile/readarray builtins loading
+// a redirected secret file into a variable, and the `exec N< target; ...
+// <&N` fd-alias idiom reading it back through a bound descriptor.
+func TestPolicyRunReadBuiltinAndFDRedirection(t *testing.T) {
+	ve := leakVault(t)
+	refused := []string{
+		`read -r line < .env`,
+		`mapfile -t lines < .env`,
+		`readarray -t lines < .env`,
+		`exec 3< .env; cat <&3`,
+		`exec {fd}< .env; cat <&$fd`,
+	}
+	for _, script := range refused {
+		r := sh(ve, script)
+		if r.code != 3 || !strings.HasPrefix(r.stderr, "cpass: refused: ") {
+			t.Fatalf("%q should be refused: %s", script, r)
+		}
+		if strings.Contains(r.stdout+r.stderr, leakVal) {
+			t.Fatalf("leaked: %s", r)
+		}
+	}
+	// Paired benign shapes: the exact same mechanisms, pointed at
+	// nothing dangerous, must still run.
+	allowed := []string{
+		// `read` exits non-zero on immediate EOF (an empty /dev/null),
+		// which is real POSIX behavior having nothing to do with
+		// Command Policy — `; true` keeps this an "allowed and runs"
+		// assertion about the refusal, not about read's own exit code.
+		`read -r line < /dev/null; true`,
+		`exec 3< /dev/null; cat <&3`,
+		// fd 9 isn't actually open in this shell, so real `cat` fails
+		// with "Bad file descriptor" (unrelated to Command Policy);
+		// `; true` keeps this an "allowed and runs" assertion about the
+		// refusal, not about that unopened fd's own exit code.
+		`cat <&9; true`,
+	}
+	for _, script := range allowed {
+		r := sh(ve, script)
+		if r.code != 0 {
+			t.Fatalf("%q should run normally: %s", script, r)
+		}
+	}
+}
+
+// TestPolicyRunShellBehindUnenumeratedWrapper is
+// command-policy:evaluate-shell-behind-unenumerated-wrapper-parity-gap's
+// e2e proof (2026-09-22 audit, round 3), driven against a real built cpass
+// binary: Evaluate's per-word fallback must resolve a shell invocation
+// behind ANY wrapper program, not only the `wrappers` map's fixed list —
+// proved with a synthetic `exec "$@"` passthrough shim standing in for the
+// whole unenumerable class (chroot, unshare, ssh host, script -qc, setsid,
+// systemd-run, nsenter, valgrind --, strace -f, docker exec, ...), in both
+// argv and shell-string form.
+func TestPolicyRunShellBehindUnenumeratedWrapper(t *testing.T) {
+	ve := leakVault(t)
+	dir := t.TempDir()
+	shim := filepath.Join(dir, "passthrough-shim")
+	if err := os.WriteFile(shim, []byte("#!/bin/sh\nexec \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Argv form: the shim is argv[0], the real shell invocation follows.
+	r := ve.run(nil, "run", "--with", "stripe/live", "--", shim, "sh", "-c", "cat .env")
+	if r.code != 3 || !strings.Contains(r.stderr, "Secret-bearing file") {
+		t.Fatalf("a shell invocation behind an unenumerated wrapper (argv form) must be refused: %s", r)
+	}
+	if strings.Contains(r.stdout+r.stderr, leakVal) {
+		t.Fatalf("leaked: %s", r)
+	}
+
+	// Shell-string form: the whole wrapped invocation is itself one
+	// shell string handed to `cpass run -- sh -c '...'`.
+	r = sh(ve, shim+" sh -c 'cat .env'")
+	if r.code != 3 || !strings.Contains(r.stderr, "Secret-bearing file") {
+		t.Fatalf("a shell invocation behind an unenumerated wrapper (shell-string form) must be refused: %s", r)
+	}
+	if strings.Contains(r.stdout+r.stderr, leakVal) {
+		t.Fatalf("leaked: %s", r)
+	}
+
+	// Paired benign: the same wrapper shape, pointed at a shell
+	// invocation with nothing dangerous in it, must still run — proving
+	// the real content is being checked, not every wrapper shape refused
+	// on sight.
+	r = ve.run(nil, "run", "--with", "stripe/live", "--", shim, "sh", "-c", "echo hello")
+	if r.code != 0 || !strings.Contains(r.stdout, "hello") {
+		t.Fatalf("a safe shell invocation behind the same wrapper must still run: %s", r)
+	}
+}
+
+// TestPolicyRunSecretFileGlobExpansion is
+// command-policy:shell-glob-expansion-hides-filename's e2e proof
+// (2026-09-22 audit, round 3), driven against a real built cpass binary
+// with a REAL .env file on disk: a real shell's own filename globbing
+// expands a glob-shaped argument (`.en?`, `.e*`) against files that
+// actually exist in the command's cwd before the reading program ever
+// starts, so this must be refused the same way the literal spelling
+// already is.
+func TestPolicyRunSecretFileGlobExpansion(t *testing.T) {
+	ve := leakVault(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("STRIPE_LIVE=x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, glob := range []string{".en?", ".e*"} {
+		r := sh(ve, "cd "+dir+" && cat "+glob)
+		if r.code != 3 || !strings.Contains(r.stderr, "Secret-bearing file") {
+			t.Fatalf("glob %q resolving to a real secret file must be refused: %s", glob, r)
+		}
+		if strings.Contains(r.stdout+r.stderr, leakVal) {
+			t.Fatalf("leaked: %s", r)
+		}
+	}
+	// Paired benign: a glob pattern matching only a benign file in the
+	// same real directory must still run.
+	r := sh(ve, "cd "+dir+" && cat *.txt")
+	if r.code != 0 || !strings.Contains(r.stdout, "hi") {
+		t.Fatalf("a glob matching only a benign file should run normally: %s", r)
+	}
+}
+
 func TestProductionBinaryHasNoTestHooks(t *testing.T) {
 	// The release build (no e2e tag) must ignore CPASS_TEST_STDIN and CPASS_TEST_TTY.
 	bin := buildRelease(t)

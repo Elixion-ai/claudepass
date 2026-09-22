@@ -43,6 +43,34 @@ type word struct {
 	hasHeredoc    bool
 	heredoc       string
 	heredocQuoted bool
+
+	// fdBindNum is set on an ordinary word that is the TARGET of a
+	// `N< target` (or bash's `{name}< target`, which allocates a free
+	// descriptor into the named variable instead of a literal number)
+	// redirection — the word's raw text is still the target path,
+	// exactly like any other redirection target (CLA-61), but it
+	// additionally names which file descriptor a same-shell-string
+	// `exec N< target` bind associates with that path, so a LATER
+	// command's `<&N`/`<&$name` fd-alias redirection (fdAliasNum below)
+	// can be resolved back to it
+	// (command-policy:read-builtin-and-fd-redirection-bypass). The key
+	// is a bare digit string ("3") for the numeric form, or "$name" for
+	// the brace form — the same key space a later `<&$name` alias
+	// reference resolves through (readFdAliasTarget), since bash itself
+	// stores the allocated number into that shell variable.
+	fdBindNum string
+
+	// fdAliasNum is set on a synthetic word (raw=="", like a heredoc
+	// word) standing for a `<&N`/`<&$name`/`<&${name}` fd-duplication
+	// redirection with no filename text of its own — evaluated by
+	// resolving this key against a fd earlier bound by `exec N<
+	// target`/`exec {name}< target` in the same shell string
+	// (evaluator.fds). An unresolvable key (an ordinary, unrelated real
+	// file descriptor this package never saw bound) is simply left
+	// alone rather than guessed at, the same "resolve only what's
+	// statically knowable" default every other dynamic reference in
+	// this package already has.
+	fdAliasNum string
 }
 
 // pendingHeredoc is a <<[-]DELIM seen earlier on the current line, whose
@@ -104,6 +132,14 @@ func splitCommands(s string) [][]word {
 	var subs []string
 	var pending []pendingHeredoc
 	inWord := false
+	// pendingFDBind is the fd key (see word.fdBindNum) dropped by the most
+	// recently seen `N<`/`{name}<` redirection operator, carried forward
+	// so the very next word tokenized — that redirection's own target —
+	// picks it up as its fdBindNum. Cleared the instant it's consumed, at
+	// every command boundary, and at the start of every new redirection
+	// (see the '<'/'>' case), so it can never leak onto an unrelated
+	// later word (command-policy:read-builtin-and-fd-redirection-bypass).
+	var pendingFDBind string
 
 	flushWord := func() {
 		if inWord {
@@ -118,13 +154,17 @@ func splitCommands(s string) [][]word {
 				// can equal a bare keyword) rather than let it become
 				// argv[0] of a fake command; the word that follows is
 				// judged as the real one.
+				pendingFDBind = ""
 				return
 			}
-			cur = append(cur, word{raw: w, subs: ws})
+			fd := pendingFDBind
+			pendingFDBind = ""
+			cur = append(cur, word{raw: w, subs: ws, fdBindNum: fd})
 		}
 	}
 	flushCmd := func() {
 		flushWord()
+		pendingFDBind = ""
 		if len(cur) > 0 {
 			cmds = append(cmds, expandBraces(cur))
 			cur = nil
@@ -148,6 +188,29 @@ func splitCommands(s string) [][]word {
 			buf.WriteByte(s[i+1])
 			inWord = true
 			i += 2
+		case c == '$' && ifsRefLen(s, i) > 0:
+			// An UNQUOTED $IFS/${IFS} reference: a real shell performs
+			// word-splitting on this expansion's result using IFS's
+			// current value, whose DEFAULT is whitespace — so
+			// `cat${IFS}.env`/`cat$IFS.env` really tokenize as the two
+			// separate words "cat" and ".env", not one glued word
+			// "cat${IFS}.env"/"cat$IFS.env" that matches no
+			// reader/secret-file rule at all
+			// (command-policy:ifs-word-splitting-bypass). Modeled
+			// structurally as a word boundary right here — flushing
+			// whatever was built so far and starting fresh — exactly
+			// like whitespace already is, rather than guessing at IFS's
+			// actual runtime value (which could in principle be
+			// something other than whitespace; treating every unquoted
+			// $IFS/${IFS} reference as a split point is the conservative
+			// direction of that unknown, since it can only ever produce
+			// MORE, smaller words to check, never fewer). A quoted
+			// "$IFS"/"${IFS}" never reaches this case at all — quoting
+			// suppresses word-splitting in a real shell too, and quotes
+			// have their own self-contained scanning branches above that
+			// never fall through to this switch.
+			flushWord()
+			i += ifsRefLen(s, i)
 		case c == '\'':
 			j := strings.IndexByte(s[i+1:], '\'')
 			if j < 0 {
@@ -321,21 +384,64 @@ func splitCommands(s string) [][]word {
 				pending = append(pending, pendingHeredoc{delim: delim, quoted: quoted, strip: strip})
 			}
 		case c == '<' || c == '>':
-			// Redirection: drop the operator and an fd prefix (2>&1), but
-			// let the target itself flow through the ordinary word logic
-			// below — it becomes a checkable word exactly like a bare
-			// argument, so `cat < .env` refuses the same way `cat .env`
-			// does (CLA-61).
-			if isDigits(buf.String()) {
+			// Redirection: drop the operator and an fd prefix (2>&1, or
+			// bash's `{name}<`/`{name}>` form, which allocates a free
+			// descriptor into the named variable instead of a literal
+			// number), but let the target itself flow through the
+			// ordinary word logic below — it becomes a checkable word
+			// exactly like a bare argument, so `cat < .env` refuses the
+			// same way `cat .env` does (CLA-61). Any new redirection
+			// starts with a clean slate for fd tracking — a fd key from
+			// an EARLIER, already-consumed redirection must never leak
+			// onto this one's target.
+			pendingFDBind = ""
+			var fdKey string
+			var fdKeyOK bool
+			if c == '<' {
+				// Only an INPUT redirection's dropped fd prefix is worth
+				// tracking at all — this fix is about later reading a
+				// bound fd back (`<&N`), never about output.
+				fdKey, fdKeyOK = fdBindPrefix(buf.String())
+			}
+			if isDigits(buf.String()) || fdKeyOK {
 				buf.Reset()
 				inWord = false
 			}
 			flushWord()
+			if c == '<' && i+1 < len(s) && s[i+1] == '&' {
+				// <&N / <&$name / <&${name}: a fd-duplication/alias
+				// redirection with no filename text of its own —
+				// captured as a synthetic word (mirroring a heredoc
+				// word: raw=="", real content held elsewhere) carrying
+				// which fd it aliases, resolved by the evaluator
+				// against a same-shell-string `exec N<
+				// target`/`exec {name}< target` bind
+				// (command-policy:read-builtin-and-fd-redirection-
+				// bypass's second half: `cat <&3` after `exec 3<
+				// .env`). Anything else after `<&` this package doesn't
+				// recognize (`<&-` closing a fd, a malformed reference)
+				// falls through to the generic consuming loop below
+				// unchanged, exactly as it did before this fix — left
+				// alone rather than guessed at.
+				if aliasKey, next, ok := readFdAliasTarget(s, i+2); ok {
+					cur = append(cur, word{fdAliasNum: aliasKey})
+					i = next
+					for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+						i++
+					}
+					continue
+				}
+			}
 			for i < len(s) && (s[i] == '<' || s[i] == '>' || s[i] == '&' || (s[i] >= '0' && s[i] <= '9')) {
 				i++
 			}
 			for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
 				i++
+			}
+			if fdKeyOK {
+				// The very next word tokenized — this redirection's own
+				// target — picks this up via flushWord() above.
+				pendingFDBind = fdKey
 			}
 		default:
 			buf.WriteByte(c)
@@ -521,6 +627,105 @@ func isDigits(s string) bool {
 	return true
 }
 
+// isIdentByte reports whether b can appear in a bare shell identifier
+// (variable/fd name): letters, digits, or underscore.
+func isIdentByte(b byte) bool {
+	return b == '_' || (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
+}
+
+// ifsRefLen reports the byte length of an unquoted $IFS or ${IFS}
+// reference starting at s[i] (s[i]=='$'), or 0 when s[i:] isn't one —
+// including when it's glued into a longer identifier ($IFSFOO is the
+// variable IFSFOO, not $IFS followed by "FOO") — see the case in
+// splitCommands that calls this
+// (command-policy:ifs-word-splitting-bypass).
+func ifsRefLen(s string, i int) int {
+	if i >= len(s) || s[i] != '$' {
+		return 0
+	}
+	if strings.HasPrefix(s[i:], "${IFS}") {
+		return len("${IFS}")
+	}
+	if strings.HasPrefix(s[i:], "$IFS") {
+		end := i + 4
+		if end < len(s) && isIdentByte(s[end]) {
+			return 0 // glued into a longer name, e.g. $IFSFOO
+		}
+		return 4
+	}
+	return 0
+}
+
+// fdBindPrefix reports whether buf — text accumulated immediately before
+// a `<`/`>` redirection operator — names a file-descriptor prefix for an
+// fd-bind redirection: a bare number (`exec 3< target`) or bash's
+// `{name}` form (`exec {fd}< target`, which allocates a free descriptor
+// and stores its number in the named shell variable). When it does, key
+// is what evaluator.fds should record the target under — the bare number
+// itself, or "$name" for the brace form, matching the key space a later
+// `<&N`/`<&$name` alias lookup uses (readFdAliasTarget) — since bash
+// itself stores the allocated number into that variable, not into a
+// literal "{name}" token.
+func fdBindPrefix(buf string) (key string, ok bool) {
+	if isDigits(buf) {
+		return buf, true
+	}
+	if len(buf) > 2 && buf[0] == '{' && buf[len(buf)-1] == '}' {
+		inner := buf[1 : len(buf)-1]
+		if identRe.MatchString(inner) {
+			return "$" + inner, true
+		}
+	}
+	return "", false
+}
+
+// readFdAliasTarget reads what follows a `<&` fd-duplication operator
+// starting at i: either a bare fd number (`<&3`) or a variable reference
+// naming one (`<&$fd`/`<&${fd}`) — the two shapes bash's `exec {fd}<
+// target; ... <&$fd` idiom for a dynamically-allocated descriptor uses,
+// alongside the plain `exec N< target; ... <&N` numeric form. Returns
+// the alias key normalized to the same key space fdBindPrefix populates
+// (a bare digit string, or "$name"), and whether anything recognizable
+// followed `<&` at all — `<&-` (closing a fd) or anything else this
+// package doesn't attempt returns ok==false, leaving the redirection to
+// fall through to the ordinary digit/`&`-consuming loop unchanged, the
+// same "resolve only what's statically knowable, don't guess" default
+// this package already applies everywhere else.
+func readFdAliasTarget(s string, i int) (key string, next int, ok bool) {
+	if i < len(s) && s[i] == '$' {
+		j := i + 1
+		braced := false
+		if j < len(s) && s[j] == '{' {
+			braced = true
+			j++
+		}
+		start := j
+		for j < len(s) && isIdentByte(s[j]) {
+			j++
+		}
+		if j == start {
+			return "", i, false
+		}
+		name := s[start:j]
+		if braced {
+			if j < len(s) && s[j] == '}' {
+				j++
+			} else {
+				return "", i, false
+			}
+		}
+		return "$" + name, j, true
+	}
+	j := i
+	for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+		j++
+	}
+	if j == i {
+		return "", i, false
+	}
+	return s[i:j], j, true
+}
+
 // scanDoubleQuotedBody reads the body of a double-quoted string — the
 // ordinary "..." form, or its locale-translated cousin $"..." (the only
 // difference between the two is the literal bytes that introduce them;
@@ -683,16 +888,22 @@ const maxBraceExpansion = 256
 // ".{env,bashrc}" (command-policy:brace-expansion-hides-filename). A
 // heredoc-body word (hasHeredoc) is never a candidate — its raw text is
 // empty and its actual body is checked by other means — so it passes
-// through unchanged.
+// through unchanged. Likewise a fd-alias word (fdAliasNum set, raw=="",
+// mirroring a heredoc word's own empty raw) is never a candidate, for
+// the same reason. A fd-bind word's fdBindNum (see split.go's word doc
+// comment) is carried onto every alternative a brace span inside its own
+// raw text expands to, exactly like subs already is, so `exec 3<
+// .{env,bashrc}` — a contrived but real shape — still ends up tracking
+// fd 3 against each expanded candidate.
 func expandBraces(words []word) []word {
 	out := make([]word, 0, len(words))
 	for _, w := range words {
-		if w.hasHeredoc {
+		if w.hasHeredoc || w.fdAliasNum != "" {
 			out = append(out, w)
 			continue
 		}
 		for _, r := range expandBraceWord(w.raw) {
-			out = append(out, word{raw: r, subs: w.subs})
+			out = append(out, word{raw: r, subs: w.subs, fdBindNum: w.fdBindNum})
 		}
 	}
 	return out

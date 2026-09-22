@@ -322,6 +322,74 @@ value can still end up somewhere it shouldn't, today:
       for Redaction's own stdout/stderr-only view, one level up the
       pipeline.
 
+12. **Four narrower shapes closed this round leave their own, smaller
+    disclosed edges** (2026-09-22 audit, stream `policy`, round 3):
+    - **The `$IFS`/`${IFS}` word-splitting fix treats every unquoted
+      reference as a word-splitting boundary unconditionally, without
+      modeling IFS's actual runtime value.** This is deliberately the
+      conservative direction: whatever IFS was ever reassigned to
+      earlier in the same shell string, an unquoted `$IFS`/`${IFS}`
+      reference is always treated as if it splits into nothing but
+      whitespace, so this can only ever split a word into MORE, smaller
+      pieces to check, never fewer. What it does not attempt: a custom,
+      non-default `IFS` value relied on through something OTHER than a
+      direct `$IFS`/`${IFS}` reference — reassigning `IFS` to a
+      punctuation character and then depending on that character's
+      field-splitting effect on some OTHER expansion's result. A real
+      shell's word-splitting only ever applies to the result of an
+      expansion (`$var`, a command substitution, an arithmetic
+      expansion) in the first place, never to literal text typed
+      directly in the command line, so this narrower shape needs an
+      actual expansion vector this package doesn't otherwise resolve to
+      a filename (see item 11's dynamic-command-name entry above) — not
+      a new gap this fix opens, only one it doesn't happen to also
+      close.
+    - **The `read`/`mapfile`/`readarray`/`exec`-fd-alias fix's
+      descriptor tracking is scoped to one shell string, and records a
+      bind regardless of which command it was attached to, not only
+      `exec`.** A real shell scopes a plain `cmd N< target` redirection
+      (one not on `exec`) to that one command's own execution only; this
+      package deliberately does not model that precision, recording the
+      bind for any command carrying one, since doing so can only make a
+      LATER `<&N` resolve to a path that really was bound to that number
+      at some point in the same shell string, never to something
+      invented — over-conservative in the safe direction, matching this
+      package's existing "refuse/resolve rather than guess" default, not
+      a leak.
+    - **The `Evaluate` shell-behind-unenumerated-wrapper fix mirrors
+      `EvaluateHook`'s own hookWalk exactly, including hookWalk's
+      pre-existing lack of a printer exemption for a shell name.**
+      Unlike the equivalent reader-name fallback (which exempts
+      `echo`/`printf`'s own data arguments), a shell name appearing as a
+      mere argument to `echo` — `echo bash -c 'cat .env'`, where `bash`
+      is never actually invoked — is still resolved and evaluated as if
+      it were, the same way it already was for hookWalk before this
+      round. This is an existing, shipped over-refusal this fix
+      intentionally left alone, since changing it would itself be a
+      fresh `Evaluate`/`EvaluateHook` divergence in the other direction;
+      it is disclosed here rather than silently inherited.
+    - **The glob-expansion fix is scoped to a shell-string argument to a
+      reader/source builtin directly (`ev.simple`), not to one hidden
+      behind a wrapper program the per-word fallback resolves (`find .
+      -exec cat .en? \;`), and does not replicate a real shell's own
+      "hide dotfiles from a pattern with no literal leading dot" rule.**
+      The first gap means a glob-shaped filename passed to an
+      unenumerated wrapper's own argument list is not currently
+      glob-resolved by this package, even though a real shell DOES
+      expand it before the wrapper ever starts — the same class item
+      11's own wrapper-coverage entry describes, one level removed. The
+      second means Go's `filepath.Glob`, unlike a real shell, has no
+      notion of hiding a leading dot from a bare `*`/`?` pattern with no
+      literal leading dot of its own, so this check can occasionally
+      refuse a glob shape (e.g. a bare `*env`) that a real shell would
+      not actually expand to a dotfile at all — over-refusal, not
+      under-refusal, and so not a leak either way. Also direct argv with
+      no shell involved at all (`cpass run -- cat .en?`) is never
+      glob-checked, correctly: Go's `os/exec` performs no globbing of
+      its own, so the reading program receives the glob pattern's
+      literal text and simply fails to find a file by that name — there
+      is nothing to leak in that shape to begin with.
+
 ## Intercept precision (v0.1.4)
 
 The prompt Intercept hook and Command Policy block only on high-confidence Secrets: known provider-key prefixes (Stripe, GitHub, AWS, OpenAI, Anthropic, Google, Slack, ...) and PEM private-key blocks. They do NOT block on generic entropy, because ordinary agent traffic is full of high-entropy non-secrets (tool-call ids, UUIDs, git SHAs, base64 blobs, automated task notifications) and a false block stops the user's work. The honest trade: an unprefixed pasted secret is not auto-caught by Intercept; store it with `cpass add`, after which Redaction protects it. `detect.Scan` still offers the entropy heuristic for advisory, non-blocking uses.

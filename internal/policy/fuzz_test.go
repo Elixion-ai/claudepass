@@ -65,6 +65,35 @@ func FuzzSplitCommands(f *testing.F) {
 		// round 2: relative path after a same-command cd
 		// (command-policy:protecteddirs-relative-path-after-cd)
 		"cd /some/dir && cat gcp-sa",
+		// round 3: $IFS/${IFS} word-splitting
+		// (command-policy:ifs-word-splitting-bypass)
+		"cat${IFS}.env",
+		"cat$IFS.env",
+		"cat$IFS$IFS.env",
+		"cat$IFSFOO",
+		`cat "${IFS}.env"`,
+		"echo${IFS}hello",
+		"cat${IFS",
+		"cat$IFS",
+		// round 3: read/mapfile/readarray and exec fd-redirection
+		// (command-policy:read-builtin-and-fd-redirection-bypass)
+		"read -r line < .env",
+		"mapfile -t lines < .env",
+		"readarray -t lines < .env",
+		"exec 3< .env; cat <&3",
+		"exec {fd}< .env; cat <&$fd",
+		"exec {fd}< .env; cat <&${fd}",
+		"cat <&9",
+		"exec <&3",
+		"exec {< .env",
+		// round 3: shell behind an unenumerated wrapper
+		// (command-policy:evaluate-shell-behind-unenumerated-wrapper-parity-gap)
+		"some-unlisted-shim sh -c 'cat .env'",
+		// round 3: glob-shaped reader argument
+		// (command-policy:shell-glob-expansion-hides-filename)
+		"cat .en?",
+		"cat .e*",
+		"cat [invalid",
 	}
 	for _, s := range seeds {
 		f.Add(s)

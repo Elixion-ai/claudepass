@@ -279,3 +279,130 @@ func TestEvaluateHookShellInvocationShapes(t *testing.T) {
 		})
 	}
 }
+
+// TestEvaluateHookIFSWordSplitting is
+// command-policy:ifs-word-splitting-bypass at the PreToolUse hook layer
+// (2026-09-22 audit, round 3): the hook's own EvaluateHook wraps a raw
+// Bash command string as `sh -c command` and judges it through the same
+// shared Evaluate/splitCommands this package uses everywhere else, so
+// the tokenizer fix closes this at the hook layer with no separate hook
+// logic needed.
+func TestEvaluateHookIFSWordSplitting(t *testing.T) {
+	dotenv := "." + "env"
+	cases := []struct {
+		name    string
+		command string
+		refused bool
+	}{
+		{"braced ${IFS} glues cat to the secret file", "cat${IFS}" + dotenv, true},
+		{"bare $IFS glues cat to the secret file", "cat$IFS" + dotenv, true},
+		{"generalizes to another reader/secret-file pair", "less$IFS.pem", true},
+		// Paired benign: the same splitting mechanism around nothing
+		// dangerous stays allowed.
+		{"IFS splitting around benign text is allowed", "echo${IFS}hello", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := EvaluateHook(c.command)
+			if (err != nil) != c.refused {
+				t.Fatalf("command %q: refused=%v want %v (err=%v)", c.command, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestEvaluateHookReadBuiltinAndFDRedirection is
+// command-policy:read-builtin-and-fd-redirection-bypass at the
+// PreToolUse hook layer (2026-09-22 audit, round 3), mirroring
+// TestReadMapfileReadarrayBuiltins and TestExecFDRedirectionAlias in
+// policy_test.go — reached through EvaluateHook's own wrap-and-Evaluate
+// path, with no separate hook logic needed.
+func TestEvaluateHookReadBuiltinAndFDRedirection(t *testing.T) {
+	dotenv := "." + "env"
+	cases := []struct {
+		name    string
+		command string
+		refused bool
+	}{
+		{"read builtin via redirect reads a secret file", `read -r line < ` + dotenv, true},
+		{"mapfile via redirect reads a secret file", `mapfile -t lines < ` + dotenv, true},
+		{"readarray via redirect reads a secret file", `readarray -t lines < ` + dotenv, true},
+		{"exec fd bind then alias reads a secret file", "exec 3< " + dotenv + "; cat <&3", true},
+		{"exec named-fd bind then alias reads a secret file", "exec {fd}< " + dotenv + "; cat <&$fd", true},
+		// Paired benign shapes.
+		{"read builtin on an unrelated file is allowed", `read -r line < notes.txt`, false},
+		{"exec binds an unrelated file; alias read stays allowed", "exec 3< notes.txt; cat <&3", false},
+		{"an untracked fd alias with no matching exec bind is allowed", "cat <&9", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := EvaluateHook(c.command)
+			if (err != nil) != c.refused {
+				t.Fatalf("command %q: refused=%v want %v (err=%v)", c.command, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestEvaluateHookShellBehindUnenumeratedWrapper is
+// command-policy:evaluate-shell-behind-unenumerated-wrapper-parity-gap
+// at the PreToolUse hook layer (2026-09-22 audit, round 3): hookWalk
+// already caught this by structural accident (its own per-word loop
+// checks shells[prog] alongside readers[prog]) even before this round's
+// Evaluate-side fix, so this pins that hookWalk keeps doing so — the
+// real fix in this round is Evaluate's own parity, covered above at the
+// unit level and by cpass run's e2e coverage.
+func TestEvaluateHookShellBehindUnenumeratedWrapper(t *testing.T) {
+	dotenv := "." + "env"
+	cases := []struct {
+		name    string
+		command string
+		refused bool
+	}{
+		{"unenumerated wrapper hides a shell invocation", "totally-unenumerable-shim sh -c 'cat " + dotenv + "'", true},
+		{"unenumerated wrapper with a safe shell invocation is allowed", "totally-unenumerable-shim sh -c 'echo hello'", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := EvaluateHook(c.command)
+			if (err != nil) != c.refused {
+				t.Fatalf("command %q: refused=%v want %v (err=%v)", c.command, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestEvaluateHookSecretFileGlobExpansion is
+// command-policy:shell-glob-expansion-hides-filename at the PreToolUse
+// hook layer (2026-09-22 audit, round 3): EvaluateHook has no explicit
+// cwd parameter, so it (like cpass run itself) falls back to this
+// process's own os.Getwd() — t.Chdir puts that real cwd where a real
+// secret file the glob should resolve to actually lives.
+func TestEvaluateHookSecretFileGlobExpansion(t *testing.T) {
+	dotenv := "." + "env"
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, dotenv), []byte("STRIPE_LIVE=x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	cases := []struct {
+		name    string
+		command string
+		refused bool
+	}{
+		{"question-mark glob expands to the real secret file", "cat .en?", true},
+		{"star glob expands to the real secret file", "cat .e*", true},
+		{"glob pattern matching only a benign file is allowed", "cat *.txt", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := EvaluateHook(c.command)
+			if (err != nil) != c.refused {
+				t.Fatalf("command %q: refused=%v want %v (err=%v)", c.command, err != nil, c.refused, err)
+			}
+		})
+	}
+}

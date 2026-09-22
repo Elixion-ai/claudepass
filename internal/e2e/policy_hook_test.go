@@ -2,6 +2,8 @@ package e2e
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -199,5 +201,92 @@ func TestPolicyHookEmptyCommandAllowed(t *testing.T) {
 	r := ve.run(preToolUseJSON(""), "policy", "--hook")
 	if r.code != 0 {
 		t.Fatalf("an empty command should pass through: %s", r)
+	}
+}
+
+// TestPolicyHookRound3ReviewFindings is the fixer round's e2e proof, at
+// the PreToolUse hook layer driven against a real built `cpass policy
+// --hook` invocation, for every shape the round-3 (2026-09-22) audit
+// reported: command-policy:ifs-word-splitting-bypass,
+// command-policy:read-builtin-and-fd-redirection-bypass, and
+// command-policy:evaluate-shell-behind-unenumerated-wrapper-parity-gap
+// (hookWalk's own per-word loop already caught the wrapper-parity shape
+// by structural accident before this round; kept here so the hook-level
+// table stays a complete, standalone record of every shape this round
+// closes).
+func TestPolicyHookRound3ReviewFindings(t *testing.T) {
+	ve := newVault(t)
+	cases := []struct {
+		name    string
+		command string
+		blocked bool
+		want    string
+	}{
+		{"braced ${IFS} glues cat to a secret file", `cat${IFS}.env`, true, "Secret-bearing file"},
+		{"bare $IFS glues cat to a secret file", `cat$IFS.env`, true, "Secret-bearing file"},
+		{"IFS splitting around benign text is allowed", `echo${IFS}hello`, false, ""},
+		{"read builtin via redirect reads a secret file", `read -r line < .env`, true, "Secret-bearing file"},
+		{"mapfile via redirect reads a secret file", `mapfile -t lines < .env`, true, "Secret-bearing file"},
+		{"exec fd bind then alias reads a secret file", `exec 3< .env; cat <&3`, true, "Secret-bearing file"},
+		{"exec named-fd bind then alias reads a secret file", `exec {fd}< .env; cat <&$fd`, true, "Secret-bearing file"},
+		{"an untracked fd alias with no matching exec bind is allowed", `cat <&9; true`, false, ""},
+		{"unenumerated wrapper hides a shell invocation", `totally-unenumerable-shim sh -c 'cat .env'`, true, "Secret-bearing file"},
+		{"unenumerated wrapper with a safe shell invocation is allowed", `totally-unenumerable-shim sh -c 'echo hello'`, false, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := ve.run(preToolUseJSON(c.command), "policy", "--hook")
+			if c.blocked {
+				if r.code != 2 || !strings.HasPrefix(r.stderr, "cpass: refused: ") {
+					t.Fatalf("want a refused message on stderr: %s", r)
+				}
+				if !strings.Contains(r.stderr, c.want) {
+					t.Fatalf("stderr should mention %q: %s", c.want, r)
+				}
+			} else if r.code != 0 {
+				t.Fatalf("want exit 0, got %s", r)
+			}
+		})
+	}
+}
+
+// TestPolicyHookSecretFileGlobExpansion is
+// command-policy:shell-glob-expansion-hides-filename's e2e proof at the
+// PreToolUse hook layer, with a REAL secret file on disk: a real shell's
+// own filename globbing expands a glob-shaped argument against files
+// that actually exist before the reading program ever starts, resolved
+// here through a same-command `cd` into the real directory (the hook has
+// no explicit cwd input of its own, matching how
+// TestPolicyRunProtectedDirsRelativePathAfterCd already resolves a
+// relative path at this layer).
+func TestPolicyHookSecretFileGlobExpansion(t *testing.T) {
+	ve := newVault(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("STRIPE_LIVE=x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		command string
+		blocked bool
+	}{
+		{"question-mark glob expands to the real secret file", "cd " + dir + " && cat .en?", true},
+		{"star glob expands to the real secret file", "cd " + dir + " && cat .e*", true},
+		{"glob pattern matching only a benign file is allowed", "cd " + dir + " && cat *.txt", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := ve.run(preToolUseJSON(c.command), "policy", "--hook")
+			if c.blocked {
+				if r.code != 2 || !strings.Contains(r.stderr, "Secret-bearing file") {
+					t.Fatalf("want a refused message mentioning the secret file: %s", r)
+				}
+			} else if r.code != 0 {
+				t.Fatalf("want exit 0, got %s", r)
+			}
+		})
 	}
 }

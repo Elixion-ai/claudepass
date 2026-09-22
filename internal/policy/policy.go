@@ -90,6 +90,7 @@ func Evaluate(in Input) error {
 		bound:     map[string]vault.BindingKind{},
 		tainted:   map[string]bool{},
 		literals:  map[string]string{},
+		fds:       map[string]string{},
 		protected: in.ProtectedDirs,
 		cwd:       cwd,
 	}
@@ -116,6 +117,17 @@ type evaluator struct {
 	// an absolute ProtectedDirs entry
 	// (command-policy:protecteddirs-relative-path-after-cd).
 	cwd string
+	// fds maps a file-descriptor key (a bare number, or "$name" for
+	// bash's `exec {name}< target` allocated-descriptor form — see
+	// split.go's fdBindPrefix/readFdAliasTarget) to the literal file path
+	// a same-shell-string `exec N< target` bound it to, so a LATER
+	// command's `<&N`/`<&$name` fd-alias redirection (word.fdAliasNum)
+	// can be resolved back to the real path it reads
+	// (command-policy:read-builtin-and-fd-redirection-bypass). Only a
+	// resolvable, literal (no leftover "$") target populates this map —
+	// same "resolve only what's statically knowable" default
+	// ev.literals/ev.cwd already apply to a variable/cd target.
+	fds map[string]string
 }
 
 func (ev *evaluator) underProtected(w string) bool {
@@ -153,6 +165,19 @@ var (
 		"od": true, "strings": true, "hexdump": true, "bat": true, "tee": true, "cp": true, "nl": true,
 		"tac": true, "rev": true, "sort": true, "uniq": true, "cut": true, "awk": true, "sed": true,
 		"grep": true, "jq": true, "yq": true, "dd": true, "install": true, "rsync": true, "scp": true,
+		// read/mapfile/readarray: shell builtins that load a redirected
+		// file's content into a variable (`read -r line < .env`,
+		// `mapfile -t lines < .env`) rather than taking it as a plain
+		// string argument to an external reader program — their file
+		// operand arrives via the same `<` redirection-target word logic
+		// CLA-61 already routes through matchesSecretFile/underProtected
+		// for every other reader, so treating them as readers here is a
+		// direct, low-risk extension: no new parsing needed
+		// (command-policy:read-builtin-and-fd-redirection-bypass). A
+		// flag-shaped argument (`-r`, `-t`) is already excluded by
+		// matchesSecretFile's own leading-"-" check, same as for every
+		// other reader.
+		"read": true, "mapfile": true, "readarray": true,
 	}
 	procEnviron = regexp.MustCompile(`/proc/(self|\$\$|[0-9]+|[a-z]*\$[A-Za-z_{]*[}]?)/environ`)
 	varRef      = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)`)
@@ -284,6 +309,50 @@ func (ev *evaluator) argv(argv []string, depth int) error {
 	}
 	if r := readerWordRefusal(argv); r != nil {
 		return r
+	}
+	return ev.shellWordRefusal(argv, depth)
+}
+
+// shellWordRefusal mirrors hookWalk's per-word SHELL-name fallback
+// (internal/policy/hook.go) the same way readerWordRefusal above already
+// mirrors hookWalk's per-word READER-name fallback: even when argv[0]
+// isn't itself a shell, a shell name appearing anywhere else in argv —
+// behind a wrapper neither `wrappers` nor `shells` enumerates, and which
+// can never be exhaustively enumerated (chroot, unshare, ssh host,
+// script -qc, setsid, systemd-run, nsenter, valgrind --, strace -f,
+// docker exec, or any other passthrough shim) — is still a real shell
+// invocation a real exec family call will make, and its own -c
+// STRING/script-path content is still checkable text sitting right there
+// in argv. Before this, Evaluate's per-word fallback covered only reader
+// names, leaving a shell behind an unenumerated wrapper completely
+// unchecked — a parity gap with hookWalk, whose own per-word loop checks
+// shells[prog] in the very same pass as readers[prog]
+// (command-policy:evaluate-shell-behind-unenumerated-wrapper-parity-gap).
+// Mirrored exactly, including hookWalk's own lack of a printer exemption
+// here (unlike readerWordRefusal/hookWalk's readers[prog] check, which
+// both exempt echo/printf's own data arguments): a shell name genuinely
+// invoked, not merely mentioned as data, is the shape this closes, and
+// diverging from hookWalk's existing, already-shipped behavior in either
+// direction would itself be a fresh parity gap.
+func (ev *evaluator) shellWordRefusal(argv []string, depth int) error {
+	for i := 1; i < len(argv); i++ {
+		prog := base(argv[i])
+		if !shells[prog] {
+			continue
+		}
+		content, refuse := shellCommandString(argv[i+1:])
+		if refuse {
+			return &Refusal{
+				Rule:   prog + "'s invocation shape can't be checked statically",
+				Advice: `use -c "..." or a readable script file under 1 MiB (cpass reads and checks it) instead`,
+			}
+		}
+		if hasTraceFlag(argv[i+1:]) {
+			return &Refusal{Rule: "shell tracing (-x) echoes expanded variables", Advice: "drop -x"}
+		}
+		if err := ev.shell(content, depth+1); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -507,6 +576,28 @@ func (ev *evaluator) simple(words []word, depth int) error {
 			}
 		}
 	}
+	// command-policy:read-builtin-and-fd-redirection-bypass — a `N<
+	// target`/`{name}< target` redirection's target word (fdBindNum set,
+	// see split.go's word doc comment) is recorded against its fd key
+	// regardless of which command it's attached to (not only "exec"),
+	// matching real shell semantics for the idiom this closes (`exec N<
+	// target`, so a LATER command's `<&N` picks it back up) while
+	// staying conservative rather than modeling per-command fd scoping
+	// precisely: recording a few extra, unused fd keys for a redirection
+	// that in real bash would only be scoped to its own command can only
+	// make a LATER `<&N` resolve to a path that really was assigned to
+	// that number at some point in this shell string, never to
+	// something invented — the same "refuse/resolve rather than guess"
+	// direction this package's other unresolved-dynamic-reference
+	// defaults already favor. Only a resolvable, literal (no leftover
+	// "$") target is recorded, exactly like ev.cwd's own cd-tracking.
+	for _, w := range words {
+		if w.fdBindNum != "" {
+			if resolved := ev.resolveLiteral(w.raw); !strings.ContainsRune(resolved, '$') {
+				ev.fds[w.fdBindNum] = ev.resolvePath(resolved)
+			}
+		}
+	}
 	// Leading assignments: VAR=$SECRET taints VAR; a plain string literal
 	// (VAR=.env, no $ of its own) is remembered so a later bare $VAR can be
 	// resolved back to it (resolveLiteral).
@@ -613,6 +704,25 @@ func (ev *evaluator) simple(words []word, depth int) error {
 		return nil
 	case readers[prog]:
 		for _, a := range args {
+			// command-policy:read-builtin-and-fd-redirection-bypass: a
+			// `<&N`/`<&$name` fd-alias word (raw=="", see split.go's
+			// word doc comment) resolves through a same-shell-string
+			// `exec N< target` bind (ev.fds) — the same treatment a
+			// literal filename argument already gets below, just
+			// reached through a fd number instead of a variable or a
+			// literal path. An unresolvable key (a real, unrelated fd
+			// this package never saw bound) falls through unchanged,
+			// exactly like an unresolvable variable reference already
+			// does.
+			if path, ok := ev.resolveFDAlias(a); ok {
+				if ev.underProtected(path) {
+					return &Refusal{Rule: prog + " would print a Secret file", Advice: "pass the path to the tool that needs the file instead"}
+				}
+				if r := secretFileRefusal(prog, path); r != nil {
+					return r
+				}
+				continue
+			}
 			if v := ev.referencesFile(a.raw); v != "" {
 				return &Refusal{Rule: fmt.Sprintf("%s would print the file behind $%s", prog, v), Advice: "pass the path to the tool that needs the file instead"}
 			}
@@ -634,10 +744,30 @@ func (ev *evaluator) simple(words []word, depth int) error {
 			if r := secretFileRefusal(prog, resolved); r != nil {
 				return r
 			}
+			// command-policy:shell-glob-expansion-hides-filename: an
+			// argument shaped like a shell glob (`.en?`, `.e*`) is
+			// additionally resolved against this evaluator's cwd the
+			// way a real shell's own filename globbing would expand
+			// it, since matchesSecretFile's plain basename match above
+			// only ever compares literal text and a glob pattern's own
+			// literal spelling never itself looks like ".env".
+			if r := ev.secretFileGlobRefusal(prog, resolved); r != nil {
+				return r
+			}
 		}
 	case sourceBuiltins[prog]:
 		for _, a := range args {
-			if r := secretFileRefusal(prog, ev.resolveLiteral(a.raw)); r != nil {
+			if path, ok := ev.resolveFDAlias(a); ok {
+				if r := secretFileRefusal(prog, path); r != nil {
+					return r
+				}
+				continue
+			}
+			resolved := ev.resolveLiteral(a.raw)
+			if r := secretFileRefusal(prog, resolved); r != nil {
+				return r
+			}
+			if r := ev.secretFileGlobRefusal(prog, resolved); r != nil {
 				return r
 			}
 		}
@@ -739,6 +869,70 @@ func (ev *evaluator) resolveLiteral(s string) string {
 		return lit
 	}
 	return s
+}
+
+// resolveFDAlias returns the literal file path a `<&N`/`<&$name` word
+// (fdAliasNum set, raw=="" — see split.go's word doc comment) resolves
+// to, via a same-shell-string `exec N< target`/`exec {name}< target`
+// bind recorded in ev.fds — or ok==false when w isn't such a word at
+// all, or its fd key isn't tracked (an ordinary, unrelated real file
+// descriptor, or a dynamic value this package can't resolve statically),
+// matching the same "leave it alone rather than guess" default every
+// other dynamic reference in this package already has
+// (command-policy:read-builtin-and-fd-redirection-bypass).
+func (ev *evaluator) resolveFDAlias(w word) (path string, ok bool) {
+	if w.fdAliasNum == "" {
+		return "", false
+	}
+	path, ok = ev.fds[w.fdAliasNum]
+	return path, ok
+}
+
+// secretFileGlobRefusal reports whether arg — already checked against
+// secretFileGlobs by matchesSecretFile's plain literal-basename match —
+// additionally contains a shell glob metacharacter (*, ?, [) that, once
+// expanded against this evaluator's own cwd the way a real shell's
+// filename globbing would expand it before the reading program ever
+// starts, resolves to a Secret-bearing file that actually exists there:
+// `cat .en?`/`cat .e*` expanding to a real .env is the load-bearing case
+// (command-policy:shell-glob-expansion-hides-filename) — unlike this
+// package's other checks, which are purely textual, this one is
+// necessarily filesystem-dependent, but that dependency is exactly what
+// is guaranteed to hold in precisely the scenario Command Policy exists
+// to defend: a real .env sitting in the project directory. An argument
+// with no glob metacharacter at all is untouched (nil, cheaply, before
+// any I/O). When this evaluator has no usable cwd, or the glob itself
+// can't be evaluated, this fails closed (refuses) rather than silently
+// letting an unresolvable glob pattern through unchecked — this
+// package's existing default for any other shape it cannot statically
+// resolve. A glob that resolves to nothing dangerous (no match at all,
+// or matches that aren't Secret-bearing) is allowed, exactly like an
+// ordinary non-glob filename that isn't one.
+func (ev *evaluator) secretFileGlobRefusal(prog, arg string) *Refusal {
+	if !strings.ContainsAny(arg, "*?[") || strings.HasPrefix(arg, "-") {
+		return nil
+	}
+	unresolvable := &Refusal{
+		Rule:   prog + "'s glob argument " + arg + " can't be checked statically",
+		Advice: "reference the file by its literal name instead of a glob pattern",
+	}
+	if ev.cwd == "" {
+		return unresolvable
+	}
+	pattern := arg
+	if !filepath.IsAbs(pattern) {
+		pattern = filepath.Join(ev.cwd, pattern)
+	}
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return unresolvable
+	}
+	for _, m := range matches {
+		if r := secretFileRefusal(prog, m); r != nil {
+			return r
+		}
+	}
+	return nil
 }
 
 // wholeVarRef reports whether s is exactly one variable reference ($NAME or

@@ -818,3 +818,339 @@ func TestDynamicCommandNameLiteralVariable(t *testing.T) {
 		})
 	}
 }
+
+// TestIFSWordSplitting is command-policy:ifs-word-splitting-bypass
+// (2026-09-22 audit, round 3): an UNQUOTED $IFS/${IFS} reference glued
+// into a word acts as a real shell's own word-splitting boundary there —
+// IFS's default value IS whitespace — so a reader glued to a secret-file
+// name through $IFS/${IFS} really executes as two separate words,
+// exactly the same bypass every other spelling in this file already
+// covers, not one glued, unrecognizable word that matches no
+// reader/secret-file rule at all.
+func TestIFSWordSplitting(t *testing.T) {
+	dotenv := "." + "env"
+	cases := []struct {
+		name    string
+		argv    []string
+		refused bool
+	}{
+		{"braced ${IFS} glues cat to the secret file", []string{"sh", "-c", "cat${IFS}" + dotenv}, true},
+		{"bare $IFS glues cat to the secret file", []string{"sh", "-c", "cat$IFS" + dotenv}, true},
+		{"generalizes to another reader/secret-file pair", []string{"sh", "-c", "less$IFS.pem"}, true},
+		{"generalizes to id_rsa", []string{"sh", "-c", "head${IFS}id_rsa"}, true},
+		{"repeated $IFS still splits (collapses to one boundary)", []string{"sh", "-c", "cat$IFS$IFS" + dotenv}, true},
+		// Paired benign: the exact same splitting mechanism around
+		// nothing dangerous stays allowed — this is Command Policy
+		// correctly checking the real, split words, not merely refusing
+		// every $IFS reference on sight.
+		{"IFS splitting around benign text is allowed", []string{"sh", "-c", "echo${IFS}hello"}, false},
+		{"IFS splitting onto an unrelated file is allowed", []string{"sh", "-c", "cat${IFS}/etc/hosts"}, false},
+		// A variable merely glued to text starting with IFS's name
+		// (IFSFOO, not IFS itself) must not be mistaken for $IFS.
+		{"a variable named IFSFOO is not $IFS and stays glued", []string{"sh", "-c", "cat$IFSFOO"}, false},
+		// Quoting suppresses word-splitting in a real shell, so a quoted
+		// $IFS/${IFS} must stay inert — this must NOT be refused: it
+		// isn't the secret file at all, it's IFS's own value followed by
+		// its name, never a file that literally exists under that name.
+		{"quoted ${IFS} stays inert, not word-split", []string{"sh", "-c", `cat "${IFS}` + dotenv + `"`}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: c.argv, Bound: bound})
+			if (err != nil) != c.refused {
+				t.Fatalf("argv %v: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestSplitCommandsIFSWordSplitting is the tokenizer-level regression for
+// TestIFSWordSplitting above: an unquoted $IFS/${IFS} reference splits
+// the surrounding text into separate words right there, the same as
+// whitespace already does.
+func TestSplitCommandsIFSWordSplitting(t *testing.T) {
+	dotenv := "." + "env"
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{"braced form splits", "cat${IFS}" + dotenv, []string{"cat", dotenv}},
+		{"bare form splits", "cat$IFS" + dotenv, []string{"cat", dotenv}},
+		{"repeated bare form collapses to one boundary", "cat$IFS$IFS" + dotenv, []string{"cat", dotenv}},
+		{"a glued-but-different variable name is untouched", "cat$IFSFOO", []string{"cat$IFSFOO"}},
+		// $IFS as its own already-whitespace-separated word vanishes
+		// entirely rather than becoming a literal "$IFS" word — matching
+		// real shell semantics exactly: IFS's default value IS
+		// whitespace, so word-splitting an unquoted $IFS expansion that
+		// consists of nothing but IFS characters yields zero words, the
+		// same as if it had never been there at all.
+		{"IFS as a standalone word vanishes, matching real shell word-splitting", "cat $IFS " + dotenv, []string{"cat", dotenv}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cmds := splitCommands(c.in)
+			if len(cmds) != 1 {
+				t.Fatalf("got %d commands: %+v", len(cmds), cmds)
+			}
+			if len(cmds[0]) != len(c.want) {
+				t.Fatalf("got %+v want %v", cmds[0], c.want)
+			}
+			for i := range c.want {
+				if cmds[0][i].raw != c.want[i] {
+					t.Fatalf("word %d: got %q want %q", i, cmds[0][i].raw, c.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestReadMapfileReadarrayBuiltins is
+// command-policy:read-builtin-and-fd-redirection-bypass's first half
+// (2026-09-22 audit, round 3): the `read`/`mapfile`/`readarray` shell
+// builtins load a redirected file's content into a variable rather than
+// taking it as a plain-string argument to an external reader program,
+// but their file operand arrives via the same `<` redirection-target
+// word logic CLA-61 already routes through matchesSecretFile for every
+// other reader — so treating them as readers closes this class outright.
+func TestReadMapfileReadarrayBuiltins(t *testing.T) {
+	dotenv := "." + "env"
+	cases := []struct {
+		name    string
+		argv    []string
+		refused bool
+	}{
+		{"read builtin via redirect reads a secret file", []string{"sh", "-c", `read -r line < ` + dotenv}, true},
+		{"mapfile via redirect reads a secret file", []string{"sh", "-c", `mapfile -t lines < ` + dotenv}, true},
+		{"readarray via redirect reads a secret file", []string{"sh", "-c", `readarray -t lines < ` + dotenv}, true},
+		{"read via redirect on a pem file", []string{"sh", "-c", `read -r line < server.pem`}, true},
+		// Paired benign: the same builtins on an unrelated file, or with
+		// no redirection at all, stay allowed.
+		{"read builtin on an unrelated file is allowed", []string{"sh", "-c", `read -r line < notes.txt`}, false},
+		{"read builtin with no redirection at all is allowed", []string{"sh", "-c", `read -r line`}, false},
+		{"mapfile on an unrelated file is allowed", []string{"sh", "-c", `mapfile -t lines < notes.txt`}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: c.argv, Bound: bound})
+			if (err != nil) != c.refused {
+				t.Fatalf("argv %v: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestExecFDRedirectionAlias is
+// command-policy:read-builtin-and-fd-redirection-bypass's second half
+// (2026-09-22 audit, round 3): `exec N< target` (or bash's `exec {name}<
+// target`, which allocates a free descriptor into the named variable)
+// binds a file descriptor to a target file for the rest of the current
+// shell — a LATER command's `<&N`/`<&$name` fd-alias redirection reads
+// from that same file with no filename text of its own, so it must be
+// resolved back to the bound target and checked the same way a literal
+// argument already is.
+func TestExecFDRedirectionAlias(t *testing.T) {
+	dotenv := "." + "env"
+	cases := []struct {
+		name    string
+		argv    []string
+		refused bool
+	}{
+		{"numeric fd: exec binds fd 3 to the secret file, cat reads it back via <&3",
+			[]string{"sh", "-c", "exec 3< " + dotenv + "; cat <&3"}, true},
+		{"named fd: exec {fd}< target allocates a descriptor, cat reads it back via <&$fd",
+			[]string{"sh", "-c", "exec {fd}< " + dotenv + "; cat <&$fd"}, true},
+		{"named fd with braces on the alias side too: <&${fd}",
+			[]string{"sh", "-c", "exec {fd}< " + dotenv + "; cat <&${fd}"}, true},
+		{"a different reader than cat still resolves the same fd bind",
+			[]string{"sh", "-c", "exec 4< id_rsa; head <&4"}, true},
+		// Paired benign shapes: the exact same mechanism, bound to a file
+		// with nothing dangerous in it, stays allowed — this is Command
+		// Policy correctly resolving the real bound target, not merely
+		// refusing every fd-alias redirection on sight.
+		{"exec binds an unrelated file; cat <&3 stays allowed",
+			[]string{"sh", "-c", "exec 3< notes.txt; cat <&3"}, false},
+		// An fd this evaluator never saw bound (no matching `exec N<`
+		// earlier in the same shell string) is left alone rather than
+		// guessed at, exactly like an unresolved variable reference
+		// already is elsewhere in this package.
+		{"an untracked fd alias with no matching exec bind is allowed",
+			[]string{"sh", "-c", "cat <&9"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: c.argv, Bound: bound})
+			if (err != nil) != c.refused {
+				t.Fatalf("argv %v: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestSplitCommandsFDBindAndAlias is the tokenizer-level regression for
+// TestExecFDRedirectionAlias above: an `N<`/`{name}<` redirection tags
+// its own target word with fdBindNum, and a `<&N`/`<&$name`/`<&${name}`
+// redirection becomes a synthetic word (raw=="") carrying the matching
+// fdAliasNum key.
+func TestSplitCommandsFDBindAndAlias(t *testing.T) {
+	dotenv := "." + "env"
+	cmds := splitCommands("exec 3< " + dotenv + "; cat <&3")
+	if len(cmds) != 2 {
+		t.Fatalf("got %d commands: %+v", len(cmds), cmds)
+	}
+	if len(cmds[0]) != 2 || cmds[0][1].raw != dotenv || cmds[0][1].fdBindNum != "3" {
+		t.Fatalf("exec's target word should carry fdBindNum \"3\": %+v", cmds[0])
+	}
+	if len(cmds[1]) != 2 || cmds[1][1].raw != "" || cmds[1][1].fdAliasNum != "3" {
+		t.Fatalf("cat's alias word should be synthetic with fdAliasNum \"3\": %+v", cmds[1])
+	}
+
+	cmds = splitCommands("exec {fd}< " + dotenv + "; cat <&$fd")
+	if len(cmds) != 2 {
+		t.Fatalf("got %d commands: %+v", len(cmds), cmds)
+	}
+	if len(cmds[0]) != 2 || cmds[0][1].raw != dotenv || cmds[0][1].fdBindNum != "$fd" {
+		t.Fatalf("exec's named-fd target word should carry fdBindNum \"$fd\": %+v", cmds[0])
+	}
+	if len(cmds[1]) != 2 || cmds[1][1].raw != "" || cmds[1][1].fdAliasNum != "$fd" {
+		t.Fatalf("cat's named-fd alias word should carry fdAliasNum \"$fd\": %+v", cmds[1])
+	}
+}
+
+// TestEvaluateShellBehindUnenumeratedWrapper is
+// command-policy:evaluate-shell-behind-unenumerated-wrapper-parity-gap
+// (2026-09-22 audit, round 3): Evaluate's per-word fallback
+// (readerWordRefusal) resolved a reader name appearing anywhere in argv,
+// but had no equivalent for a SHELL name — so a wrapper program neither
+// `wrappers` nor `shells` enumerates (any wrapper — this uses a made-up
+// name, since the whole point is that the list can never be exhaustive)
+// standing in front of a real shell invocation bypassed Evaluate
+// entirely, even though the byte-identical text was already refused by
+// EvaluateHook's hookWalk (which happens to check shells[prog] in the
+// same per-word loop as readers[prog]).
+func TestEvaluateShellBehindUnenumeratedWrapper(t *testing.T) {
+	dotenv := "." + "env"
+	cases := []struct {
+		name    string
+		argv    []string
+		refused bool
+	}{
+		{"unenumerated wrapper hides a shell invocation, argv form",
+			[]string{"totally-unenumerable-shim", "sh", "-c", "cat " + dotenv}, true},
+		{"unenumerated wrapper hides a shell invocation, shell-string form",
+			[]string{"sh", "-c", `totally-unenumerable-shim sh -c 'cat ` + dotenv + `'`}, true},
+		{"a different unenumerated wrapper name, same shape",
+			[]string{"some-other-unlisted-wrapper", "bash", "-c", "cat " + dotenv}, true},
+		// Paired benign: the same wrapper shape, pointed at a shell
+		// invocation with nothing dangerous in it, stays allowed — this
+		// is Command Policy correctly checking the real shell content,
+		// not merely refusing every unenumerated-wrapper shape on sight.
+		{"unenumerated wrapper with a safe shell invocation is allowed",
+			[]string{"totally-unenumerable-shim", "sh", "-c", "echo hello"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: c.argv, Bound: bound})
+			if (err != nil) != c.refused {
+				t.Fatalf("argv %v: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestSecretFileGlobExpansion is
+// command-policy:shell-glob-expansion-hides-filename (2026-09-22 audit,
+// round 3): a real shell expands a glob-shaped argument against files
+// that actually exist in its cwd before the reading program ever starts
+// — unconditional, default shell behavior — so an argument that resolves
+// to a real Secret-bearing file must be refused the same way the literal
+// spelling already is, while a glob matching nothing dangerous (or
+// nothing at all) stays allowed. Every case here goes through a shell
+// string (`sh -c "..."`), matching the actual vulnerability and its own
+// live repro exactly: filename globbing is a SHELL feature, so a glob
+// argument passed directly to `cpass run -- cat .en?` with no shell
+// involved at all is never expanded by anything (Go's os/exec performs
+// no globbing), and this check is deliberately scoped to the shell-
+// string evaluator (ev.simple) accordingly — see
+// TestSecretFileGlobExpansionNotAppliedWithoutAShell below.
+func TestSecretFileGlobExpansion(t *testing.T) {
+	dotenv := "." + "env"
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, dotenv), []byte("STRIPE_LIVE=x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		argv    []string
+		refused bool
+	}{
+		{"question-mark glob expands to the real secret file", []string{"sh", "-c", "cat .en?"}, true},
+		{"star glob expands to the real secret file", []string{"sh", "-c", "cat .e*"}, true},
+		{"the same glob refuses through a source builtin too", []string{"sh", "-c", "source .e*"}, true},
+		// Paired benign: a glob pattern matching nothing dangerous (it
+		// matches notes.txt, not a Secret-bearing file) stays allowed —
+		// this is Command Policy correctly resolving what the glob
+		// actually expands to, not merely refusing every glob argument
+		// on sight.
+		{"glob pattern matching only a benign file is allowed", []string{"sh", "-c", "cat *.txt"}, false},
+		// Paired benign: a glob pattern matching nothing at all in this
+		// directory stays allowed.
+		{"glob pattern matching nothing at all is allowed", []string{"sh", "-c", "cat *.nonexistent"}, false},
+		// A literal argument with no glob metacharacter at all is
+		// unaffected — still governed only by the existing plain
+		// basename check.
+		{"a literal filename with no glob metacharacter is unaffected", []string{"sh", "-c", "cat notes.txt"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: c.argv, Bound: bound, Cwd: dir})
+			if (err != nil) != c.refused {
+				t.Fatalf("argv %v: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestSecretFileGlobExpansionNotAppliedWithoutAShell pins the scope
+// boundary TestSecretFileGlobExpansion's doc comment states: a glob
+// argument handed directly to `cpass run -- cat .en?`, with no shell
+// involved at all, is passed to cat completely literally by Go's
+// os/exec (which performs no globbing of its own) — cat then fails to
+// open a file literally named ".en?", the same as any other typo, with
+// nothing to leak. Refusing this shape would be an unnecessary
+// restriction on a command that was never actually going to read the
+// real secret file to begin with.
+func TestSecretFileGlobExpansionNotAppliedWithoutAShell(t *testing.T) {
+	dotenv := "." + "env"
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, dotenv), []byte("STRIPE_LIVE=x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Evaluate(Input{Argv: []string{"cat", ".en?"}, Bound: bound, Cwd: dir}); err != nil {
+		t.Fatalf("a glob argument with no shell involved must not be refused: %v", err)
+	}
+}
+
+// TestSecretFileGlobRefusalFailsClosedWithNoCwd pins
+// command-policy:shell-glob-expansion-hides-filename's fail-closed
+// default directly at the evaluator level: when this evaluator has no
+// usable cwd to resolve a glob-shaped argument against, it refuses
+// rather than silently letting an unresolvable pattern through
+// unchecked — the same "unknown shape" conservative posture this
+// package applies everywhere else. Exercised directly against a
+// zero-value evaluator (cwd=="") since Evaluate's own public entry point
+// always falls back to os.Getwd(), which essentially never fails in a
+// real process.
+func TestSecretFileGlobRefusalFailsClosedWithNoCwd(t *testing.T) {
+	ev := &evaluator{}
+	if r := ev.secretFileGlobRefusal("cat", ".en?"); r == nil {
+		t.Fatal("a glob-shaped argument with no cwd to resolve against should refuse")
+	}
+	// A non-glob argument is unaffected even with no cwd.
+	if r := ev.secretFileGlobRefusal("cat", "notes.txt"); r != nil {
+		t.Fatalf("a literal (non-glob) argument must not be refused by this check: %v", r)
+	}
+}
