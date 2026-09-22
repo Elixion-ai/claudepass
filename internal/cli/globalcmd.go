@@ -2,6 +2,7 @@ package cli
 
 import (
 	"flag"
+	"fmt"
 	"io"
 
 	"github.com/Elixion-ai/claudepass/internal/broker"
@@ -59,12 +60,11 @@ func cmdGlobal(e *env) int {
 // so the two doors into a declaration read identically.
 func declareGlobal(e *env, entry manifest.Entry) int {
 	warnUnknownGlobal(e, entry.Handle)
-	gm, err := manifest.LoadGlobal()
+	gm, err := manifest.UpdateGlobal(func(m *manifest.Manifest) error {
+		m.Add(entry)
+		return nil
+	})
 	if err != nil {
-		return e.failErr(err)
-	}
-	gm.Add(entry)
-	if err := gm.SaveGlobal(); err != nil {
 		return e.failErr(err)
 	}
 	fprintf(e.stdout, "declared %s in %s\n", e.paintOut(roleEmber, entry.Handle), e.paintOut(roleDim, gm.Path))
@@ -83,14 +83,13 @@ func cmdLocal(e *env) int {
 		return e.fail(ExitUsage, "usage: cpass local <handle>")
 	}
 	handle := fs.Arg(0)
-	gm, err := manifest.LoadGlobal()
+	gm, err := manifest.UpdateGlobal(func(m *manifest.Manifest) error {
+		if !m.Remove(handle) {
+			return fmt.Errorf("%s is not declared in %s", handle, m.Path)
+		}
+		return nil
+	})
 	if err != nil {
-		return e.failErr(err)
-	}
-	if !gm.Remove(handle) {
-		return e.fail(ExitError, "%s is not declared in %s", handle, gm.Path)
-	}
-	if err := gm.SaveGlobal(); err != nil {
 		return e.failErr(err)
 	}
 	fprintf(e.stdout, "removed %s from %s\n", e.paintOut(roleEmber, handle), e.paintOut(roleDim, gm.Path))

@@ -3,7 +3,9 @@ package e2e
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -89,6 +91,88 @@ func TestConcurrentAddsAllSurvive(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("missing %s from ls output: %v", want, got)
+		}
+	}
+}
+
+// TestConcurrentGlobalDeclarationsAllSurvive is CLA-93's end-to-end
+// regression test: N real, concurrently running `cpass global` processes
+// declaring distinct Handles into one global.toml must all survive.
+func TestConcurrentGlobalDeclarationsAllSurvive(t *testing.T) {
+	ve := newVault(t)
+	const n = 20
+	var wg sync.WaitGroup
+	results := make([]result, n)
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			handle := fmt.Sprintf("concurrent/h%02d", i)
+			results[i], errs[i] = ve.runConcurrent(nil, "global", handle)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("global %d: process error: %v", i, err)
+		}
+		if results[i].code != 0 {
+			t.Fatalf("global %d failed: %s", i, results[i])
+		}
+	}
+
+	raw, err := os.ReadFile(filepath.Join(ve.home, "global.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < n; i++ {
+		want := fmt.Sprintf("concurrent/h%02d", i)
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("global.toml is missing %s — a concurrent SaveGlobal silently lost it:\n%s", want, raw)
+		}
+	}
+}
+
+// TestConcurrentAddGlobalDeclarationsAllSurvive is the `cpass add -g` door
+// into the same LoadGlobal -> Add -> SaveGlobal cycle, exercised with real
+// concurrent processes each storing a distinct Secret and declaring it
+// globally in the same command.
+func TestConcurrentAddGlobalDeclarationsAllSurvive(t *testing.T) {
+	ve := newVault(t)
+	const n = 15
+	var wg sync.WaitGroup
+	results := make([]result, n)
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			handle := fmt.Sprintf("concurrent/g%02d", i)
+			value := fmt.Sprintf("value-number-%02d-long-enough-ok", i)
+			results[i], errs[i] = ve.runConcurrent([]byte(value+"\n"), "add", handle, "-g")
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("add -g %d: process error: %v", i, err)
+		}
+		if results[i].code != 0 {
+			t.Fatalf("add -g %d failed: %s", i, results[i])
+		}
+	}
+
+	raw, err := os.ReadFile(filepath.Join(ve.home, "global.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < n; i++ {
+		want := fmt.Sprintf("concurrent/g%02d", i)
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("global.toml is missing %s:\n%s", want, raw)
 		}
 	}
 }

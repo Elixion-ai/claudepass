@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Elixion-ai/claudepass/internal/atomicfile"
 	"github.com/Elixion-ai/claudepass/internal/vault"
 )
 
@@ -163,7 +164,10 @@ func Load(path string) (*Manifest, error) {
 	return m, nil
 }
 
-// Save writes the Manifest. Entries are sorted so diffs stay small.
+// Save writes the Manifest, atomically (internal/atomicfile: staged in a
+// unique temp file next to m.Path, then renamed into place), so a reader —
+// or a crash mid-write — never sees a partial file. Entries are sorted so
+// diffs stay small.
 func (m *Manifest) Save() error {
 	sort.Slice(m.Entries, func(i, j int) bool { return m.Entries[i].Handle < m.Entries[j].Handle })
 	var b strings.Builder
@@ -200,7 +204,7 @@ func (m *Manifest) Save() error {
 			b.WriteString(l + "\n")
 		}
 	}
-	return os.WriteFile(m.Path, []byte(b.String()), 0o644)
+	return atomicfile.Write(m.Path, []byte(b.String()), 0o644)
 }
 
 // captureExtra records one verbatim line of an unparsed section, keeping

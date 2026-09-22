@@ -1,10 +1,12 @@
 package manifest
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/Elixion-ai/claudepass/internal/broker"
+	"github.com/Elixion-ai/claudepass/internal/lockfile"
 )
 
 // GlobalFileName is the machine-wide Manifest, at the ClaudePass home
@@ -54,4 +56,38 @@ func (m *Manifest) SaveGlobal() error {
 	}
 	m.global = true
 	return m.Save()
+}
+
+// UpdateGlobal is the one correct way for a `cpass` process to change the
+// Global Manifest: it holds an exclusive lock (internal/lockfile) for the
+// whole cycle, loads it fresh under that lock, runs fn, and SaveGlobals the
+// result if fn returns nil. `cpass global`, `cpass add -g`, `cpass local`
+// and `cpass manifest add -g` all funnel through this so two `cpass`
+// processes declaring or undeclaring a Handle at once can never race each
+// other's LoadGlobal -> mutate -> SaveGlobal and silently drop one of their
+// declarations (CLA-93).
+func UpdateGlobal(fn func(m *Manifest) error) (*Manifest, error) {
+	p, err := GlobalPath()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		return nil, err
+	}
+	lock, err := lockfile.Acquire(p+".lock", lockfile.DefaultTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("manifest: locking the Global Manifest for write: %w", err)
+	}
+	defer func() { _ = lock.Release() }()
+	m, err := LoadGlobal()
+	if err != nil {
+		return nil, err
+	}
+	if err := fn(m); err != nil {
+		return nil, err
+	}
+	if err := m.SaveGlobal(); err != nil {
+		return nil, err
+	}
+	return m, nil
 }

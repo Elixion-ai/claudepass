@@ -76,6 +76,18 @@ that.
   the Vault without retyping its value), and `cpass manifest add <handle>
   -g` all declare one Handle into it. `cpass local <handle>` removes a
   declaration; the Secret itself, in the Vault, is untouched.
+- **Concurrent writers** (`manifest.UpdateGlobal`, `internal/lockfile`):
+  every one of those four doors holds an exclusive `flock` on a sidecar
+  `global.toml.lock` for the whole LoadGlobal-mutate-SaveGlobal cycle —
+  without it, two `cpass` processes declaring or undeclaring a Handle at
+  once can silently lose one's change, the same lost-update shape the
+  Vault has (see above). `Manifest.Save` (shared by a project Manifest and
+  the Global Manifest alike) also writes atomically now — a unique temp
+  file next to the destination, renamed into place — rather than a bare
+  `os.WriteFile`. `cpass manifest global on|off` writes the *project's own*
+  `.claudepass.toml` (its durable opt-out, see Opting out below), not
+  `global.toml`, so it is not one of the four and needs no Global Manifest
+  lock; it still gets the atomic `Manifest.Save`.
 - **Reachability** (`manifest.globalReaches`): a Global Handle reaches a
   directory only when both hold — a project Manifest is found from that
   directory by the ordinary ancestor walk (`manifest.Find`), and no
@@ -617,6 +629,7 @@ All paths below are relative to `$CPASS_HOME` unless stated otherwise.
 | `$CPASS_HOME/run/<16-hex-char id>/` | One per-invocation temp directory for `cpass run`'s file Bindings; holds a `.pid` file and one file per file-bound Secret, all shredded on exit. | `0700` (files `0600`) |
 | `.claudepass.toml` (repo root, found by walking up from the current directory) | The Manifest: which Handles this project needs and their Bindings. Contains no values; meant to be committed. | `0644` |
 | `$CPASS_HOME/global.toml` | The Global Manifest: the same TOML subset as a project Manifest (`.claudepass.toml`), declaring the Handles this machine gets in every project it reaches. Contains no values. | `0644` (dir `0700`, created like the Vault's own directory if missing) |
+| `$CPASS_HOME/global.toml.lock` | The sidecar `flock` every Global Manifest writer holds for its whole LoadGlobal-mutate-SaveGlobal cycle (`manifest.UpdateGlobal`); never removed, never itself holds any data. macOS/Linux only. | `0600` |
 | `<skills-dir>/claudepass/` (default `~/.claude/skills/claudepass`, overridable with `cpass integrate claude --path`) | The installed Claude Code plugin: `.claude-plugin/plugin.json`, `hooks/hooks.json`, `skills/claudepass/SKILL.md`. | `0644` (dirs `0755`) |
 | `AGENTS.md` (repo root, or `cpass integrate codex --path`) | A delimited, idempotent section `cpass integrate codex` writes teaching Codex the CLI. Everything outside the `<!-- cpass:begin/end -->` markers is preserved untouched. | `0644` |
 
