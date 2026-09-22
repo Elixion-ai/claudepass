@@ -97,6 +97,7 @@ func interceptBypass(e *env, matches []detect.Match) {
 	if err != nil {
 		return
 	}
+	defer v.Close()
 	used := map[string]bool{}
 	for _, en := range v.List("") {
 		used[en.Handle] = true
