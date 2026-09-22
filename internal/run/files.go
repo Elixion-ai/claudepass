@@ -37,6 +37,16 @@ func newRunDir() (*runDir, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, err
 	}
+	// MkdirAll is a no-op on a directory that already exists, regardless of
+	// its current mode, so a loosened run/ parent (a stray umask, an install
+	// predating this hardening) would otherwise stay loosened forever.
+	// Chmod unconditionally to make sure it ends up 0700 either way — each
+	// invocation's own subdirectory below is always freshly created at
+	// 0700 regardless, so this only closes the narrower gap of another
+	// local user listing the names of currently-live run directories.
+	if err := os.Chmod(root, 0o700); err != nil {
+		return nil, err
+	}
 	sweepStale(root)
 	var id [8]byte
 	if _, err := rand.Read(id[:]); err != nil {
