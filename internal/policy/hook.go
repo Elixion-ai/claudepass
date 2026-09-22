@@ -157,29 +157,43 @@ func hookWalk(command string, depth int) *Refusal {
 				}
 			}
 			if shells[prog] {
-				if hd, ok := heredocArg(words[i+1:]); ok {
-					// The attached program is itself a shell reading its
-					// script from a heredoc — that body runs as shell
-					// commands regardless of whether its delimiter was
-					// quoted (see policy.go's own shells[prog] case).
+				// Resolve what this shell invocation actually executes
+				// the same way regardless of an attached heredoc — a
+				// `-c STRING` or script-by-path argument, when present,
+				// is what a real shell runs; an attached heredoc is just
+				// stdin data for that invocation (see policy.go's
+				// identical shells[prog] case). shellCommandString is
+				// tried first, over raw with the heredoc placeholder
+				// word filtered out so it can never be mistaken for -c's
+				// value or a script path; only when neither resolves
+				// does the heredoc's body become the executed script.
+				// Previously the heredoc was checked first and, when
+				// present, evaluated instead of a real -c/script-path
+				// argument alongside it — a full, silent bypass (CLA-62
+				// review).
+				rest := words[i+1:]
+				raw := make([]string, 0, len(rest))
+				for _, ww := range rest {
+					if !ww.hasHeredoc {
+						raw = append(raw, ww.raw)
+					}
+				}
+				content, refuse := shellCommandString(raw)
+				if !refuse {
+					if r := hookWalk(content, depth+1); r != nil {
+						return r
+					}
+					continue
+				}
+				if hd, ok := heredocArg(rest); ok {
 					if r := hookWalk(hd.body, depth+1); r != nil {
 						return r
 					}
 					continue
 				}
-				raw := make([]string, len(words[i+1:]))
-				for j, ww := range words[i+1:] {
-					raw[j] = ww.raw
-				}
-				content, refuse := shellCommandString(raw)
-				if refuse {
-					return &Refusal{
-						Rule:   w.raw + "'s invocation shape can't be checked statically",
-						Advice: `use -c "..." or a readable script file under 1 MiB (cpass reads and checks it) instead`,
-					}
-				}
-				if r := hookWalk(content, depth+1); r != nil {
-					return r
+				return &Refusal{
+					Rule:   w.raw + "'s invocation shape can't be checked statically",
+					Advice: `use -c "..." or a readable script file under 1 MiB (cpass reads and checks it) instead`,
 				}
 			}
 		}

@@ -322,6 +322,17 @@ func TestShellInvocationHeredoc(t *testing.T) {
 		{"quoted delimiter to a shell", []string{"sh", "-c", "sh <<'EOF'\ncat .env\nEOF\n"}, true},
 		{"unquoted delimiter to a shell", []string{"sh", "-c", "bash <<EOF\ncat .env\nEOF\n"}, true},
 		{"quoted delimiter to a non-shell interpreter", []string{"sh", "-c", "python3 - <<'EOF'\ncat .env\nEOF\n"}, false},
+		// CLA-62 review: a -c STRING is what a real shell actually runs
+		// even when a heredoc is attached alongside it — the heredoc is
+		// just stdin data for that invocation, not a decoy that can hide
+		// a dangerous -c string behind a benign-looking body. Before this
+		// fix the heredoc was checked first and, when present, evaluated
+		// instead of -c's own content, a full silent bypass.
+		{"dangerous -c string alongside a benign heredoc is still refused", []string{"sh", "-c", "bash -c \"cat .env\" <<'EOF'\necho decoy\nEOF\n"}, true},
+		// The converse also matches real shell semantics: a safe -c
+		// string is unaffected by a heredoc that merely looks dangerous,
+		// since that heredoc is never executed as commands.
+		{"safe -c string alongside a heredoc that merely looks dangerous is allowed", []string{"sh", "-c", "bash -c 'echo hi' <<'EOF'\ncat .env\nEOF\n"}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -330,5 +341,22 @@ func TestShellInvocationHeredoc(t *testing.T) {
 				t.Fatalf("argv %v: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
 			}
 		})
+	}
+}
+
+// TestShellInvocationScriptByPathWithHeredoc is CLA-62's review fix: a
+// script-by-path argument is what a real shell actually runs even when a
+// heredoc is attached alongside it, exactly like the -c STRING case in
+// TestShellInvocationHeredoc above — the heredoc must not be able to hide
+// a dangerous script behind a benign-looking body.
+func TestShellInvocationScriptByPathWithHeredoc(t *testing.T) {
+	dir := t.TempDir()
+	dangerous := filepath.Join(dir, "script.sh")
+	if err := os.WriteFile(dangerous, []byte("#!/bin/sh\ncat .env\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	argv := []string{"sh", "-c", "bash " + dangerous + " <<'EOF'\necho decoy\nEOF\n"}
+	if err := Evaluate(Input{Argv: argv}); err == nil {
+		t.Fatalf("a dangerous script paired with a benign heredoc must still be refused: %v", argv)
 	}
 }

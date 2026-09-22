@@ -124,6 +124,55 @@ func TestPolicyRunShellInvocationShapes(t *testing.T) {
 	}
 }
 
+// TestPolicyRunShellInvocationHeredocDoesNotShadowCString is CLA-62's
+// review fix at the cpass run e2e layer: a -c STRING or script-by-path
+// argument paired with an attached heredoc must still have that -c/script
+// content checked, exactly like TestPolicyRunShellInvocationShapes above —
+// the heredoc is just stdin data for the invocation, not a decoy that can
+// hide a dangerous invocation behind a benign-looking body. Before this fix
+// the heredoc's body was checked instead of -c's/the script's own content,
+// a full, silent (exit 0, no refusal) bypass reachable from a single raw
+// Bash call, with no `cpass run` wrapping needed.
+func TestPolicyRunShellInvocationHeredocDoesNotShadowCString(t *testing.T) {
+	ve := leakVault(t)
+	dir := t.TempDir()
+
+	// The exact shape reported: a nested `bash -c "cat .env"` whose own
+	// heredoc is a decoy, reached through `sh -c` the way cpass run
+	// itself parses its wrapped shell command.
+	r := sh(ve, "bash -c \"cat .env\" <<'EOF'\necho decoy\nEOF\n")
+	if r.code != 3 || !strings.Contains(r.stderr, "Secret-bearing file") {
+		t.Fatalf("a dangerous -c string paired with a benign heredoc must still be refused: %s", r)
+	}
+
+	// The exact live-verified exploit: `cpass run -- bash exploit.sh`
+	// where exploit.sh itself is `bash -c "cat .env" <<'EOF' ... EOF`.
+	exploit := filepath.Join(dir, "exploit.sh")
+	exploitBody := "bash -c \"cat .env\" <<'EOF'\necho this-heredoc-body-is-a-decoy\nEOF\n"
+	if err := os.WriteFile(exploit, []byte(exploitBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r = ve.run(nil, "run", "--with", "stripe/live", "--", "bash", exploit)
+	if r.code != 3 || !strings.Contains(r.stderr, "Secret-bearing file") {
+		t.Fatalf("the exact CLA-62 review exploit script must be refused: %s", r)
+	}
+
+	// A dangerous script-by-path paired with a benign heredoc must be
+	// refused the same way.
+	dangerous := filepath.Join(dir, "dangerous.sh")
+	if err := os.WriteFile(dangerous, []byte("#!/bin/sh\ncat .env\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r = sh(ve, "bash "+dangerous+" <<'EOF'\necho decoy\nEOF\n")
+	if r.code != 3 || !strings.Contains(r.stderr, "Secret-bearing file") {
+		t.Fatalf("a dangerous script-by-path paired with a benign heredoc must still be refused: %s", r)
+	}
+
+	if strings.Contains(r.stdout+r.stderr, leakVal) {
+		t.Fatalf("leaked: %s", r)
+	}
+}
+
 func TestPolicyProcEnviron(t *testing.T) {
 	ve := leakVault(t)
 	r := ve.run(nil, "run", "--with", "stripe/live", "--", "cat", "/proc/self/environ")

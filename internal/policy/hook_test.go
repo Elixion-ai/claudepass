@@ -34,6 +34,10 @@ func TestEvaluateHook(t *testing.T) {
 		{"cat id_rsa pub is not a secret", "cat id_rsa.pub", false},
 		{"cat dotenv example is not a secret", "cat .env.example", false},
 		{"quoted heredoc body fed to a non-shell interpreter is data", "python3 - <<'EOF'\ncat .env\nEOF\n", false},
+		// CLA-62 review: the converse of the refused case below — a safe
+		// -c string is unaffected by a heredoc that merely looks
+		// dangerous, since that heredoc is never executed as commands.
+		{"safe -c string alongside a heredoc that merely looks dangerous is allowed", "bash -c 'echo hi' <<'EOF'\ncat .env\nEOF\n", false},
 		// CLA-64: a reader named as data (not as argv[0] of its own
 		// command) must not be mistaken for one actually running — the
 		// three false-positive classes this ticket fixes surgically.
@@ -81,6 +85,13 @@ func TestEvaluateHook(t *testing.T) {
 		// script it is, whether or not its delimiter is quoted.
 		{"quoted heredoc body fed to a shell", "sh <<'EOF'\ncat .env\nEOF\n", true},
 		{"unquoted heredoc body fed to a shell", "bash <<EOF\ncat .env\nEOF\n", true},
+		// CLA-62 review: a -c STRING is what actually executes even when
+		// a heredoc is attached alongside it — the heredoc is just stdin
+		// data for that invocation, not a decoy that can hide a
+		// dangerous -c string behind a benign-looking body. Before this
+		// fix the heredoc was checked first and, when present, evaluated
+		// instead of -c's own content: a full, silent bypass.
+		{"dangerous -c string alongside a benign heredoc is still refused", "bash -c \"cat .env\" <<'EOF'\necho decoy\nEOF\n", true},
 
 		// refused: raw Secret-shaped literal
 		{"stripe key literal in curl", `curl -H "Authorization: Bearer sk_live_51H8xJ2eZvKYlo2CTvalueabcdefgh"`, true},
@@ -182,6 +193,9 @@ func TestEvaluateHookShellInvocationShapes(t *testing.T) {
 		{"script-by-path reading .env is refused", "bash " + script, true},
 		{"script-by-path doing nothing dangerous still runs", "bash " + safe, false},
 		{"unrecognised shell-invocation shape fails closed", "bash --rcfile x -c true", true},
+		// CLA-62 review: a script-by-path argument is what actually
+		// executes even when a heredoc is attached alongside it.
+		{"script-by-path reading .env alongside a benign heredoc is still refused", "bash " + script + " <<'EOF'\necho decoy\nEOF\n", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

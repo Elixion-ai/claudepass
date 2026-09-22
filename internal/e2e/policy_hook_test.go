@@ -49,6 +49,11 @@ func TestPolicyHookAcceptanceFixtures(t *testing.T) {
 		// Secret-shaped literal and trip the hook.
 		{"ordinary REST call with a versioned/hex URL path is allowed", `cpass run --with stripe/live -- curl -H "Authorization: Bearer $STRIPE_LIVE" https://api.stripe.com/v1/charges/ch_3Oq5x2AbCdEfGh011`, false, ""},
 		{"plain ls is allowed", "ls", false, ""},
+		// CLA-62 review: a -c STRING is what actually executes even when
+		// a heredoc is attached alongside it — the heredoc must not be
+		// able to shadow a dangerous -c string and let it through as a
+		// silent, exit-0, unredacted-file-content bypass.
+		{"dangerous -c string alongside a benign heredoc is still refused", "bash -c \"cat .env\" <<'EOF'\necho decoy\nEOF\n", true, "Secret-bearing file"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

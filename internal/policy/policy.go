@@ -483,19 +483,41 @@ func (ev *evaluator) simple(words []word, depth int) error {
 			}
 		}
 	case shells[prog]:
+		// Resolve what this shell invocation actually executes the same
+		// way regardless of an attached heredoc, matching real shell
+		// semantics: when a `-c STRING` or script-by-path argument is
+		// given, THAT is what runs — an attached heredoc is just stdin
+		// data for the invocation, irrelevant unless the -c string /
+		// script itself chooses to read stdin, which can't be known
+		// statically. shellCommandString is tried first, over a copy of
+		// args with the heredoc placeholder word filtered out so it can
+		// never be mistaken for -c's value or a script path; only when
+		// that finds neither -c nor a script path (the shell would
+		// otherwise read interactively from stdin) does the attached
+		// heredoc's body become the executed script. Previously the
+		// heredoc was checked first and, when present, evaluated
+		// instead of a real -c/script-path argument alongside it — a
+		// full, silent bypass of every rule below (CLA-62 review).
+		raw := make([]string, 0, len(args))
+		for _, a := range args {
+			if !a.hasHeredoc {
+				raw = append(raw, a.raw)
+			}
+		}
+		content, refuse := shellCommandString(raw)
+		if !refuse {
+			if hasTraceFlag(raw) {
+				return &Refusal{Rule: "shell tracing (-x) echoes expanded variables", Advice: "drop -x"}
+			}
+			return ev.shell(content, depth+1)
+		}
 		if hd, ok := heredocArg(args); ok {
-			// The attached program is itself a shell reading its script
-			// from a heredoc: that body runs as shell commands whether or
-			// not its delimiter was quoted (quoting only changes whether
-			// $(...)/backticks inside it were pre-expanded by the shell
-			// that wrote this command, not whether the target shell then
-			// executes the resulting text) — so it is evaluated exactly
-			// like an inline -c string, always.
 			return ev.shell(hd.body, depth+1)
 		}
-		// No heredoc: fall through to the generic argv handling below,
-		// which resolves -c / script-by-path the same way Evaluate's own
-		// top-level shell case does.
+		return &Refusal{
+			Rule:   prog + "'s invocation shape can't be checked statically",
+			Advice: `use -c "..." or a readable script file under 1 MiB (cpass reads and checks it) instead`,
+		}
 	}
 	// Anything else: judge as an argv, so nested shells, env, printenv apply.
 	argv := make([]string, len(rest))

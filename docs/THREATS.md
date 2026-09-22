@@ -220,9 +220,20 @@ value can still end up somewhere it shouldn't, today:
     - A heredoc (`<<[-]DELIM ... DELIM`) attached to a shell — `sh
       <<'EOF'` or `bash <<EOF`, quoted delimiter or not — has its body
       evaluated as the script it is, since the target shell runs it as
-      commands either way; a heredoc attached to anything else (`python3
-      - <<'EOF'`) is left alone as the data it is, never scanned for
-      commands.
+      commands either way, **but only when the invocation has no `-c
+      STRING` or script-path argument of its own.** When it does, that's
+      what a real shell actually executes — the heredoc is just stdin
+      data for the invocation, and the -c/script content is what's
+      checked, exactly like the no-heredoc case above; the heredoc
+      fallback exists only for the genuinely bare `sh <<EOF` shape,
+      where the shell would otherwise read its script from stdin
+      interactively. A heredoc attached to anything else (`python3 -
+      <<'EOF'`) is left alone as the data it is, never scanned for
+      commands. (CLA-62's initial heredoc support checked the heredoc
+      first and evaluated it instead of a real -c/script-path argument
+      alongside it — a silent bypass fixed in review: see the
+      `TestShellInvocationHeredoc`/`TestEvaluateHookShellInvocationShapes`
+      "alongside a benign heredoc" cases.)
     - What it does **not** inspect, and so refuses rather than guesses at:
       an unrecognised option; `-o`/`-c` with no value following it; a
       script path that is not a readable regular file under 1 MiB (an
