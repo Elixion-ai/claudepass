@@ -121,6 +121,65 @@ func TestWriteClaudePluginVersionBumpIsNotSilentlyIgnored(t *testing.T) {
 	}
 }
 
+// TestStampVersionPreservesUnknownTopLevelFields is CLA-82's review
+// regression (major): stampVersion used to round-trip plugin.json through
+// a five-field Go struct, so json.Unmarshal silently dropped any
+// top-level key that struct didn't know about (e.g. a future "keywords"
+// or "homepage" field), and json.MarshalIndent then wrote the installed
+// copy back out without it — even though the embedded source file still
+// had it. stampVersion must instead touch only the "version" value and
+// leave every other byte — known field or not, and its position in the
+// file — exactly as it was.
+func TestStampVersionPreservesUnknownTopLevelFields(t *testing.T) {
+	source := []byte(`{
+  "name": "claudepass",
+  "displayName": "ClaudePass",
+  "description": "Secrets for AI coding agents.",
+  "version": "0.1.0",
+  "keywords": ["secrets", "agents"],
+  "homepage": "https://claudepass.com",
+  "author": {
+    "name": "ClaudePass"
+  }
+}
+`)
+	out, err := stampVersion(source, "v9.9.9")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("stamped plugin.json is not valid JSON: %v\n%s", err, out)
+	}
+	if m["version"] != "v9.9.9" {
+		t.Fatalf("version = %v, want v9.9.9", m["version"])
+	}
+	if kw, ok := m["keywords"].([]any); !ok || len(kw) != 2 || kw[0] != "secrets" || kw[1] != "agents" {
+		t.Fatalf("keywords field was dropped or altered: %v", m["keywords"])
+	}
+	if m["homepage"] != "https://claudepass.com" {
+		t.Fatalf("homepage field was dropped: %v", m["homepage"])
+	}
+
+	// Every byte outside the "version" value's quotes is untouched, not
+	// just semantically preserved — field order included.
+	want := strings.Replace(string(source), `"version": "0.1.0"`, `"version": "v9.9.9"`, 1)
+	if string(out) != want {
+		t.Fatalf("stampVersion changed more than the version value.\ngot:  %q\nwant: %q", out, want)
+	}
+}
+
+// TestStampVersionRejectsMissingVersionField guards the error path a
+// silent struct-field drop could otherwise hide: with no "version" field
+// at all to stamp, stampVersion must fail loudly rather than writing
+// something plugin.json never asked for.
+func TestStampVersionRejectsMissingVersionField(t *testing.T) {
+	if _, err := stampVersion([]byte(`{"name": "claudepass"}`), "v1.0.0"); err == nil {
+		t.Fatal(`expected an error: no "version" field to stamp`)
+	}
+}
+
 func TestWriteClaudePluginSecondCallReportsUnchanged(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "claudepass")
 	if _, err := WriteClaudePlugin(dir, testVersion); err != nil {

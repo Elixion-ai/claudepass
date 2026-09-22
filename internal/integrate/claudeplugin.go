@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -26,33 +27,53 @@ const PluginName = "claudepass"
 // rather than copy it byte-for-byte.
 const pluginManifestPath = ".claude-plugin/plugin.json"
 
-// pluginManifest mirrors plugin.json's shape — just enough to stamp
-// "version" without disturbing field order or dropping a field a future
-// edit adds there and this struct doesn't yet know about (RawMessage keeps
-// author's shape opaque, verbatim, regardless of what it contains).
-type pluginManifest struct {
-	Name        string          `json:"name"`
-	DisplayName string          `json:"displayName"`
-	Description string          `json:"description"`
-	Version     string          `json:"version"`
-	Author      json.RawMessage `json:"author"`
-}
+// versionField matches plugin.json's `"version": "..."` field: group 1 is
+// everything up to and including the colon and its surrounding
+// whitespace, so stampVersion can splice in a new quoted value right
+// after it without touching anything else in the match.
+var versionField = regexp.MustCompile(`("version"\s*:\s*)"(?:[^"\\]|\\.)*"`)
 
-// stampVersion returns plugin.json's content with "version" set to
-// version, formatted the same way the source file is (two-space indent,
-// one trailing newline) so a rebuild of the embedded FS with no other
-// change still round-trips byte-for-byte.
+// stampVersion returns plugin.json's content with its top-level "version"
+// field's value replaced by version. It is a byte-level substitution of
+// just that one quoted value, not an unmarshal/marshal round-trip through
+// a Go struct (CLA-82: the earlier struct-based version only knew about
+// five fields, so json.Unmarshal silently dropped any other top-level key
+// a future plugin.json revision added, and json.MarshalIndent's own key
+// order — alphabetical — didn't match the source file's either). Every
+// other byte — field order, indentation, whitespace, and any field this
+// package has never heard of — is carried over from content completely
+// unchanged, so there is nothing here to keep in sync as plugin.json
+// grows.
+//
+// It first confirms content is valid JSON with a top-level "version" key
+// (json.Unmarshal into a map, discarded beyond that check) and that
+// exactly one `"version": "..."` field appears in the raw bytes, so a
+// malformed embedded file, or an unexpected second "version" field
+// somewhere nested, fails loudly instead of silently patching the wrong
+// occurrence.
 func stampVersion(content []byte, version string) ([]byte, error) {
-	var m pluginManifest
-	if err := json.Unmarshal(content, &m); err != nil {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(content, &top); err != nil {
 		return nil, fmt.Errorf("stamp plugin.json version: %w", err)
 	}
-	m.Version = version
-	out, err := json.MarshalIndent(m, "", "  ")
+	if _, ok := top["version"]; !ok {
+		return nil, fmt.Errorf(`stamp plugin.json version: no top-level "version" field`)
+	}
+	matches := versionField.FindAllSubmatchIndex(content, -1)
+	if len(matches) != 1 {
+		return nil, fmt.Errorf(`stamp plugin.json version: expected exactly one "version" field, found %d`, len(matches))
+	}
+	encoded, err := json.Marshal(version)
 	if err != nil {
 		return nil, fmt.Errorf("stamp plugin.json version: %w", err)
 	}
-	return append(out, '\n'), nil
+	m := matches[0]
+	prefixEnd, valueEnd := m[3], m[1] // end of group 1 (before the old value), end of the whole match (after it)
+	out := make([]byte, 0, len(content)-(valueEnd-prefixEnd)+len(encoded))
+	out = append(out, content[:prefixEnd]...)
+	out = append(out, encoded...)
+	out = append(out, content[valueEnd:]...)
+	return out, nil
 }
 
 // WriteClaudePlugin materialises the embedded Claude Code plugin
