@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -390,6 +391,191 @@ func TestSubcommandHelpMatchesGrammar(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDispatcherHelpMatchesGrammar is the regression test for the bug
+// where manifest/keychain/integrate — the three commands that switch on
+// e.args[0] as a subcommand name rather than parsing it with a
+// flag.FlagSet — had no -h/--help case at all, so -h/--help fell into the
+// same "unknown subcommand" branch as a typo and exited ExitUsage instead
+// of printing a usage synopsis and exiting 0, like every flag.FlagSet-based
+// subcommand's own -h/--help already does via usageErr (see
+// TestSubcommandHelpMatchesGrammar above).
+func TestDispatcherHelpMatchesGrammar(t *testing.T) {
+	cases := []struct {
+		name   string
+		args   []string
+		prefix string
+	}{
+		{"manifest", []string{"manifest"}, "usage: cpass manifest "},
+		{"keychain", []string{"keychain"}, "usage: cpass keychain "},
+		{"integrate", []string{"integrate"}, "usage: cpass integrate "},
+	}
+	for _, c := range cases {
+		for _, flagName := range []string{"-h", "--help"} {
+			t.Run(c.name+" "+flagName, func(t *testing.T) {
+				var out, errb bytes.Buffer
+				args := append(append([]string{}, c.args...), flagName)
+				code := Main(args, strings.NewReader(""), &out, &errb)
+				if code != ExitOK {
+					t.Fatalf("cpass %s: exit = %d, want ExitOK (%d); stdout=%q stderr=%q", strings.Join(args, " "), code, ExitOK, out.String(), errb.String())
+				}
+				if errb.Len() != 0 {
+					t.Fatalf("cpass %s: unexpected stderr %q", strings.Join(args, " "), errb.String())
+				}
+				got := out.String()
+				if !strings.HasPrefix(got, c.prefix) {
+					t.Fatalf("cpass %s: stdout %q missing the usage synopsis", strings.Join(args, " "), got)
+				}
+				if strings.Contains(got, "unknown") {
+					t.Fatalf("cpass %s: stdout %q looks like the unknown-subcommand branch, not help", strings.Join(args, " "), got)
+				}
+			})
+		}
+	}
+}
+
+// TestLsFlagAfterPositional is the regression test for the bug where
+// cmdLs called fs.Parse directly instead of parseInterspersed: Go's flag
+// package stops parsing at the first positional, so `cpass ls demo -l`
+// silently dropped -l instead of erroring or honouring it. Each case
+// asserts the flag-after-positional spelling produces byte-identical
+// output to the flag-before-positional spelling every other test in this
+// file already exercises.
+func TestLsFlagAfterPositional(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(broker.EnvHome, home)
+	key := bytes.Repeat([]byte{0x11}, vault.KeySize)
+	t.Setenv(broker.EnvKey, base64.StdEncoding.EncodeToString(key))
+	vp, err := broker.VaultPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Create(vp, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Add("demo/one", "value-one", vault.AddOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Add("demo/two", "value-two", vault.AddOptions{Exposed: "added-exposed"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Add("other/three", "value-three", vault.AddOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(args ...string) (string, string, int) {
+		var out, errb bytes.Buffer
+		code := Main(args, strings.NewReader(""), &out, &errb)
+		return out.String(), errb.String(), code
+	}
+
+	cases := []struct {
+		name   string
+		before []string
+		after  []string
+	}{
+		{"exposed", []string{"ls", "--exposed", "demo"}, []string{"ls", "demo", "--exposed"}},
+		{"long", []string{"ls", "-l", "demo"}, []string{"ls", "demo", "-l"}},
+		{"global", []string{"ls", "--global", "demo"}, []string{"ls", "demo", "--global"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			wantOut, wantErr, wantCode := run(c.before...)
+			gotOut, gotErr, gotCode := run(c.after...)
+			if gotCode != wantCode || gotOut != wantOut || gotErr != wantErr {
+				t.Fatalf("%v = (%d, %q, %q), want %v = (%d, %q, %q)",
+					c.after, gotCode, gotOut, gotErr, c.before, wantCode, wantOut, wantErr)
+			}
+			if wantCode != ExitOK {
+				t.Fatalf("%v: exit = %d, want ExitOK (%d): %s", c.before, wantCode, ExitOK, wantErr)
+			}
+		})
+	}
+
+	// A second positional beyond the prefix is a usage error, not a
+	// silently ignored argument.
+	t.Run("extra positional", func(t *testing.T) {
+		_, errb, code := run("ls", "demo", "other")
+		if code != ExitUsage {
+			t.Fatalf("cpass ls demo other: exit = %d, want ExitUsage (%d): %s", code, ExitUsage, errb)
+		}
+	})
+}
+
+// TestVersionFallsBackToBuildInfo is the regression test for the bug where
+// `go install .../cmd/cpass@<tag>` always reported its own version as
+// "dev": Version is only ever set by GoReleaser's ldflags, which that
+// install path never runs. effectiveVersion must fall back to
+// runtime/debug.ReadBuildInfo's Main.Version — indirected here through
+// readBuildInfo, faked to stand in for what a real `go install` build
+// embeds, since this test binary's own build info can't be made to look
+// like one on demand.
+func TestVersionFallsBackToBuildInfo(t *testing.T) {
+	origVersion, origReadBuildInfo := Version, readBuildInfo
+	t.Cleanup(func() { Version, readBuildInfo = origVersion, origReadBuildInfo })
+
+	t.Run("dev falls back to Main.Version from build info", func(t *testing.T) {
+		Version = "dev"
+		readBuildInfo = func() (*debug.BuildInfo, bool) {
+			return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true
+		}
+		var out, errb bytes.Buffer
+		code := Main([]string{"version"}, strings.NewReader(""), &out, &errb)
+		if code != ExitOK {
+			t.Fatalf("exit = %d, want ExitOK: %s", code, errb.String())
+		}
+		if got := out.String(); got != "cpass v1.2.3\n" {
+			t.Fatalf("stdout = %q, want %q", got, "cpass v1.2.3\n")
+		}
+	})
+
+	t.Run("ldflags-injected Version wins over build info", func(t *testing.T) {
+		Version = "v9.9.9"
+		readBuildInfo = func() (*debug.BuildInfo, bool) {
+			return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true
+		}
+		var out, errb bytes.Buffer
+		code := Main([]string{"version"}, strings.NewReader(""), &out, &errb)
+		if code != ExitOK {
+			t.Fatalf("exit = %d, want ExitOK: %s", code, errb.String())
+		}
+		if got := out.String(); got != "cpass v9.9.9\n" {
+			t.Fatalf("stdout = %q, want %q", got, "cpass v9.9.9\n")
+		}
+	})
+
+	t.Run("(devel) is treated the same as no build info", func(t *testing.T) {
+		Version = "dev"
+		readBuildInfo = func() (*debug.BuildInfo, bool) {
+			return &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, true
+		}
+		var out, errb bytes.Buffer
+		code := Main([]string{"version"}, strings.NewReader(""), &out, &errb)
+		if code != ExitOK {
+			t.Fatalf("exit = %d, want ExitOK: %s", code, errb.String())
+		}
+		if got := out.String(); got != "cpass dev\n" {
+			t.Fatalf("stdout = %q, want %q", got, "cpass dev\n")
+		}
+	})
+
+	t.Run("no build info available falls back to dev", func(t *testing.T) {
+		Version = "dev"
+		readBuildInfo = func() (*debug.BuildInfo, bool) { return nil, false }
+		var out, errb bytes.Buffer
+		code := Main([]string{"--version"}, strings.NewReader(""), &out, &errb)
+		if code != ExitOK {
+			t.Fatalf("exit = %d, want ExitOK: %s", code, errb.String())
+		}
+		if got := out.String(); got != "cpass dev\n" {
+			t.Fatalf("stdout = %q, want %q", got, "cpass dev\n")
+		}
+	})
 }
 
 func TestUnknownCommandUsesNotice(t *testing.T) {

@@ -257,3 +257,36 @@ func TestSecurityDocListsEveryKnownPath(t *testing.T) {
 		t.Fatalf("docs/SECURITY.md does not mention every known on-disk path: %s", strings.Join(missing, "; "))
 	}
 }
+
+// TestCLIStyleTerminalDemoClearsPolicyAndRedacts is CLA-74's review
+// regression (major): docs/CLI-STYLE.md's "Terminal demos" section used to
+// claim `cpass run --unsafe-allow -- env` "exits 0 and prints exactly the
+// line above" — false, since bare `env` dumps the whole process
+// environment (and, in a CI-style setup that unlocks via CPASS_KEY, the
+// raw Vault master key along with it), not one redacted line. The doc now
+// recommends a narrower command instead; this test runs it against a built
+// binary, exactly as documented, and pins both halves of the claim: Command
+// Policy refuses it without --unsafe-allow, and with --unsafe-allow at a
+// (test-faked) terminal it exits 0 and shows only the one Bound Handle,
+// redacted — never the whole environment.
+func TestCLIStyleTerminalDemoClearsPolicyAndRedacts(t *testing.T) {
+	ve := leakVault(t) // declares stripe/live, bound by default to STRIPE_LIVE
+	demo := []string{"sh", "-c", "echo STRIPE_LIVE=$STRIPE_LIVE"}
+
+	refused := ve.run(nil, append([]string{"run", "--with", "stripe/live", "--"}, demo...)...)
+	if refused.code != 3 || !strings.Contains(refused.stderr, "echo would print $STRIPE_LIVE") {
+		t.Fatalf("documented refused case: %s", refused)
+	}
+
+	allowed := ve.runEnv([]string{"CPASS_TEST_TTY=1"}, nil,
+		append([]string{"run", "--unsafe-allow", "--with", "stripe/live", "--"}, demo...)...)
+	if allowed.code != 0 {
+		t.Fatalf("documented --unsafe-allow case: %s", allowed)
+	}
+	if strings.TrimSpace(allowed.stdout) != "STRIPE_LIVE=[REDACTED:stripe/live]" {
+		t.Fatalf("stdout should be exactly the one redacted line the doc shows, nothing else: %q", allowed.stdout)
+	}
+	if strings.Contains(allowed.stdout+allowed.stderr, leakVal) {
+		t.Fatalf("leaked: %s", allowed)
+	}
+}

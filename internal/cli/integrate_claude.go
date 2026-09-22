@@ -25,28 +25,52 @@ func defaultClaudeSkillsDir() string {
 	return filepath.Join(".claude", "skills")
 }
 
-// integrateClaude implements `cpass integrate claude [--path DIR]`: write
-// the ClaudePass plugin (hooks + skill) into DIR/claudepass, a Claude Code
-// skills-directory plugin folder. Claude Code loads any folder there with a
-// .claude-plugin/plugin.json automatically, on the next session, as
+// integrateClaude implements `cpass integrate claude [--path DIR] [--remove]`:
+// write the ClaudePass plugin (hooks + skill) into DIR/claudepass, a Claude
+// Code skills-directory plugin folder. Claude Code loads any folder there
+// with a .claude-plugin/plugin.json automatically, on the next session, as
 // claudepass@skills-dir — no marketplace registration or `claude plugin
 // install` step, and nothing here shells out to the claude binary, so this
 // works even before Claude Code has been installed. --path exists mainly
 // so a non-default install target (or a test) never has to touch the real
-// ~/.claude/skills directory.
+// ~/.claude/skills directory. --remove is the inverse: it deletes only the
+// files cpass itself wrote into that plugin directory, and the directory
+// tree along with them if nothing else is left inside (see
+// integrate.RemoveClaudePlugin for the scoped deletion and the safety
+// check that keeps it from touching a directory cpass didn't itself
+// install).
 func integrateClaude(e *env, args []string) int {
 	fs := flag.NewFlagSet("integrate claude", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	dir := fs.String("path", defaultClaudeSkillsDir(), "Claude Code skills directory to install into")
+	remove := fs.Bool("remove", false, "remove the ClaudePass plugin this command installed")
 	if err := fs.Parse(args); err != nil {
-		return e.usageErr(err, "cpass integrate claude [--path DIR]")
+		return e.usageErr(err, "cpass integrate claude [--path DIR] [--remove]")
 	}
 	if fs.NArg() != 0 {
-		return e.fail(ExitUsage, "usage: cpass integrate claude [--path DIR]")
+		return e.fail(ExitUsage, "usage: cpass integrate claude [--path DIR] [--remove]")
 	}
 
 	target := filepath.Join(*dir, "claudepass")
-	changed, err := integrate.WriteClaudePlugin(target)
+
+	if *remove {
+		removed, whole, err := integrate.RemoveClaudePlugin(target)
+		if err != nil {
+			return e.failErr(err)
+		}
+		if !removed {
+			fprintf(e.stdout, "%s not installed, nothing to remove\n", target)
+			return ExitOK
+		}
+		if whole {
+			fprintf(e.stdout, "removed %s\n", target)
+		} else {
+			fprintf(e.stdout, "removed the ClaudePass plugin from %s\n", target)
+		}
+		return ExitOK
+	}
+
+	changed, err := integrate.WriteClaudePlugin(target, effectiveVersion())
 	if err != nil {
 		return e.failErr(err)
 	}

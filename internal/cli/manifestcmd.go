@@ -16,9 +16,15 @@ func init() {
 	register(command{"manifest", "declare the Handles a project needs: manifest init|add|check|global", cmdManifest})
 }
 
+const manifestUsage = "usage: cpass manifest init | add <handle> [--binding NAME] [--file] [-g] | check [-g] | global <on|off>"
+
 func cmdManifest(e *env) int {
 	if len(e.args) == 0 {
-		return e.fail(ExitUsage, "usage: cpass manifest init | add <handle> [--binding NAME] [--file] [-g] | check [-g] | global <on|off>")
+		return e.fail(ExitUsage, manifestUsage)
+	}
+	if isHelpFlag(e.args[0]) {
+		fprintln(e.stdout, manifestUsage)
+		return ExitOK
 	}
 	sub, rest := e.args[0], e.args[1:]
 	switch sub {

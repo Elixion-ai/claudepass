@@ -25,6 +25,8 @@ an Agent reads it, so it must be legible, quiet, and never leak a Secret.
 | Handle collision involving a Global Handle (MCP `run_with_secrets`) — an `isError: true` tool result, not a process exit code; no `cpass: ` prefix, unlike the CLI | `handle collision: <a> and <b> both bind <VAR>` | `handle collision: stripe/live and stripe/test both bind STRIPE_KEY` |
 | Exposed reminder | `cpass: <handle> is Exposed since <date>, rotate it` | |
 | Locked Vault | `cpass: vault is locked, run cpass unlock` | |
+| Undid an integration (`cpass integrate codex/claude --remove`) | `removed <path>` (nothing else was there) or, partial — some non-ClaudePass content survives — `removed the ClaudePass section from <path>` (codex) / `removed the ClaudePass plugin from <path>` (claude: any file `cpass integrate claude` didn't itself write, anywhere under the installed plugin directory, is left in place rather than deleted with it) | `removed AGENTS.md` |
+| Nothing to undo (`cpass integrate codex/claude --remove`, idempotent no-op) | `<path> has no ClaudePass section, nothing to remove` / `<path> not installed, nothing to remove` / `<path> does not exist, nothing to remove` | `AGENTS.md has no ClaudePass section, nothing to remove` |
 
 `cpass add`'s success line is a confirmation, not a diagnostic — like
 `init`/`rm`/`mv`'s own success lines, it skips the `cpass: ` prefix. It
@@ -87,6 +89,32 @@ relies on, since those tests always capture through a pipe.
 ## Terminal demos (asciinema / GIF)
 - 80×24, one idea per demo, ~2s pauses. Never type a real Secret on camera —
   use `cpass add` off-screen and a fake `sk_live_…` for the Intercept demo.
-- Show the mechanism, not the value: the winning shot is `cpass run -- env`
-  printing `STRIPE_SECRET_KEY=[REDACTED:stripe/live]`.
+  Set up the Vault and a Manifest declaring `stripe/live` off-screen too
+  (`cpass manifest add stripe/live`, as in the README quickstart).
+- Show the mechanism, not the value: the winning shot is `cpass run
+  --unsafe-allow -- sh -c 'echo STRIPE_LIVE=$STRIPE_LIVE'`, printing
+  `STRIPE_LIVE=[REDACTED:stripe/live]`. Command Policy refuses it outright
+  (exit 3, `echo would print $STRIPE_LIVE`) without `--unsafe-allow` — the
+  human-only override that needs a real terminal to grant, exactly what a
+  person filming this demo is doing. Redaction still catches the value
+  regardless: this one shot proves both halves of the design in order — a
+  human can choose to see the raw command, but never the raw Secret. Never
+  use bare `env` for this (an earlier draft of this doc did): with no
+  arguments it dumps the whole process environment, not one Handle —
+  dozens of ambient variables (`PATH`, `HOME`, …) that overflow this
+  section's own 80×24/one-idea-per-demo guidance, and in a CI-style setup
+  that unlocks via `CPASS_KEY` rather than the macOS Keychain (the
+  documented unattended path, docs/SECURITY.md), `env` broadcasts
+  `CPASS_KEY` itself in the clear, since Redaction only masks Bound Handle
+  values it knows about, never the Vault's own master key. Verified live
+  against a built binary in an isolated Vault (CLA-74): `cpass run -- sh -c
+  'echo STRIPE_LIVE=$STRIPE_LIVE'` exits 3 with `cpass: refused: echo would
+  print $STRIPE_LIVE — pass the variable to the tool that needs it
+  instead`; with `--unsafe-allow` at a real terminal it exits 0, prints
+  `STRIPE_LIVE=[REDACTED:stripe/live]` to stdout, and — cpass's own
+  redaction notice, not part of the "one idea" but always present
+  alongside it — `cpass: redacted stripe/live from output (1×); the Agent
+  must use the value, not print it` to stderr: two lines on screen, both
+  the mechanism working as designed, never the raw Secret or anything else
+  ambient.
 - Amber prompt, `#0e0a06` background, Press Start 2P for any title card.

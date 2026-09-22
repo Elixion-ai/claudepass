@@ -204,12 +204,16 @@ func cmdLs(e *env) int {
 	long := fs.Bool("l", false, "show Binding, Exposed state and Global declaration")
 	onlyExposed := fs.Bool("exposed", false, "only Exposed Secrets")
 	onlyGlobal := fs.Bool("global", false, "only Handles declared in the Global Manifest")
-	if err := fs.Parse(e.args); err != nil {
+	pos, err := parseInterspersed(fs, e.args)
+	if err != nil {
 		return e.usageErr(err, "cpass ls [prefix] [-l] [--exposed] [--global]")
 	}
+	if len(pos) > 1 {
+		return e.fail(ExitUsage, "usage: cpass ls [prefix] [-l] [--exposed] [--global]")
+	}
 	prefix := ""
-	if fs.NArg() > 0 {
-		prefix = fs.Arg(0)
+	if len(pos) == 1 {
+		prefix = pos[0]
 	}
 	v, code := openVault(e)
 	if code != ExitOK {
