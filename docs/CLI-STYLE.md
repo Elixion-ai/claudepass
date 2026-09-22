@@ -25,7 +25,7 @@ an Agent reads it, so it must be legible, quiet, and never leak a Secret.
 | Handle collision involving a Global Handle (MCP `run_with_secrets`) — an `isError: true` tool result, not a process exit code; no `cpass: ` prefix, unlike the CLI | `handle collision: <a> and <b> both bind <VAR>` | `handle collision: stripe/live and stripe/test both bind STRIPE_KEY` |
 | Exposed reminder | `cpass: <handle> is Exposed since <date>, rotate it` | |
 | Locked Vault | `cpass: vault is locked, run cpass unlock` | |
-| Undid an integration (`cpass integrate codex/claude --remove`) | `removed <path>` (nothing else was there) or `removed the ClaudePass section from <path>` (partial) | `removed AGENTS.md` |
+| Undid an integration (`cpass integrate codex/claude --remove`) | `removed <path>` (nothing else was there) or, partial — some non-ClaudePass content survives — `removed the ClaudePass section from <path>` (codex) / `removed the ClaudePass plugin from <path>` (claude: any file `cpass integrate claude` didn't itself write, anywhere under the installed plugin directory, is left in place rather than deleted with it) | `removed AGENTS.md` |
 | Nothing to undo (`cpass integrate codex/claude --remove`, idempotent no-op) | `<path> has no ClaudePass section, nothing to remove` / `<path> not installed, nothing to remove` / `<path> does not exist, nothing to remove` | `AGENTS.md has no ClaudePass section, nothing to remove` |
 
 `cpass add`'s success line is a confirmation, not a diagnostic — like

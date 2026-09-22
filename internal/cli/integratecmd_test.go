@@ -140,8 +140,10 @@ func TestIntegrateClaudeStampsPluginVersionFromCLIVersion(t *testing.T) {
 }
 
 // TestIntegrateClaudeRemove is CLA-78's acceptance case for `cpass
-// integrate claude --remove`: it must delete the installed plugin
-// directory and be a safe, idempotent no-op when nothing was installed.
+// integrate claude --remove`: it must delete only the files it wrote (the
+// whole plugin directory too, when nothing else is left inside), leave
+// unrelated content alone, and be a safe, idempotent no-op when nothing was
+// installed.
 func TestIntegrateClaudeRemove(t *testing.T) {
 	t.Run("removes the installed plugin directory", func(t *testing.T) {
 		dir := t.TempDir()
@@ -164,6 +166,55 @@ func TestIntegrateClaudeRemove(t *testing.T) {
 		}
 		if _, err := os.Stat(target); !os.IsNotExist(err) {
 			t.Fatalf("%s still exists after --remove: %v", target, err)
+		}
+	})
+
+	// TestIntegrateClaudeRemove/"leaves files it did not write alone" is
+	// CLA-78's review regression (blocker): --remove used to os.RemoveAll
+	// the whole installed directory, destroying any file a user (or
+	// another tool) had since placed inside it. It must delete only the
+	// files cpass itself wrote and leave the rest — and the plugin
+	// directory itself — standing.
+	t.Run("leaves files it did not write alone", func(t *testing.T) {
+		dir := t.TempDir()
+		if code := Main([]string{"integrate", "claude", "--path", dir}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); code != ExitOK {
+			t.Fatal("install failed")
+		}
+		target := filepath.Join(dir, "claudepass")
+
+		extra := filepath.Join(target, "skills", "claudepass", "my-own-notes", "todo.txt")
+		if err := os.MkdirAll(filepath.Dir(extra), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(extra, []byte("keep me"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		extraHook := filepath.Join(target, "MY_CUSTOM_HOOK.md")
+		if err := os.WriteFile(extraHook, []byte("keep me too"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		var out, errb bytes.Buffer
+		code := Main([]string{"integrate", "claude", "--path", dir, "--remove"}, strings.NewReader(""), &out, &errb)
+		if code != ExitOK {
+			t.Fatalf("remove: exit = %d, stderr = %q", code, errb.String())
+		}
+		if !strings.Contains(out.String(), "removed the ClaudePass plugin from "+target) {
+			t.Fatalf("remove stdout = %q, want it to say the plugin (not the whole directory) was removed", out.String())
+		}
+
+		skillPath := filepath.Join(target, "skills", "claudepass", "SKILL.md")
+		if _, err := os.Stat(skillPath); !os.IsNotExist(err) {
+			t.Fatalf("SKILL.md should have been removed: %v", err)
+		}
+		if _, err := os.Stat(extra); err != nil {
+			t.Fatalf("unrelated file was deleted: %v", err)
+		}
+		if _, err := os.Stat(extraHook); err != nil {
+			t.Fatalf("unrelated file was deleted: %v", err)
+		}
+		if _, err := os.Stat(target); err != nil {
+			t.Fatalf("plugin directory should still exist (unrelated content remains): %v", err)
 		}
 	})
 

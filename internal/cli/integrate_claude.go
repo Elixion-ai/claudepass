@@ -33,9 +33,12 @@ func defaultClaudeSkillsDir() string {
 // install` step, and nothing here shells out to the claude binary, so this
 // works even before Claude Code has been installed. --path exists mainly
 // so a non-default install target (or a test) never has to touch the real
-// ~/.claude/skills directory. --remove is the inverse: it deletes that same
-// plugin directory (see integrate.RemoveClaudePlugin for the safety check
-// that keeps it from touching a directory cpass didn't itself install).
+// ~/.claude/skills directory. --remove is the inverse: it deletes only the
+// files cpass itself wrote into that plugin directory, and the directory
+// tree along with them if nothing else is left inside (see
+// integrate.RemoveClaudePlugin for the scoped deletion and the safety
+// check that keeps it from touching a directory cpass didn't itself
+// install).
 func integrateClaude(e *env, args []string) int {
 	fs := flag.NewFlagSet("integrate claude", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -51,7 +54,7 @@ func integrateClaude(e *env, args []string) int {
 	target := filepath.Join(*dir, "claudepass")
 
 	if *remove {
-		removed, err := integrate.RemoveClaudePlugin(target)
+		removed, whole, err := integrate.RemoveClaudePlugin(target)
 		if err != nil {
 			return e.failErr(err)
 		}
@@ -59,7 +62,11 @@ func integrateClaude(e *env, args []string) int {
 			fprintf(e.stdout, "%s not installed, nothing to remove\n", target)
 			return ExitOK
 		}
-		fprintf(e.stdout, "removed %s\n", target)
+		if whole {
+			fprintf(e.stdout, "removed %s\n", target)
+		} else {
+			fprintf(e.stdout, "removed the ClaudePass plugin from %s\n", target)
+		}
 		return ExitOK
 	}
 

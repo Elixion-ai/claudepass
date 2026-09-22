@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	pluginfiles "github.com/Elixion-ai/claudepass/plugins/claude-code"
 )
@@ -106,29 +108,99 @@ func WriteClaudePlugin(dir, version string) (bool, error) {
 	return changed, err
 }
 
-// RemoveClaudePlugin deletes the plugin directory at dir — but only when it
-// still looks like the plugin WriteClaudePlugin itself installed there (a
-// .claude-plugin/plugin.json naming PluginName). A missing dir, or one
-// whose manifest doesn't match, reports no change rather than deleting
-// anything: --remove must be a safe, idempotent no-op both when nothing
-// was ever installed and when --path was pointed at an unrelated
-// directory, never a blind os.RemoveAll of whatever's there.
-func RemoveClaudePlugin(dir string) (bool, error) {
+// pluginRelFiles returns the file paths (skipping directories) that
+// WriteClaudePlugin writes under a plugin install directory, exactly as
+// fs.WalkDir visits pluginfiles.FS. RemoveClaudePlugin reads this same list
+// so the two functions can never drift about what "a file cpass wrote"
+// means: it is never allowed to delete anything this list doesn't name.
+func pluginRelFiles() ([]string, error) {
+	var files []string
+	err := fs.WalkDir(pluginfiles.FS, ".", func(name string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			files = append(files, filepath.FromSlash(name))
+		}
+		return nil
+	})
+	return files, err
+}
+
+// RemoveClaudePlugin deletes only the files WriteClaudePlugin itself wrote
+// under dir (.claude-plugin/plugin.json, hooks/hooks.json,
+// skills/claudepass/SKILL.md — see pluginRelFiles), then removes any parent
+// directory that ends up empty as a result, walking up towards dir. It
+// never touches a file it didn't itself write, or a directory still
+// holding one: a user (or another tool) may have since added a file of
+// their own inside the installed plugin folder, and --remove must leave
+// that alone rather than deleting it with the rest — never a blind
+// os.RemoveAll of whatever's there (CLA-78).
+//
+// It first checks dir's .claude-plugin/plugin.json names PluginName, the
+// same guard as before: a missing dir, or one whose manifest doesn't
+// match, reports removed = false rather than deleting anything, so --path
+// pointed at an unrelated directory is always a safe no-op.
+//
+// removed reports whether anything cpass wrote was actually deleted. whole
+// reports whether dir itself ended up empty and was removed too, as
+// opposed to some unrelated file surviving inside it — the same
+// distinction integrate codex --remove already draws between "the whole
+// thing is gone" and "only our part was", so the caller can print the
+// right message either way.
+func RemoveClaudePlugin(dir string) (removed, whole bool, err error) {
 	raw, err := os.ReadFile(filepath.Join(dir, ".claude-plugin", "plugin.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, nil
+			return false, false, nil
 		}
-		return false, err
+		return false, false, err
 	}
 	var manifest struct {
 		Name string `json:"name"`
 	}
 	if err := json.Unmarshal(raw, &manifest); err != nil || manifest.Name != PluginName {
-		return false, nil
+		return false, false, nil
 	}
-	if err := os.RemoveAll(dir); err != nil {
-		return false, err
+
+	files, err := pluginRelFiles()
+	if err != nil {
+		return false, false, err
 	}
-	return true, nil
+
+	// parentDirs collects every directory (relative to dir) that held a
+	// file we just deleted, so it can be cleaned up below if — and only
+	// if — nothing else is left in it.
+	parentDirs := map[string]bool{}
+	for _, rel := range files {
+		if rerr := os.Remove(filepath.Join(dir, rel)); rerr != nil {
+			if !os.IsNotExist(rerr) {
+				return removed, false, rerr
+			}
+			continue
+		}
+		removed = true
+		for d := filepath.Dir(rel); d != "."; d = filepath.Dir(d) {
+			parentDirs[d] = true
+		}
+	}
+
+	// Remove directories left empty by that deletion, deepest first, so a
+	// directory a user also put an unrelated file into is left standing —
+	// along with every ancestor up to dir — instead of being deleted out
+	// from under that file: os.Remove only ever succeeds on an empty
+	// directory.
+	ordered := make([]string, 0, len(parentDirs))
+	for d := range parentDirs {
+		ordered = append(ordered, d)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		return strings.Count(ordered[i], string(filepath.Separator)) > strings.Count(ordered[j], string(filepath.Separator))
+	})
+	for _, d := range ordered {
+		_ = os.Remove(filepath.Join(dir, d)) // ignore: non-empty (unrelated content left behind) or already gone
+	}
+	whole = os.Remove(dir) == nil // same: only succeeds once dir itself is empty
+
+	return removed, whole, nil
 }

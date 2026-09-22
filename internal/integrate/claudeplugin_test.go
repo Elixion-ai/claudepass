@@ -168,12 +168,15 @@ func TestRemoveClaudePluginOnAFreshInstall(t *testing.T) {
 	if _, err := WriteClaudePlugin(dir, testVersion); err != nil {
 		t.Fatal(err)
 	}
-	removed, err := RemoveClaudePlugin(dir)
+	removed, whole, err := RemoveClaudePlugin(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !removed {
 		t.Fatal("expected removed = true")
+	}
+	if !whole {
+		t.Fatal("expected whole = true: nothing but cpass's own files were there")
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("plugin directory still exists after RemoveClaudePlugin: %v", err)
@@ -182,7 +185,7 @@ func TestRemoveClaudePluginOnAFreshInstall(t *testing.T) {
 
 func TestRemoveClaudePluginWhenNothingInstalledIsANoop(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "claudepass")
-	removed, err := RemoveClaudePlugin(dir)
+	removed, _, err := RemoveClaudePlugin(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,10 +199,10 @@ func TestRemoveClaudePluginIsIdempotent(t *testing.T) {
 	if _, err := WriteClaudePlugin(dir, testVersion); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RemoveClaudePlugin(dir); err != nil {
+	if _, _, err := RemoveClaudePlugin(dir); err != nil {
 		t.Fatal(err)
 	}
-	removed, err := RemoveClaudePlugin(dir)
+	removed, _, err := RemoveClaudePlugin(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +221,7 @@ func TestRemoveClaudePluginLeavesAnUnrelatedDirectoryAlone(t *testing.T) {
 	if err := os.WriteFile(sentinel, []byte("keep me"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	removed, err := RemoveClaudePlugin(dir)
+	removed, _, err := RemoveClaudePlugin(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,6 +230,74 @@ func TestRemoveClaudePluginLeavesAnUnrelatedDirectoryAlone(t *testing.T) {
 	}
 	if _, err := os.Stat(sentinel); err != nil {
 		t.Fatalf("unrelated file was deleted: %v", err)
+	}
+}
+
+// TestRemoveClaudePluginPreservesFilesItDidNotWrite is CLA-78's review
+// regression (blocker): RemoveClaudePlugin used to os.RemoveAll the whole
+// installed directory, destroying any file a user or another tool had
+// since added alongside the ones cpass wrote. It must instead delete only
+// the files WriteClaudePlugin itself wrote and leave everything else —
+// and the directories holding it — standing.
+func TestRemoveClaudePluginPreservesFilesItDidNotWrite(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "claudepass")
+	if _, err := WriteClaudePlugin(dir, testVersion); err != nil {
+		t.Fatal(err)
+	}
+
+	// A file dropped alongside SKILL.md, inside a cpass-owned directory...
+	extraInOwnedDir := filepath.Join(dir, "skills", "claudepass", "my-own-notes.txt")
+	if err := os.WriteFile(extraInOwnedDir, []byte("keep me"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// ...and a whole extra directory of the user's own at the plugin root.
+	extraDir := filepath.Join(dir, "my-extra-dir")
+	if err := os.MkdirAll(extraDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	extraInExtraDir := filepath.Join(extraDir, "todo.txt")
+	if err := os.WriteFile(extraInExtraDir, []byte("keep me too"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, whole, err := RemoveClaudePlugin(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("expected removed = true: cpass's own files were deleted")
+	}
+	if whole {
+		t.Fatal("expected whole = false: unrelated files are still inside dir")
+	}
+
+	// cpass's own files are gone.
+	for _, rel := range []string{
+		filepath.Join(".claude-plugin", "plugin.json"),
+		filepath.Join("hooks", "hooks.json"),
+		filepath.Join("skills", "claudepass", "SKILL.md"),
+	} {
+		if _, err := os.Stat(filepath.Join(dir, rel)); !os.IsNotExist(err) {
+			t.Fatalf("%s should have been removed: %v", rel, err)
+		}
+	}
+	// Directories cpass wrote into but that now hold nothing of ours are
+	// gone too (hooks/, .claude-plugin/) -- but not skills/, since
+	// skills/claudepass/ still holds the user's own file.
+	for _, rel := range []string{"hooks", ".claude-plugin"} {
+		if _, err := os.Stat(filepath.Join(dir, rel)); !os.IsNotExist(err) {
+			t.Fatalf("%s should have been cleaned up as empty: %v", rel, err)
+		}
+	}
+
+	// The user's own files, and the directories holding them, survive.
+	for _, path := range []string{extraInOwnedDir, extraInExtraDir} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("unrelated file was deleted: %v", err)
+		}
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("plugin directory should still exist (unrelated content remains): %v", err)
 	}
 }
 

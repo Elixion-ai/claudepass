@@ -116,11 +116,11 @@ repo's own test suite (`internal/e2e/docs_test.go`), so it can't drift out
 of date with the CLI it documents.
 
 Either integration undoes cleanly: `cpass integrate claude --remove` deletes
-the installed plugin directory, and `cpass integrate codex --remove` deletes
-the delimited section it wrote from `AGENTS.md` — the whole file too, if
-nothing else was in it. Both only ever touch what `cpass integrate` itself
-wrote, and are safe to run again or on a machine where nothing was ever
-installed.
+the files it installed (the plugin directory too, if nothing else ended up
+inside it), and `cpass integrate codex --remove` deletes the delimited
+section it wrote from `AGENTS.md` — the whole file too, if nothing else was
+in it. Both only ever touch what `cpass integrate` itself wrote, and are
+safe to run again or on a machine where nothing was ever installed.
 
 ## Handles, the Manifest, Capture, and Intercept
 
