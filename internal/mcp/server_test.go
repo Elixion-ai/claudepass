@@ -148,6 +148,64 @@ func TestPingReplies(t *testing.T) {
 	}
 }
 
+// TestCancelSuppressesAPendingResponse and its neighbours below exercise
+// cancel.go's tracking directly, at the JSON-RPC layer, without touching
+// the Vault or spawning a command — see this file's own package doc
+// comment above for why: the full run_with_secrets/capture cancellation
+// behaviour (killing the child) is internal/e2e/mcp_test.go's
+// TestMCPCancelledRunWithSecretsUnblocksQueuedPing.
+
+func TestCancelSuppressesAPendingResponse(t *testing.T) {
+	var out bytes.Buffer
+	s := newServer(&out, "test")
+	id := json.RawMessage("5")
+	cancel, done := s.beginCancellable(id)
+	s.handleCancelled(request{Params: json.RawMessage(`{"requestId":5}`)})
+	select {
+	case <-cancel:
+	default:
+		t.Fatal("handleCancelled did not close the call's cancel channel")
+	}
+	s.writeResult(id, map[string]any{"ok": true})
+	done()
+	if out.Len() != 0 {
+		t.Fatalf("cancelled call should get no response, got %q", out.String())
+	}
+}
+
+func TestUncancelledCallStillGetsItsResponse(t *testing.T) {
+	var out bytes.Buffer
+	s := newServer(&out, "test")
+	id := json.RawMessage("6")
+	_, done := s.beginCancellable(id)
+	s.writeResult(id, map[string]any{"ok": true})
+	done()
+	if out.Len() == 0 {
+		t.Fatal("want a response written for a call nothing cancelled")
+	}
+}
+
+// TestCancelOfUnknownOrFinishedRequestIsANoOp covers the MCP Cancellation
+// spec's "MAY ignore" case: an id that was never registered (unknown to
+// this server) or already removed by its own completion (done already
+// called) must not panic and must not disturb some other, unrelated
+// response.
+func TestCancelOfUnknownOrFinishedRequestIsANoOp(t *testing.T) {
+	var out bytes.Buffer
+	s := newServer(&out, "test")
+	s.handleCancelled(request{Params: json.RawMessage(`{"requestId":999}`)}) // never registered
+
+	id := json.RawMessage("8")
+	_, done := s.beginCancellable(id)
+	done() // finished (and cleaned up) before any cancellation arrives
+	s.handleCancelled(request{Params: json.RawMessage(`{"requestId":8}`)})
+
+	s.writeResult(id, map[string]any{"ok": true})
+	if out.Len() == 0 {
+		t.Fatal("a cancellation for an already-finished call must not suppress a later, same-id response")
+	}
+}
+
 func TestMultipleRequestsGetMatchingIDsInOrder(t *testing.T) {
 	got := serveOne(t,
 		`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`,

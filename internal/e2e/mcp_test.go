@@ -4,11 +4,16 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // mcpSession drives `cpass mcp` as a live subprocess talking JSON-RPC 2.0
@@ -565,5 +570,246 @@ func TestMCPListHandlesFiltersToGlobal(t *testing.T) {
 	text, _ = s.callToolText("list_handles", map[string]any{})
 	if !strings.Contains(text, "a/one") || !strings.Contains(text, "b/two") {
 		t.Fatalf("unfiltered listing must show both: %s", text)
+	}
+}
+
+// TestMCPCancelledRunWithSecretsUnblocksQueuedPing is CLA-76's repro: a
+// sleep-wrapped run_with_secrets call, a notifications/cancelled for it,
+// then a ping, sent back to back with none of their responses read in
+// between (the exact ordering that used to leave the cancellation and the
+// ping both sitting unread on stdin until the blocking call finished on its
+// own). It asserts two separate things the fix promises: the ping's
+// response arrives long before the sleep would finish on its own (the read
+// loop was never blocked behind it), and the cancelled call never gets a
+// response at all — per the MCP Cancellation spec — and its child was
+// actually killed rather than left to finish in the background.
+func TestMCPCancelledRunWithSecretsUnblocksQueuedPing(t *testing.T) {
+	ve := newVault(t)
+	s := startMCP(t, ve)
+	s.initialize()
+
+	marker := filepath.Join(t.TempDir(), "marker")
+	s.nextID++
+	sleepID := s.nextID
+	s.write(map[string]any{
+		"jsonrpc": "2.0", "id": sleepID, "method": "tools/call",
+		"params": map[string]any{
+			"name": "run_with_secrets",
+			"arguments": map[string]any{
+				"command": []string{"sh", "-c", "sleep 3 && touch " + marker},
+			},
+		},
+	})
+	s.write(map[string]any{
+		"jsonrpc": "2.0", "method": "notifications/cancelled",
+		"params": map[string]any{"requestId": sleepID},
+	})
+
+	start := time.Now()
+	s.call("ping", nil)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("ping took %s: the sleep-wrapped call still blocked the read loop", elapsed)
+	}
+
+	// Give the child's own 3s sleep well past enough time to have finished
+	// and touched marker if it were still running unattended, then check it
+	// never did — proof the cancellation actually killed it rather than
+	// merely detaching from it — and that no response ever arrived for
+	// sleepID, per the MCP Cancellation spec.
+	time.Sleep(4 * time.Second)
+	for _, line := range bytes.Split(bytes.TrimSpace([]byte(s.rawOut.String())), []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var m struct {
+			ID any `json:"id"`
+		}
+		if err := json.Unmarshal(line, &m); err != nil {
+			continue
+		}
+		if id, ok := m.ID.(float64); ok && int(id) == sleepID {
+			t.Fatalf("cancelled request got a response, want none: %s", line)
+		}
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("child process kept running after cancellation instead of being killed")
+	}
+}
+
+// TestMCPKeychainUnlockKeyIsCachedAcrossCalls is CLA-77's acceptance
+// benchmark: on the real macOS Keychain path (no CPASS_KEY), the first
+// list_handles call pays UnlockKey()'s `security` subprocess cost, and
+// every call after it must be dramatically cheaper — served from the
+// server's cached key rather than shelling out again. A unique
+// CPASS_KEYCHAIN_SERVICE means this never touches a real "cpass" Keychain
+// item, and the item is deleted when the test ends (see
+// TestKeychainUnlockRoundTrip in unlock_test.go, the existing pattern this
+// follows).
+func TestMCPKeychainUnlockKeyIsCachedAcrossCalls(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Keychain unlock is macOS-only")
+	}
+	service := fmt.Sprintf("cpass-e2e-test-%d-%d", os.Getpid(), time.Now().UnixNano())
+	ve := lockedVault(t)
+	env := []string{"CPASS_KEYCHAIN_SERVICE=" + service}
+	t.Cleanup(func() {
+		_ = exec.Command("security", "delete-generic-password", "-a", ve.vaultPath(), "-s", service).Run() // best-effort cleanup
+	})
+	if r := ve.runEnv(env, nil, "init"); r.code != 0 {
+		t.Fatalf("init: %s", r)
+	}
+
+	cmd := exec.Command(cpassBin, "mcp")
+	cmd.Env = append(baseEnv(), "CPASS_HOME="+ve.home) // deliberately no CPASS_KEY: exercise the Keychain
+	cmd.Env = append(cmd.Env, env...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	raw := &syncBuffer{}
+	s := &mcpSession{
+		t: t, cmd: cmd, stdin: stdin, rawOut: raw, stderr: &stderr,
+		reader: bufio.NewReaderSize(io.TeeReader(stdoutPipe, raw), 1<<20),
+	}
+	t.Cleanup(func() {
+		_ = s.stdin.Close()
+		_ = s.cmd.Wait()
+	})
+	s.initialize()
+
+	const calls = 10
+	var latencies [calls]time.Duration
+	for i := range latencies {
+		start := time.Now()
+		text, isError := s.callToolText("list_handles", map[string]any{})
+		latencies[i] = time.Since(start)
+		if isError {
+			t.Fatalf("list_handles call %d: %s", i, text)
+		}
+	}
+
+	first := latencies[0]
+	var restTotal time.Duration
+	for _, d := range latencies[1:] {
+		restTotal += d
+	}
+	restAvg := restTotal / time.Duration(len(latencies)-1)
+	t.Logf("first call %s, average of the other %d calls %s", first, len(latencies)-1, restAvg)
+	// The gap this asserts on (first call pays one `security` subprocess,
+	// ~15ms; a cached call is sub-millisecond — CLA-77's own measurement)
+	// is roughly 24x, so a generous fraction of the first call still leaves
+	// a wide, load-tolerant margin against the always-fresh, uncached
+	// behaviour this is a regression test for.
+	if restAvg > first/3 {
+		t.Fatalf("later calls (avg %s) were not meaningfully cheaper than the first (%s): the unlock key does not look cached", restAvg, first)
+	}
+}
+
+// TestMCPConcurrentCapturesAllSurvive is CLA-76's own regression test.
+// callAsync (cancel.go) makes run_with_secrets/capture run in their own
+// goroutine so a slow child never blocks the stdin read loop — which means
+// a real MCP client, which never has to wait for one response before
+// sending the next request, can now have two capture calls genuinely
+// in flight in this process at once. Nothing before vault.Update's file
+// lock (which replaced an interim in-process mutex) serialized callCapture's Open -> mutate -> Save cycle across that new
+// concurrency, so two overlapping captures raced vault.go's fixed
+// vault.cpv.tmp path and each other's in-memory Vault snapshot: silently
+// losing a handle, a hard rename error, or (worst case) a corrupted Vault.
+// Fired back-to-back with a short sleep in each child so their post-sleep
+// Add/Save calls land close together, this reliably reproduced the loss on
+// the unfixed code; run with -race, which also catches any bare data race
+// the fix might introduce, not just the corruption itself.
+func TestMCPConcurrentCapturesAllSurvive(t *testing.T) {
+	ve := newVault(t)
+	s := startMCP(t, ve)
+	s.initialize()
+
+	const n = 6
+	ids := make([]int, n)
+	for i := 0; i < n; i++ {
+		s.nextID++
+		ids[i] = s.nextID
+		s.write(map[string]any{
+			"jsonrpc": "2.0", "id": ids[i], "method": "tools/call",
+			"params": map[string]any{
+				"name": "capture",
+				"arguments": map[string]any{
+					"handle":  fmt.Sprintf("race/handle-%d", i),
+					"command": []string{"sh", "-c", fmt.Sprintf("sleep 0.05; echo captured-value-%d", i)},
+				},
+			},
+		})
+	}
+
+	type callResult struct {
+		text    string
+		isError bool
+	}
+	results := make(map[int]callResult, n)
+	for i := 0; i < n; i++ {
+		line := s.readLine()
+		var resp struct {
+			ID     int `json:"id"`
+			Result struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+				IsError bool `json:"isError"`
+			} `json:"result"`
+			Error *struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(line, &resp); err != nil {
+			t.Fatalf("bad response %q: %v", line, err)
+		}
+		if resp.Error != nil {
+			t.Fatalf("capture id %d: rpc error %d: %s", resp.ID, resp.Error.Code, resp.Error.Message)
+		}
+		text := ""
+		if len(resp.Result.Content) > 0 {
+			text = resp.Result.Content[0].Text
+		}
+		results[resp.ID] = callResult{text: text, isError: resp.Result.IsError}
+	}
+	for i, id := range ids {
+		r, ok := results[id]
+		if !ok {
+			t.Fatalf("no response for capture %d (handle race/handle-%d)", id, i)
+		}
+		if r.isError {
+			t.Fatalf("capture %d (race/handle-%d) reported an error: %s", id, i, r.text)
+		}
+	}
+
+	listText, isError := s.callToolText("list_handles", map[string]any{})
+	if isError {
+		t.Fatalf("list_handles reported an error: %s", listText)
+	}
+	var listed struct {
+		Handles []string `json:"handles"`
+	}
+	if err := json.Unmarshal([]byte(listText), &listed); err != nil {
+		t.Fatalf("bad list_handles result %q: %v", listText, err)
+	}
+	have := map[string]bool{}
+	for _, h := range listed.Handles {
+		have[h] = true
+	}
+	for i := 0; i < n; i++ {
+		want := fmt.Sprintf("race/handle-%d", i)
+		if !have[want] {
+			t.Fatalf("handle %s missing after %d concurrent captures: got %v", want, n, listed.Handles)
+		}
 	}
 }

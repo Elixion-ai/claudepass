@@ -93,9 +93,11 @@ func (s *server) handleToolsCall(req request) {
 	case "list_handles":
 		s.callListHandles(req.ID, p.Arguments)
 	case "run_with_secrets":
-		s.callRunWithSecrets(req.ID, p.Arguments)
+		id, args := req.ID, p.Arguments
+		s.callAsync(id, func(cancel <-chan struct{}) { s.callRunWithSecrets(id, args, cancel) })
 	case "capture":
-		s.callCapture(req.ID, p.Arguments)
+		id, args := req.ID, p.Arguments
+		s.callAsync(id, func(cancel <-chan struct{}) { s.callCapture(id, args, cancel) })
 	default:
 		s.writeError(req.ID, -32602, "unknown tool: "+p.Name)
 	}
@@ -148,7 +150,7 @@ func (s *server) callListHandles(id json.RawMessage, raw json.RawMessage) {
 			return
 		}
 	}
-	v, err := broker.OpenVault()
+	v, err := s.keyCache.OpenVault() // CLA-77: reuse this server's cached key
 	if err != nil {
 		s.writeResult(id, textResult(true, err.Error()))
 		return
@@ -182,7 +184,14 @@ type runArgs struct {
 	NoGlobal bool      `json:"no_global"`
 }
 
-func (s *server) callRunWithSecrets(id json.RawMessage, raw json.RawMessage) {
+// callRunWithSecrets runs in its own goroutine (see callAsync in cancel.go)
+// so a slow child does not block the stdin read loop; cancel is that
+// call's own run.Spec.Cancel, closed by a matching notifications/cancelled
+// (handleCancelled, cancel.go) to kill the child early. Every response
+// this writes still goes through writeResult/writeError exactly as if it
+// ran synchronously — those already drop it if cancel fired (see
+// suppressed in cancel.go) — so nothing below needs to check cancel itself.
+func (s *server) callRunWithSecrets(id json.RawMessage, raw json.RawMessage, cancel <-chan struct{}) {
 	var a runArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
 		s.writeError(id, -32602, "invalid arguments: "+err.Error())
@@ -216,6 +225,8 @@ func (s *server) callRunWithSecrets(id json.RawMessage, raw json.RawMessage) {
 		// UnsafeAllow is always false: an MCP client is never the human
 		// terminal that --unsafe-allow requires, so Command Policy always
 		// applies here, the same as an Agent-invoked `cpass run`.
+		Resolver: s.keyCache.Resolve, // CLA-77: reuse this server's cached key
+		Cancel:   cancel,             // CLA-76: notifications/cancelled kills the child
 	})
 	if err != nil {
 		if errors.Is(err, run.ErrNoCommand) {
@@ -277,7 +288,13 @@ type captureArgs struct {
 	Cwd     string   `json:"cwd"`
 }
 
-func (s *server) callCapture(id json.RawMessage, raw json.RawMessage) {
+// callCapture runs in its own goroutine (see callAsync in cancel.go) so a
+// slow child does not block the stdin read loop; cancel is documented on
+// callRunWithSecrets above and behaves identically here. Its own Vault
+// write — the only one any tool here makes — goes through
+// keyCache.UpdateVault, whose file lock serializes it against every other
+// writer, concurrent tool calls in this process included (CLA-55, CLA-76).
+func (s *server) callCapture(id json.RawMessage, raw json.RawMessage, cancel <-chan struct{}) {
 	var a captureArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
 		s.writeError(id, -32602, "invalid arguments: "+err.Error())
@@ -293,10 +310,10 @@ func (s *server) callCapture(id json.RawMessage, raw json.RawMessage) {
 	}
 	// Fail fast, before running argv, and reject the common case of an
 	// already-used Handle without holding the write lock across a child
-	// process of arbitrary duration — see the broker.UpdateVault call below,
-	// at the end, for the check that actually has to be race-free with
-	// another writer (CLA-55).
-	precheck, err := broker.OpenVault()
+	// process of arbitrary duration — see the keyCache.UpdateVault call
+	// below, at the end, for the check that actually has to be race-free
+	// with another writer, in this process or any other (CLA-55).
+	precheck, err := s.keyCache.OpenVault() // CLA-77: reuse this server's cached key
 	if err != nil {
 		s.writeResult(id, textResult(true, err.Error()))
 		return
@@ -311,6 +328,7 @@ func (s *server) callCapture(id json.RawMessage, raw json.RawMessage) {
 	code, err := run.Run(run.Spec{
 		Argv: a.Command, Dir: a.Cwd, RawStdout: true,
 		Stdout: &stdout, Stderr: &stderr, Warn: &warn,
+		Cancel: cancel, // CLA-76: notifications/cancelled kills the child
 	})
 	if err != nil {
 		if errors.Is(err, run.ErrNoCommand) {
@@ -327,7 +345,7 @@ func (s *server) callCapture(id json.RawMessage, raw json.RawMessage) {
 	value := strings.TrimSuffix(stdout.String(), "\n")
 	value = strings.TrimSuffix(value, "\r")
 	var entry vault.Entry
-	err = broker.UpdateVault(func(v *vault.Vault) error {
+	err = s.keyCache.UpdateVault(func(v *vault.Vault) error {
 		// Re-checked here, not just above: argv may have run for a while,
 		// and this is the freshly reopened, lock-protected state another
 		// writer could have changed in the meantime (CLA-55).
