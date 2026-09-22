@@ -68,25 +68,87 @@ func TestKeyCacheRederivesAfterIdle(t *testing.T) {
 	}
 }
 
-// TestKeyCacheSlidesIdleWindowForwardOnEachCall proves the window is a
-// sliding idle timeout, not a fixed TTL counted from the first fetch —
-// mirroring process_unix.go's own Broker, whose Accept deadline resets on
-// every request: a cache kept busy by calls spaced closer together than
-// idle must never re-derive on its own.
-func TestKeyCacheSlidesIdleWindowForwardOnEachCall(t *testing.T) {
+// TestKeyCacheTTLDoesNotRenewOnActivity is CLA-77's fix for the sliding
+// window this test used to assert as correct: the cached key's lifetime is
+// a TTL anchored to when it was last (re-)derived, not a deadline that
+// slides forward on every hit. A cache kept continuously busy — the
+// ordinary case for an active Agent session driving cpass mcp — must still
+// re-derive once idle has elapsed since that anchor, the same as one that
+// went idle first (TestKeyCacheRederivesAfterIdle), even though every call
+// along the way was spaced well under idle apart. The old sliding
+// behaviour meant a busy `cpass mcp` process never re-derived at all,
+// defeating `cpass lock` for the rest of its life — see
+// TestKeyCacheHonorsALockEvenWhenKeptBusy below for that exact scenario.
+func TestKeyCacheTTLDoesNotRenewOnActivity(t *testing.T) {
 	k1 := bytes.Repeat([]byte{0x55}, vault.KeySize)
+	k2 := bytes.Repeat([]byte{0x88}, vault.KeySize)
 	t.Setenv(EnvKey, base64.StdEncoding.EncodeToString(k1))
 
-	c := NewKeyCache(60 * time.Millisecond)
-	for i := 0; i < 5; i++ {
+	const idle = 60 * time.Millisecond
+	c := NewKeyCache(idle)
+	start := time.Now()
+	for time.Since(start) < 45*time.Millisecond {
 		got, err := c.Key()
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !bytes.Equal(got, k1) {
-			t.Fatalf("call %d: got %x, want k1", i, got)
+			t.Fatalf("call within the TTL: got %x, want the still-cached k1", got)
 		}
-		time.Sleep(30 * time.Millisecond) // well under idle, keeps sliding it forward
+		time.Sleep(15 * time.Millisecond) // well under idle: keeps the cache "busy"
+	}
+
+	t.Setenv(EnvKey, base64.StdEncoding.EncodeToString(k2))
+	// Wait past idle measured from the FIRST fetch (start), not from the
+	// last call above: a sliding window would still have most of its
+	// budget left here (the last call was well under idle ago); a
+	// non-renewable TTL must not.
+	for time.Since(start) < idle+20*time.Millisecond {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	got, err := c.Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, k2) {
+		t.Fatalf("call past idle (measured from first fetch) despite continuous activity: got %x, want the re-derived k2 — the window renewed on activity instead of expiring", got)
+	}
+}
+
+// TestKeyCacheHonorsALockEvenWhenKeptBusy is CLA-77's own regression test,
+// on the scenario the finding live-reproduced: the Broker-socket path
+// (CPASS_UNLOCK=socket), where `cpass lock` makes the key source vanish
+// (nothing left listening on the socket, simulated here the same way
+// TestKeyCacheDropsAKeyThatFailedToRederive does, by clearing CPASS_KEY
+// with no Broker running). A KeyCache whose calls never stop coming —
+// closer together than idle, the whole way through — must still notice
+// within one idle window of its last derivation, not keep serving the
+// pre-lock key for as long as the process stays busy.
+func TestKeyCacheHonorsALockEvenWhenKeptBusy(t *testing.T) {
+	t.Setenv(EnvHome, t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv(EnvUnlock, "socket")
+	k1 := bytes.Repeat([]byte{0x77}, vault.KeySize)
+	t.Setenv(EnvKey, base64.StdEncoding.EncodeToString(k1))
+
+	const idle = 60 * time.Millisecond
+	c := NewKeyCache(idle)
+	start := time.Now()
+	lockedYet := false
+	var lastErr error
+	for time.Since(start) < idle+40*time.Millisecond {
+		if !lockedYet && time.Since(start) > 15*time.Millisecond {
+			t.Setenv(EnvKey, "") // simulate `cpass lock`: no key source left
+			lockedYet = true
+		}
+		if _, lastErr = c.Key(); lastErr != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond) // well under idle: keeps the cache "busy"
+	}
+	if lastErr == nil {
+		t.Fatal("a KeyCache kept continuously busy never noticed cpass lock: it would keep serving the pre-lock key for the rest of a busy cpass mcp process's life")
 	}
 }
 

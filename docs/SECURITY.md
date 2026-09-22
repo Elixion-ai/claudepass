@@ -195,19 +195,25 @@ whole Agent session, and calling `broker.UnlockKey()` on every one of
 of not being the CLI's one-shot invocation — measured at ~15ms/call on the
 macOS Keychain path above versus ~0.6ms/call with `CPASS_KEY` set. Its
 server struct instead holds the key in a `broker.KeyCache`
-(`internal/broker/keycache.go`) and reuses it across calls within a
-sliding idle window equal to the Broker's own `DefaultIdleTimeout` (4h,
-point 3 above) — the same bounded window every unlock source already
-treats as an acceptable lifetime for a key held in memory. This applies
-uniformly, Touch ID-protected Keychain item or not (see below): the plain,
-`CGO_ENABLED=0` `security`-CLI reader point 2 describes has no way to tell
-a Touch ID-protected item from an unprotected one, only whether the read
+(`internal/broker/keycache.go`) and reuses it across calls within a TTL
+equal to the Broker's own `DefaultIdleTimeout` (4h, point 3 above) — the
+same bounded window every unlock source already treats as an acceptable
+lifetime for a key held in memory. This applies uniformly, Touch
+ID-protected Keychain item or not (see below): the plain, `CGO_ENABLED=0`
+`security`-CLI reader point 2 describes has no way to tell a
+Touch ID-protected item from an unprotected one, only whether the read
 succeeds, so there is nothing to key a "skip the cache for this one" check
-off. Once the window elapses with no calls, the next one re-derives the
-key through `broker.UnlockKey()` exactly as before — which is what makes
-`cpass lock` (the Broker-socket path) or a rotated/removed Keychain item
-eventually take effect against an already-running `cpass mcp` process:
-within one idle window, not instantly.
+off. The TTL is anchored to when the key was last (re-)derived and is not
+extended by activity: an earlier version of this reset the clock on every
+call (a sliding window) and was found to defeat `cpass lock` entirely
+against a busy Agent session, since the window then never elapsed as long
+as calls kept arriving closer together than it (CLA-77). With the TTL, the
+next call once it elapses — however busy the cache has been — re-derives
+the key through `broker.UnlockKey()` exactly as before, which is what
+makes `cpass lock` (the Broker-socket path) or a rotated/removed Keychain
+item take effect against an already-running `cpass mcp` process: within
+one idle window of the key's last derivation, not instantly, and never
+longer than that regardless of how continuously the process is used.
 
 ## Opting into Touch ID / user-presence Keychain protection (CLA-23)
 

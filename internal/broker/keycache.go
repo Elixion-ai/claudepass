@@ -8,21 +8,24 @@ import (
 )
 
 // KeyCache holds an unlock key across repeated Broker operations within a
-// bounded idle window, so a caller that makes many calls from one
-// long-lived process (cpass mcp) does not re-derive the key — on the
-// macOS Keychain path, a `security` subprocess, ~15ms and ~24x the
-// in-process cost — on every single one (CLA-77). A CLI invocation never
-// constructs one: it makes at most a couple of Broker calls before the
-// process exits, so there is nothing to amortise, and Resolve/OpenVault
-// above stay the always-fresh default for it and every other caller.
+// bounded TTL, so a caller that makes many calls from one long-lived
+// process (cpass mcp) does not re-derive the key — on the macOS Keychain
+// path, a `security` subprocess, ~15ms and ~24x the in-process cost — on
+// every single one (CLA-77). A CLI invocation never constructs one: it
+// makes at most a couple of Broker calls before the process exits, so
+// there is nothing to amortise, and Resolve/OpenVault above stay the
+// always-fresh default for it and every other caller.
 //
-// The idle window, not a per-item ACL check, is what keeps a cached key
-// from silently outliving `cpass lock` or a rotated Keychain item: cpass
-// ships CGO_ENABLED=0 by default (ADR-0007), so the Keychain reader this
-// sits in front of (keychain_darwin.go's keychainGet) cannot tell a
-// user-presence (Touch ID) item from a plain one — only whether the read
-// itself succeeds, which is also the only signal a `security`(1) subprocess
-// call ever gave `cpass` to begin with. Bounding every cached key to
+// The bound is a TTL from when the key was last (re-)derived, not a
+// deadline that slides forward on every hit: see Key's own doc comment for
+// why activity must not be able to extend it. That non-renewable bound,
+// not a per-item ACL check, is what keeps a cached key from silently
+// outliving `cpass lock` or a rotated Keychain item: cpass ships
+// CGO_ENABLED=0 by default (ADR-0007), so the Keychain reader this sits in
+// front of (keychain_darwin.go's keychainGet) cannot tell a user-presence
+// (Touch ID) item from a plain one — only whether the read itself
+// succeeds, which is also the only signal a `security`(1) subprocess call
+// ever gave `cpass` to begin with. Bounding every cached key to
 // DefaultIdleTimeout — the same window the Linux/CI Broker process already
 // uses to hold a key in memory — means this cache is never a longer-lived
 // secret than the one the Broker itself already treats as an acceptable
@@ -37,25 +40,32 @@ type KeyCache struct {
 	at  time.Time
 }
 
-// NewKeyCache returns a KeyCache whose key re-derives after idle with no
-// calls. Pass DefaultIdleTimeout to match the Broker's own default.
+// NewKeyCache returns a KeyCache whose key re-derives once idle has
+// elapsed since it was last fetched, whether or not calls kept arriving in
+// between. Pass DefaultIdleTimeout to match the Broker's own default.
 func NewKeyCache(idle time.Duration) *KeyCache {
 	return &KeyCache{idle: idle}
 }
 
-// Key returns the cached key if one was fetched within the idle window,
-// re-deriving it through UnlockKey() otherwise. Every call, hit or miss,
-// slides the window forward from now — the same way the Broker process's
-// own Accept deadline resets on every request (process_unix.go's Serve) —
-// so a cache that stays busy never re-derives, and one left alone re-checks
-// UnlockKey() after idle: the bounded re-check that keeps `cpass lock` (on
-// the Broker-socket path) or a changed/removed Keychain item from being
-// silently ignored forever.
+// Key returns the cached key if it was last (re-)derived within idle,
+// re-deriving it through UnlockKey() otherwise. This is a TTL anchored to
+// that last derivation, not a deadline a hit slides forward: a cache kept
+// continuously busy — the ordinary case for an active Agent session
+// driving cpass mcp — must still re-derive once idle has elapsed, the same
+// as one that went briefly idle first. A version of this that reset the
+// clock on every hit shipped and was live-reproduced to defeat `cpass
+// lock` entirely against a busy process (CLA-77): as long as calls kept
+// arriving closer together than idle, the window never elapsed and the
+// stale key was served forever. With the TTL, the very next call after
+// idle has elapsed re-checks UnlockKey() regardless of how busy the cache
+// has been — the bounded re-check that keeps `cpass lock` (on the
+// Broker-socket path) or a changed/removed Keychain item from being
+// silently ignored for longer than one idle window (see
+// docs/SECURITY.md's "within one idle window, not instantly").
 func (c *KeyCache) Key() ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.key != nil && time.Since(c.at) < c.idle {
-		c.at = time.Now()
 		return c.key, nil
 	}
 	key, err := UnlockKey()
