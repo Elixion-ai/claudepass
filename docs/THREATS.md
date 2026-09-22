@@ -125,11 +125,13 @@ value can still end up somewhere it shouldn't, today:
    honest statement this is one instance of: **Redaction makes leaking
    hard and detectable, not impossible.**
 2. **Encodings Redaction doesn't recognise.** Raw, base64 (both alphabets,
-   three alignments), hex, percent-, and JSON-escaping are covered. A
-   command that transforms a value some other way before printing it —
-   its own bespoke encoding, compression, encryption, a Caesar/rot13-style
-   shift, re-chunking with separators spliced mid-value — passes through
-   unrecognised.
+   three alignments), base32 (standard alphabet, padded and unpadded, five
+   alignments), hex (both lower- and upper-case), percent-, and
+   JSON-escaping are covered — see `docs/SECURITY.md`'s Redaction section
+   for the exact list. A command that transforms a value some other way
+   before printing it — its own bespoke encoding, compression, encryption,
+   a Caesar/rot13-style shift, re-chunking with separators spliced
+   mid-value — passes through unrecognised.
 3. **Anything not written to the wrapped command's own stdout/stderr.**
    Redaction only ever sees the two pipes `cpass run`/`capture` own. A
    value the child writes to a file, a Unix socket, another process's
