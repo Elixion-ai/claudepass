@@ -131,6 +131,11 @@ func Run(spec Spec) (int, error) {
 		logPath = filepath.Join(home, "redactions.log")
 	}
 	rlog := redact.NewLog(logPath, filepath.Base(spec.Argv[0]))
+	// rlog opens redactions.log lazily, on its first event; Close (safe to
+	// call even when nothing was ever redacted) releases it on every exit
+	// path from here on, so this one invocation's log file handle never
+	// outlives the invocation.
+	defer func() { _ = rlog.Close() }()
 	var stdout io.WriteCloser
 	if spec.RawStdout {
 		stdout = nopWriteCloser{spec.Stdout}

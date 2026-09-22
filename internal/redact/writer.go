@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -207,12 +208,19 @@ func (w *Writer) Close() error {
 	return w.writeErr
 }
 
-// Log appends events to an append-only file, one line each, never the value.
+// Log appends events to an append-only file, one line each, never the
+// value. The file is opened lazily on the first event (so a clean run that
+// redacts nothing never creates it, matching the file's own "created on
+// first use" contract) and kept open for the rest of the Log's life —
+// mirroring internal/run/files.go's open-once pattern for file Bindings —
+// rather than reopened on every single Record call. Close releases it at
+// the end of the cpass run/capture invocation that owns this Log.
 type Log struct {
 	mu   sync.Mutex
 	path string
 	cmd  string
 	cnt  map[string]int
+	f    *os.File // nil until Record's first successful open; nil again after Close
 }
 
 // NewLog creates a Log writing to path for a command named cmd.
@@ -226,17 +234,35 @@ func (l *Log) Record(e Event) {
 	if l.path == "" {
 		return
 	}
-	f, err := openAppend(l.path)
-	if err != nil {
-		return
+	if l.f == nil {
+		f, err := openAppend(l.path)
+		if err != nil {
+			// Best-effort, like every other notice this package writes: a
+			// failed open here never blocks redaction, and Record has no
+			// error to report to its caller anyway. Leaving l.f nil means
+			// the next Record call simply retries the open.
+			return
+		}
+		l.f = f
 	}
-	// Record has no error to report to its caller (redaction must never
-	// block on the audit log), and openAppend failing above is already
-	// swallowed the same way: a lost or truncated log line never blocks
-	// redaction, so Close and the write are best-effort too.
-	defer func() { _ = f.Close() }()
-	_, _ = fmt.Fprintf(f, "%s handle=%s encoding=%s stream=%s cmd=%s\n",
+	// The write is best-effort for the same reason the open above is: a
+	// lost or truncated log line never blocks redaction.
+	_, _ = fmt.Fprintf(l.f, "%s handle=%s encoding=%s stream=%s cmd=%s\n",
 		time.Now().UTC().Format(time.RFC3339), e.Handle, e.Encoding, e.Stream, l.cmd)
+}
+
+// Close releases the log file Record opened, if any — a Log that never saw
+// an event never opened one, and Close on it is a no-op. Safe to call more
+// than once.
+func (l *Log) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f == nil {
+		return nil
+	}
+	err := l.f.Close()
+	l.f = nil
+	return err
 }
 
 // Counts returns redactions per Handle.
