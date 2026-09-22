@@ -504,14 +504,19 @@ and still finds the Vault; it just **cannot use the `CPASS_KEY` env-unlock
 path any more to open it** (that value is exactly what got stripped) and
 instead needs the macOS Keychain or the Linux/CI Broker socket, whichever
 this machine already uses for unattended unlock — neither needs an
-environment key. Separately, whenever `CPASS_KEY` *was* this invocation's
-own unlock source (it is tried first, ahead of the Keychain and the Broker
-socket, and only consulted at all when secrets are being resolved from the
-Vault — CI mode never opens it), its value is also registered as a redact
-Pattern, under the reserved pseudo-Handle `cpass/vault-key`, before the
-child ever starts: defense in depth, so a child that still echoes it back
-through some *other* route than the one just closed off gets it caught and
-marked `[REDACTED:cpass/vault-key]` rather than shown raw.
+environment key. Separately, whenever `CPASS_KEY` is set and this isn't CI
+mode (CI mode never opens the Vault, from any surface), its value is also
+registered as a redact Pattern, under the reserved pseudo-Handle
+`cpass/vault-key`, before the child ever starts: defense in depth, so a
+child that still echoes it back through some *other* route than the one
+just closed off gets it caught and marked `[REDACTED:cpass/vault-key]`
+rather than shown raw. This covers `cpass run` (whose own Broker-resolve
+step is what opens the Vault with it) and `cpass capture` / the MCP
+`capture` tool alike (which open the Vault themselves, before this step
+runs at all, to check the target Handle doesn't already exist) — `cpass
+run` is the only one of the three whose Handles (`--with`) say whether the
+Vault was touched at all, so the guard is CPASS_KEY's own presence, not
+that.
 
 `cpass capture <handle> -- <command>` and the MCP server's
 `run_with_secrets` and `capture` tools call this exact same function

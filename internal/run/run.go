@@ -93,15 +93,34 @@ func Run(spec Spec) (int, error) {
 	var patterns []redact.Pattern
 	// CPASS_KEY (the Vault's unlock key, base64) never reaches a child's
 	// environment (stripSecretEnv above), however it reached cpass's own —
-	// but if it *was* the source this invocation actually unlocked the
-	// Vault with (broker.UnlockKey tries it first, ahead of the Keychain
-	// and the Broker socket, and only when secrets are being resolved from
-	// the Vault at all: CI mode never opens it), register it as a redact
+	// but whenever it *could have been* the source this invocation (or a
+	// caller wrapping it) unlocked the Vault with, register it as a redact
 	// Pattern too, as defense in depth against some *other* route a child
-	// might still echo it back through. Reaching this point with
-	// broker.Resolve having returned no error already confirms it was
-	// actually used, not merely present and unrelated.
-	if key := os.Getenv(broker.EnvKey); key != "" && len(spec.Refs) > 0 && !broker.CIMode() {
+	// might still echo it back through.
+	//
+	// This used to be gated on len(spec.Refs) > 0, as a proxy for "this
+	// call's own broker.Resolve opened the Vault with CPASS_KEY" — correct
+	// for `cpass run` (Resolve never opens the Vault when Refs is empty),
+	// but wrong for `cpass capture` and the MCP `capture` tool: both open
+	// the Vault themselves via their own broker.OpenVault() call, before
+	// Run is ever invoked, to check the target Handle doesn't already
+	// exist, independent of Refs — and the MCP capture tool has no
+	// Refs-equivalent at all, so it could never satisfy that guard. CPASS_KEY
+	// genuinely was the unlock source there too whenever it is set, since
+	// broker.UnlockKey always tries it first, ahead of the Keychain and the
+	// Broker socket.
+	//
+	// So the guard is now simply "CPASS_KEY is set and this isn't CI mode"
+	// (CI mode never opens the Vault, from any caller): resolveFromEnv
+	// never touches the Vault, and OpenVault is the only remaining caller
+	// of UnlockKey, so whenever CPASS_KEY is set outside CI mode, either
+	// this call's own Resolve or a caller's own pre-existing OpenVault call
+	// used it to unlock. A run that touches the Vault via neither (e.g.
+	// `cpass run` with no --with at all) still passes this check and
+	// registers the pattern for nothing — harmless: an unused pattern only
+	// matches if the child happens to print that exact literal, the same
+	// preexisting risk any registered pattern already carries.
+	if key := os.Getenv(broker.EnvKey); key != "" && !broker.CIMode() {
 		patterns = append(patterns, redact.Variants(cpassKeyPseudoHandle, key)...)
 	}
 	var dir *runDir

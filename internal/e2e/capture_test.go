@@ -141,3 +141,27 @@ func TestCaptureShortValueRefused(t *testing.T) {
 		t.Fatalf("want short-value refusal: %s", r)
 	}
 }
+
+// TestCaptureRedactsCpassKeyFromStderr is CLA-54's regression test for the
+// capture-surface gap: cpass capture opens the Vault itself, via its own
+// broker.OpenVault() call in openVault(e) (internal/cli/vaultcmds.go),
+// before run.Run is ever invoked -- and with no --with here, Refs stays
+// empty, exactly the shape the old guard (len(spec.Refs) > 0) could never
+// see as "this invocation's own unlock source". Mirrors
+// TestLeakCpassKeyItself (leak_test.go), but through cpass capture instead
+// of cpass run, and asserting on stderr since capture's own stdout is
+// reserved for the captured value.
+func TestCaptureRedactsCpassKeyFromStderr(t *testing.T) {
+	ve := newVault(t)
+	script := `printf 'RAWKEY=[%s]\n' '` + ve.key + `' 1>&2; echo capture-body-value-1`
+	r := ve.run(nil, "capture", "demo/token", "--", "sh", "-c", script)
+	if r.code != 0 {
+		t.Fatalf("capture: %s", r)
+	}
+	if strings.Contains(r.stdout+r.stderr, ve.key) {
+		t.Fatalf("CPASS_KEY value leaked: %s", r)
+	}
+	if !strings.Contains(r.stderr, "[REDACTED:cpass/vault-key]") {
+		t.Fatalf("CPASS_KEY marker missing: %s", r)
+	}
+}
