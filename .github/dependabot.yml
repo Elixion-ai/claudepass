@@ -1,0 +1,15 @@
+# Keeps the SHA-pinned Actions in .github/workflows/ (CLA-84) and this
+# module's Go dependencies current. Dependabot opens a PR per update;
+# .github/workflows/ci.yml still has to pass it like any other change —
+# nothing here auto-merges.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"

@@ -5,6 +5,15 @@ name: ci
 # main; release.yml (tag-triggered) is a separate workflow. See CLAUDE.md /
 # CONTEXT.md for the vocabulary (Secret, Handle, Broker, Redaction, ...)
 # this comment and the smoke test below rely on.
+#
+# Every `uses:` below is pinned to a full commit SHA, not a mutable tag
+# (CLA-84) — a force-moved upstream tag (the real-world
+# tj-actions/changed-files pattern) would otherwise run arbitrary code in
+# this secrets-manager repo's own CI. The trailing `# vX.Y.Z` comment
+# names the version currently at that SHA; .github/dependabot.yml keeps
+# both current. Resolved read-only via `gh api repos/<owner>/<repo>/commits/<tag>`
+# and cross-checked against `.../tags` for the matching version — never
+# pushed or otherwise mutated upstream.
 on:
   push:
     branches:
@@ -17,6 +26,13 @@ on:
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+# Least-privilege (CLA-84): this workflow only reads the repo and runs
+# tests, it never pushes, tags, comments, or opens anything — the default
+# broad token this repo's own CI ran with until now had no reason to be
+# able to.
+permissions:
+  contents: read
 
 jobs:
   build-and-test:
@@ -31,10 +47,10 @@ jobs:
         os: [macos-latest, ubuntu-latest]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           # actions/setup-go caches $GOMODCACHE and the build cache keyed
@@ -72,7 +88,7 @@ jobs:
         # The action downloads the same GitHub release asset through
         # actions/toolkit's tool-cache instead, which doesn't go through
         # that code path.
-        uses: golangci/golangci-lint-action@v9.3.0
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.13.2
 
