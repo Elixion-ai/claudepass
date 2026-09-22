@@ -297,7 +297,12 @@ Vault (`broker.UnlockKey`):
    for a legacy Vault, no) parameters, and `cpass unlock`'s own retry —
    whenever the persisted parameters fail to open the Vault, derive again
    with the current ones and try that before giving up — is what still
-   unlocks that exact residue with the same passphrase; the next successful
+   unlocks that exact residue with the same passphrase; that same retry
+   also covers two concurrent `cpass unlock` processes racing this upgrade
+   against one not-yet-upgraded Vault with the correct passphrase: whichever
+   one loses re-derives and finds the winner's upgrade already durably in
+   place, rather than surfacing the timing as a wrong-passphrase error. The
+   next successful
    unlock from there finishes the interrupted upgrade rather than leaving it
    half-done forever. An already-current Vault's unlock is a plain no-op:
    no re-derivation, no write, no notice. A macOS Vault on the default
@@ -309,7 +314,12 @@ Vault (`broker.UnlockKey`):
    `p` exceeds `16`, before ever handing it to scrypt — defence in depth
    against a syntactically valid but extreme value (`N=2^30`, say) that
    would otherwise try to allocate on the order of a terabyte and hang
-   rather than fail. Once derived, that key is handed to a
+   rather than fail. Those three bounds alone would still let `N` and `r`
+   be maxed out together (scrypt's memory cost is ~128*`N`*`r` bytes, so
+   `2^20` and `32` combine to ~4GiB even though each is individually
+   in range), so `cpass` also refuses an `N`/`r` combination that costs more
+   than `maxScryptN` does at the standard `r=8`. Once derived, that key is
+   handed to a
    detached `cpass broker-serve` process over a pipe — never a command-line
    argument, so it never appears in `ps`. That process listens on a
    user-only Unix domain socket (mode `0600`) at `$XDG_RUNTIME_DIR/cpass.sock`

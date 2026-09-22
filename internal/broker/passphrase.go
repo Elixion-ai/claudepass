@@ -3,6 +3,7 @@ package broker
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -62,6 +63,18 @@ const (
 	maxScryptN = 1 << 20
 	maxScryptR = 32
 	maxScryptP = 16
+
+	// maxScryptNR bounds N*r jointly, on top of maxScryptN and maxScryptR
+	// above (2026-09-22 review of this ticket). scrypt's memory cost is
+	// ~128*N*r bytes, so those two bounds alone still let a broker.kdf
+	// record combine maxScryptN (already ~1GiB on its own — see its
+	// comment above) with maxScryptR to reach ~4GiB, well past what either
+	// bound individually intends to allow. maxScryptNR pins the ceiling at
+	// maxScryptN's own memory cost at the standard r=8 (scryptR): any
+	// combination within the individual bounds above that would cost more
+	// than that — such as maxScryptN with a large r, or a large N with
+	// maxScryptR — is rejected too.
+	maxScryptNR = maxScryptN * scryptR
 )
 
 const kdfFileName = "broker.kdf"
@@ -93,6 +106,9 @@ func validateParams(p kdfParams) error {
 	}
 	if p.P < 1 || p.P > maxScryptP {
 		return fmt.Errorf("p=%d is out of bounds (want 1-%d)", p.P, maxScryptP)
+	}
+	if p.N*p.R > maxScryptNR {
+		return fmt.Errorf("n=%d and r=%d together cost too much memory (n*r=%d, want <=%d)", p.N, p.R, p.N*p.R, maxScryptNR)
 	}
 	return nil
 }
@@ -274,7 +290,28 @@ var afterVaultRewrap func()
 // running UnlockPassphrase again from there also finishes the interrupted
 // upgrade rather than leaving it half-done forever, since it reaches this
 // same "parameters are stale" branch either way.
+//
+// Two concurrent UnlockPassphrase calls against the same stale-parameter
+// Vault, both given the correct passphrase, can also reach this point with
+// the same problem (2026-09-22 review): deriveAndValidate's derive-and-open
+// happens outside vault.Update's lock, so both calls can validate against
+// the still-legacy Vault before either has rewrapped it. Whichever loses
+// the race to rewrapForUpgrade below finds the Vault already re-wrapped
+// under the winner's (identically-derived, same-passphrase) key, and its
+// own oldKey — correct when it was derived, stale by the time it is used —
+// no longer opens it. See that call's own error handling for how this is
+// told apart from a genuinely wrong passphrase and retried.
 func UnlockPassphrase(path, passphrase string) (key []byte, upgraded bool, err error) {
+	return unlockPassphrase(path, passphrase, true)
+}
+
+// unlockPassphrase is UnlockPassphrase's actual implementation. allowRetry
+// is true on every real caller's entry point (UnlockPassphrase) and false
+// only on the one recursive call this function makes itself, so a lost
+// race (see UnlockPassphrase's doc comment) retries exactly once rather
+// than risking a loop against some other, unanticipated reason
+// rewrapForUpgrade might keep failing.
+func unlockPassphrase(path, passphrase string, allowRetry bool) (key []byte, upgraded bool, err error) {
 	key, salt, params, err := deriveAndValidate(path, passphrase)
 	if err != nil {
 		return nil, false, err
@@ -288,6 +325,22 @@ func UnlockPassphrase(path, passphrase string) (key []byte, upgraded bool, err e
 		return nil, false, err
 	}
 	if err := rewrapForUpgrade(path, key, newKey); err != nil {
+		if allowRetry && errors.Is(err, vault.ErrWrongKey) {
+			// Lost the race described in UnlockPassphrase's doc comment:
+			// by the time we reached vault.Update inside rewrapForUpgrade,
+			// a concurrent call had already re-wrapped the Vault under its
+			// own (same-passphrase) current-parameters key, so our key —
+			// valid when deriveAndValidate confirmed it — no longer opens
+			// the Vault. Re-deriving and re-validating from scratch finds
+			// that already-upgraded Vault (deriveAndValidate's own
+			// stale-params retry succeeds against it the same way it does
+			// after a crash) rather than surfacing this timing as a
+			// spurious wrong-passphrase failure for a passphrase that was
+			// never wrong.
+			zeroKey(key)
+			zeroKey(newKey)
+			return unlockPassphrase(path, passphrase, false)
+		}
 		return nil, false, fmt.Errorf("broker: upgrading this Vault's passphrase parameters: %w", err)
 	}
 	zeroKey(key) // superseded by newKey; CLA-60 hygiene, mirroring Rewrap's own.

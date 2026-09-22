@@ -508,3 +508,85 @@ func TestDeriveKeyRefusesOutOfBoundsKDFParams(t *testing.T) {
 		})
 	}
 }
+
+// TestUnlockPassphraseConcurrentUnlocksBothSucceed is a 2026-09-22 review
+// finding on CLA-97: two `cpass unlock` processes racing UnlockPassphrase
+// against the same not-yet-upgraded legacy Vault, both given the correct
+// passphrase, must both return a nil error. Before the fix, the loser of
+// the race — whichever goroutine reaches rewrapForUpgrade's vault.Update
+// after the winner has already durably re-wrapped the Vault — got back
+// vault.ErrWrongKey (wrapped as "broker: upgrading this Vault's passphrase
+// parameters: vault: wrong key") for a passphrase that was never wrong,
+// because its own deriveAndValidate had already validated against the
+// still-legacy Vault before the winner finished. Both goroutines' initial
+// validate (cheap, legacy-cost derive) reliably completes before either
+// reaches the write lock (the winner still has an expensive
+// current-parameters derive to do first), so this reproduces on
+// essentially every run rather than depending on fine-grained scheduling
+// luck (confirmed: it reproduced on the very first iteration, every time,
+// while writing this test) — looped a few times anyway for confidence,
+// kept short because each iteration pays for several real scrypt
+// derivations, expensive under -race.
+func TestUnlockPassphraseConcurrentUnlocksBothSucceed(t *testing.T) {
+	for i := 0; i < 3; i++ {
+		dir := withHome(t)
+		const passphrase = "concurrent unlock passphrase"
+		path, _, _ := legacyFixture(t, dir, passphrase)
+
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		for g := 0; g < 2; g++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				_, _, err := UnlockPassphrase(path, passphrase)
+				errs[idx] = err
+			}(g)
+		}
+		wg.Wait()
+
+		for idx, err := range errs {
+			if err != nil {
+				t.Fatalf("iteration %d, goroutine %d: UnlockPassphrase(correct passphrase) = %v, want nil — a concurrent unlock that lost the upgrade race must retry, not surface it as a wrong-passphrase error", i, idx, err)
+			}
+		}
+
+		// The Vault must actually be usable afterwards, upgraded exactly
+		// once (not left half-upgraded by whichever goroutine lost).
+		key, upgraded, err := UnlockPassphrase(path, passphrase)
+		if err != nil {
+			t.Fatalf("iteration %d: UnlockPassphrase after the race settled: %v", i, err)
+		}
+		if upgraded {
+			t.Fatalf("iteration %d: a third unlock, after both racing calls returned, must not report a further upgrade", i)
+		}
+		v, err := vault.Open(path, key)
+		if err != nil {
+			t.Fatalf("iteration %d: Open with the post-race key: %v", i, err)
+		}
+		if _, err := v.Get("fixture/handle"); err != nil {
+			v.Close()
+			t.Fatalf("iteration %d: the race must not have touched Vault data: %v", i, err)
+		}
+		v.Close()
+	}
+}
+
+// TestValidateParamsRejectsJointMemoryBlowout covers the 2026-09-22 review's
+// minor finding on CLA-97's independent N/r/p bounds: N and r are each
+// individually in range, but scrypt's memory cost is ~128*N*r bytes, so
+// N and r maxed out together (2^20, 32) would still try to allocate on the
+// order of 4GiB, well past what any single one of the bounds intends.
+func TestValidateParamsRejectsJointMemoryBlowout(t *testing.T) {
+	if err := validateParams(kdfParams{N: maxScryptN, R: maxScryptR, P: 1}); err == nil {
+		t.Fatal("validateParams accepted N and r both at their individual max, despite the joint memory cost this implies")
+	}
+	// Sanity: currentParams and the legacy params — the only two
+	// combinations ever produced by this package itself — must still pass.
+	if err := validateParams(currentParams()); err != nil {
+		t.Fatalf("validateParams rejected currentParams(): %v", err)
+	}
+	if err := validateParams(kdfParams{N: legacyScryptN, R: legacyScryptR, P: legacyScryptP}); err != nil {
+		t.Fatalf("validateParams rejected the legacy parameters: %v", err)
+	}
+}
