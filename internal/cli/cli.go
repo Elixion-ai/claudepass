@@ -62,7 +62,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		args: args, stdin: stdin, stdout: stdout, stderr: stderr,
 		outMode: streamColorMode(stdout), errMode: streamColorMode(stderr),
 	}
-	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
+	if len(args) == 0 || args[0] == "help" || isHelpFlag(args[0]) {
 		usage(stdout)
 		return ExitOK
 	}
@@ -95,6 +95,16 @@ func usage(w io.Writer) {
 	}
 	fprintf(w, "  %-10s %s\n", "version", "print the version")
 }
+
+// isHelpFlag reports whether s is either spelling of a bare help flag.
+// Main's own top-level dispatch uses it, and so does every dispatcher-style
+// subcommand (manifest, keychain, integrate) that switches on e.args[0] as
+// a subcommand name rather than parsing it with a flag.FlagSet: without
+// this check, -h/--help there falls into the same "unknown subcommand"
+// branch as a typo, exiting ExitUsage instead of printing a usage synopsis
+// and exiting 0 like every flag.FlagSet-based subcommand's own -h/--help
+// already does via usageErr.
+func isHelpFlag(s string) bool { return s == "-h" || s == "--help" }
 
 // parseInterspersed parses flags that may appear before or after positional
 // arguments (Go's flag package stops at the first positional).

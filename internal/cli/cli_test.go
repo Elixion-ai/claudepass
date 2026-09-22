@@ -392,6 +392,48 @@ func TestSubcommandHelpMatchesGrammar(t *testing.T) {
 	}
 }
 
+// TestDispatcherHelpMatchesGrammar is the regression test for the bug
+// where manifest/keychain/integrate — the three commands that switch on
+// e.args[0] as a subcommand name rather than parsing it with a
+// flag.FlagSet — had no -h/--help case at all, so -h/--help fell into the
+// same "unknown subcommand" branch as a typo and exited ExitUsage instead
+// of printing a usage synopsis and exiting 0, like every flag.FlagSet-based
+// subcommand's own -h/--help already does via usageErr (see
+// TestSubcommandHelpMatchesGrammar above).
+func TestDispatcherHelpMatchesGrammar(t *testing.T) {
+	cases := []struct {
+		name   string
+		args   []string
+		prefix string
+	}{
+		{"manifest", []string{"manifest"}, "usage: cpass manifest "},
+		{"keychain", []string{"keychain"}, "usage: cpass keychain "},
+		{"integrate", []string{"integrate"}, "usage: cpass integrate "},
+	}
+	for _, c := range cases {
+		for _, flagName := range []string{"-h", "--help"} {
+			t.Run(c.name+" "+flagName, func(t *testing.T) {
+				var out, errb bytes.Buffer
+				args := append(append([]string{}, c.args...), flagName)
+				code := Main(args, strings.NewReader(""), &out, &errb)
+				if code != ExitOK {
+					t.Fatalf("cpass %s: exit = %d, want ExitOK (%d); stdout=%q stderr=%q", strings.Join(args, " "), code, ExitOK, out.String(), errb.String())
+				}
+				if errb.Len() != 0 {
+					t.Fatalf("cpass %s: unexpected stderr %q", strings.Join(args, " "), errb.String())
+				}
+				got := out.String()
+				if !strings.HasPrefix(got, c.prefix) {
+					t.Fatalf("cpass %s: stdout %q missing the usage synopsis", strings.Join(args, " "), got)
+				}
+				if strings.Contains(got, "unknown") {
+					t.Fatalf("cpass %s: stdout %q looks like the unknown-subcommand branch, not help", strings.Join(args, " "), got)
+				}
+			})
+		}
+	}
+}
+
 // TestLsFlagAfterPositional is the regression test for the bug where
 // cmdLs called fs.Parse directly instead of parseInterspersed: Go's flag
 // package stops parsing at the first positional, so `cpass ls demo -l`

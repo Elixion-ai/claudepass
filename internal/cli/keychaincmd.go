@@ -13,9 +13,15 @@ func init() {
 	register(command{"keychain", "manage the macOS Keychain unlock item: upgrade --touch-id", cmdKeychain})
 }
 
+const keychainUsage = "usage: cpass keychain upgrade --touch-id"
+
 func cmdKeychain(e *env) int {
 	if len(e.args) == 0 {
-		return e.fail(ExitUsage, "usage: cpass keychain upgrade --touch-id")
+		return e.fail(ExitUsage, keychainUsage)
+	}
+	if isHelpFlag(e.args[0]) {
+		fprintln(e.stdout, keychainUsage)
+		return ExitOK
 	}
 	sub := e.args[0]
 	e.args = e.args[1:]

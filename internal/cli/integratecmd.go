@@ -31,6 +31,10 @@ func cmdIntegrate(e *env) int {
 	if len(e.args) == 0 {
 		return integrateUsage(e)
 	}
+	if isHelpFlag(e.args[0]) {
+		fprintln(e.stdout, integrateUsageText())
+		return ExitOK
+	}
 	if e.args[0] == "--print" {
 		if len(e.args) != 1 {
 			return e.fail(ExitUsage, "usage: cpass integrate --print")
@@ -46,8 +50,12 @@ func cmdIntegrate(e *env) int {
 	return fn(e, rest)
 }
 
+func integrateUsageText() string {
+	return "usage: cpass integrate <" + strings.Join(targetNames(), "|") + "> [flags] | --print"
+}
+
 func integrateUsage(e *env) int {
-	return e.fail(ExitUsage, "usage: cpass integrate <%s> [flags] | --print", strings.Join(targetNames(), "|"))
+	return e.fail(ExitUsage, "%s", integrateUsageText())
 }
 
 func targetNames() []string {
