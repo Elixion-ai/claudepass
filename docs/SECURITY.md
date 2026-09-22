@@ -48,7 +48,13 @@ that.
 - **Minimum Secret length**: 8 characters (`vault.MinSecretLength`),
   enforced wherever a value is stored (`add`, `capture`, `import`,
   `intercept`) — so Redaction is never asked to scrub a string so short it
-  would also match large stretches of ordinary output.
+  would also match large stretches of ordinary output. CI mode
+  (`broker.resolveFromEnv`) resolves straight from the environment instead
+  of the Vault, bypassing `vault.Add` entirely, so it enforces the same
+  floor itself: a CI-resolved value shorter than `vault.MinSecretLength` is
+  refused (a project-declared Handle hard-fails; a Global Handle degrades
+  to the usual skip-with-notice), naming the Handle and the minimum, never
+  the value.
 
 ## The Global Manifest
 

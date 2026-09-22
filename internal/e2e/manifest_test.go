@@ -128,12 +128,17 @@ func TestCIModeResolvesFromEnvironmentWithoutVault(t *testing.T) {
 	if strings.Contains(r.stdout, "ci-stripe-value") || !strings.Contains(r.stdout, "[REDACTED:stripe/live]") {
 		t.Fatalf("ci redaction: %s", r)
 	}
-	// Missing variable names the Handle and the variable.
-	r = ve.runIn(repo, []string{"CPASS_CI=1", "STRIPE_SECRET_KEY=x"}, "run", "--", helperBin)
+	// Missing variable names the Handle and the variable. STRIPE_SECRET_KEY
+	// is set here only so db/url is the one Handle actually missing (not
+	// unrelated to CLA-69's own minimum-length check below, so it must
+	// itself clear vault.MinSecretLength).
+	r = ve.runIn(repo, []string{"CPASS_CI=1", "STRIPE_SECRET_KEY=ci-stripe-value"}, "run", "--", helperBin)
 	if r.code == 0 || !strings.Contains(r.stderr, "db/url expects DB_URL") {
 		t.Fatalf("ci missing: %s", r)
 	}
-	// CI=true with no Vault also triggers CI mode; manifest check reports env.
+	// CI=true with no Vault also triggers CI mode; manifest check reports
+	// env. manifest check reads os.LookupEnv directly (not resolveFromEnv),
+	// so it has no length floor to clear here.
 	r = ve.runIn(repo, []string{"CI=true", "STRIPE_SECRET_KEY=x"}, "manifest", "check")
 	if r.code != 1 || !strings.Contains(r.stderr, "db/url (DB_URL)") {
 		t.Fatalf("ci check: %s", r)

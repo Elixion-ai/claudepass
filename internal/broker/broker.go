@@ -193,6 +193,23 @@ func resolveFromEnv(refs []Ref) ([]Resolved, []string, error) {
 			}
 			return nil, nil, fmt.Errorf("CI mode: %s expects %s in the environment", r.Handle, name)
 		}
+		// The Vault's own vault.Add enforces MinSecretLength so that every
+		// value it holds clears redact.minPatternLen and gets real Redaction
+		// coverage; CI mode reads straight from the environment and bypasses
+		// vault.Add entirely; without this check a short CI secret (a test
+		// fixture token, a four-character flag someone reused as a "secret")
+		// would resolve with zero redact Patterns and print raw the moment
+		// the wrapped command echoes it. Enforcing the same floor here closes
+		// that gap. The message names the Handle and the minimum, never the
+		// value — the value is exactly what must not appear in a diagnostic
+		// this short and this likely to be pasted somewhere.
+		if len(val) < vault.MinSecretLength {
+			if r.FromGlobal {
+				skipped = append(skipped, skipNotice(r.Handle, fmt.Sprintf("%s in the environment is shorter than the minimum %d characters", name, vault.MinSecretLength)))
+				continue
+			}
+			return nil, nil, fmt.Errorf("CI mode: %s (%s) is shorter than the minimum %d characters", r.Handle, name, vault.MinSecretLength)
+		}
 		if err := checkCollision(bound, name, r); err != nil {
 			return nil, nil, err
 		}
