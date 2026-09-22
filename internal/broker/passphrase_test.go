@@ -100,6 +100,72 @@ func TestDeriveKeyLegacyFixtureStillUnlocks(t *testing.T) {
 	}
 }
 
+// TestLoadOrCreateParamsNeverLeavesOrphanedSaltOnInterruption covers CLA-57:
+// an interruption between the two files loadOrCreateParams persists (a
+// crash, Ctrl-C, power loss, a disk-full error) must never leave
+// broker.salt on disk without a matching broker.kdf next to it, because
+// DeriveKey treats that exact on-disk shape as a genuine pre-existing
+// (legacy) Vault and silently re-derives with the weak N=2^15 parameters
+// forever (see TestDeriveKeyLegacyFixtureStillUnlocks) — indistinguishable
+// from a vault this project itself just started creating.
+//
+// Blocking the broker.kdf write (by pre-creating its path as a directory,
+// so any os.WriteFile there fails with "is a directory") stands in for any
+// interruption between the two writes, regardless of which one physically
+// happens first: an implementation that writes broker.salt before
+// broker.kdf gets past the salt write untouched and leaves the
+// (unrecoverable, permanently-legacy) salt-without-kdf shape behind: an
+// implementation that writes broker.kdf first never gets far enough to
+// write broker.salt at all, so the only residue is a cleanly retryable
+// "neither file exists yet".
+func TestLoadOrCreateParamsNeverLeavesOrphanedSaltOnInterruption(t *testing.T) {
+	dir := withHome(t)
+
+	kp := filepath.Join(dir, kdfFileName)
+	if err := os.Mkdir(kp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := DeriveKey("interrupted derivation"); err == nil {
+		t.Fatal("DeriveKey should have failed while broker.kdf could not be written")
+	}
+
+	sp := filepath.Join(dir, "broker.salt")
+	if _, err := os.Stat(sp); err == nil {
+		t.Fatal("broker.salt was written before broker.kdf; an interruption right after this point leaves " +
+			"a salt with no kdf record, which DeriveKey silently and permanently treats as a legacy vault (CLA-57)")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat broker.salt: %v", err)
+	}
+
+	// Clear the obstruction and retry, as a user re-running `cpass init`
+	// after the interruption would: this must land on the raised
+	// parameters, never fall back to legacy because of the earlier failed
+	// attempt.
+	if err := os.Remove(kp); err != nil {
+		t.Fatal(err)
+	}
+	key, err := DeriveKey("interrupted derivation")
+	if err != nil {
+		t.Fatalf("DeriveKey after clearing the obstruction: %v", err)
+	}
+	if len(key) != vault.KeySize {
+		t.Fatalf("key length = %d, want %d", len(key), vault.KeySize)
+	}
+	kb, err := os.ReadFile(kp)
+	if err != nil {
+		t.Fatalf("read %s: %v", kdfFileName, err)
+	}
+	var params kdfParams
+	if err := json.Unmarshal(kb, &params); err != nil {
+		t.Fatalf("unmarshal %s: %v", kdfFileName, err)
+	}
+	if params.N != scryptN || params.R != scryptR || params.P != scryptP {
+		t.Fatalf("persisted params after retry = %+v, want the raised N=%d R=%d P=%d, not a silent legacy fallback",
+			params, scryptN, scryptR, scryptP)
+	}
+}
+
 // TestDeriveKeyTightensExistingDirPermissions covers CLA-58: a CPASS_HOME
 // that already exists (e.g. left at 0755 by a stray umask, or simply reused
 // across cpass versions) must be tightened to 0700, not left as-is because

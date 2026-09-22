@@ -130,9 +130,6 @@ func loadOrCreateParams() ([]byte, kdfParams, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return nil, kdfParams{}, fmt.Errorf("broker: entropy: %w", err)
 	}
-	if err := os.WriteFile(sp, salt, 0o600); err != nil {
-		return nil, kdfParams{}, err
-	}
 	params := kdfParams{N: scryptN, R: scryptR, P: scryptP}
 	b, err := json.Marshal(params)
 	if err != nil {
@@ -142,7 +139,19 @@ func loadOrCreateParams() ([]byte, kdfParams, error) {
 	if err != nil {
 		return nil, kdfParams{}, err
 	}
+	// broker.kdf before broker.salt, deliberately: if cpass is interrupted
+	// (crash, Ctrl-C, power loss, a disk-full error) between the two
+	// writes, the only residue a retry can ever find is "neither file
+	// exists yet" — which lands right back in this same fresh-generation
+	// branch — rather than "salt without kdf", which the branch above
+	// treats as a genuine pre-existing (legacy) Vault and silently
+	// re-derives with the weak N=2^15 parameters forever. Writing salt
+	// first would let an interruption right after that write leave exactly
+	// that indistinguishable, permanently-weak state behind.
 	if err := os.WriteFile(kp, b, 0o600); err != nil {
+		return nil, kdfParams{}, err
+	}
+	if err := os.WriteFile(sp, salt, 0o600); err != nil {
 		return nil, kdfParams{}, err
 	}
 	return salt, params, nil
