@@ -159,10 +159,26 @@ func Run(spec Spec) (int, error) {
 	cmd.Env = env
 	cmd.Dir = spec.Dir
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = spec.Stdin, stdout, stderr
+	// Registered before Start(), not after: signal.Notify changes cpass's
+	// own SIGINT/SIGTERM/SIGHUP disposition immediately, and it is cpass's
+	// disposition *at fork time* that the child inherits. A `cpass run --
+	// cmd &` launched by an async shell job (no job control — any plain
+	// `&`, a CI step, a Makefile target, nohup) starts with SIGINT already
+	// SIG_IGN; forked before this call, the child would inherit SIG_IGN too
+	// and, since an ignored signal survives exec(), stay permanently deaf
+	// to every SIGINT cpass forwards to it afterward, however promptly.
+	// Registering first flips cpass's own disposition to "caught" before
+	// the fork, so the child inherits that instead and gets it reset to
+	// SIG_DFL across its own exec() — normal, killable-by-default. sigCh is
+	// buffered so a signal landing in the narrow window between here and
+	// forwardSignals' goroutine starting (which needs cmd.Process, so it
+	// can only start once Start() returns) is queued, not lost.
+	sigCh := notifySignals()
 	if err := cmd.Start(); err != nil {
+		signal.Stop(sigCh)
 		return 127, fmt.Errorf("cannot start %s: %w", spec.Argv[0], err)
 	}
-	stop := forwardSignals(cmd.Process)
+	stop := forwardSignals(sigCh, cmd.Process)
 	err = cmd.Wait()
 	stop()
 	dir.destroy()
@@ -233,11 +249,20 @@ func stripSecretEnv(env []string) []string {
 	return out
 }
 
-// forwardSignals relays SIGINT and SIGTERM to the child so Ctrl-C behaves
-// as if cpass were not in the way.
-func forwardSignals(p *os.Process) func() {
+// notifySignals registers cpass's own SIGINT/SIGTERM/SIGHUP disposition.
+// Callers must invoke this before cmd.Start() — see the ordering comment at
+// the call site — and pass the returned channel to forwardSignals once
+// cmd.Process exists.
+func notifySignals() chan os.Signal {
 	ch := make(chan os.Signal, 4)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	return ch
+}
+
+// forwardSignals relays every signal arriving on ch (already registered by
+// notifySignals, before the child was forked) to the child so Ctrl-C
+// behaves as if cpass were not in the way.
+func forwardSignals(ch chan os.Signal, p *os.Process) func() {
 	done := make(chan struct{})
 	go func() {
 		for {

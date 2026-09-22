@@ -464,7 +464,12 @@ detail.
    `stderr` piped through the Redactor (unless the caller is `cpass
    capture`, which bypasses redaction on stdout only — see below), and
    `SIGINT`/`SIGTERM`/`SIGHUP` forwarded to the child so interactive
-   Ctrl-C behaves normally.
+   Ctrl-C behaves normally, including when `cpass run` itself was launched
+   as a backgrounded, non-interactive job (`cpass run -- cmd &`, a CI step,
+   a Makefile target, nohup): `signal.Notify` is registered before the
+   child is forked, not after, specifically so a disposition `cpass`
+   inherited at rest (`SIG_IGN` for `SIGINT`, the POSIX default for such a
+   job) is never what the child in turn inherits.
 5. On every exit path — the child exits normally, is killed by a signal,
    or `cpass` itself is killed before it can clean up (swept on the next
    run instead) — every file in the per-invocation temp directory is

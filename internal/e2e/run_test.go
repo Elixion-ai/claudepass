@@ -1,10 +1,15 @@
 package e2e
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // childEnv runs the helper under cpass run and returns what it saw in its
@@ -168,4 +173,46 @@ func TestRunStripsCpassKeyFromChild(t *testing.T) {
 			t.Fatalf("ordinary variables like PATH must still be inherited (args %v): %v", args, env)
 		}
 	}
+}
+
+// TestRunBackgroundedForwardsSIGINT is the regression test for CLA-71:
+// forwardSignals used to call signal.Notify only after cmd.Start(), so a
+// `cpass run -- cmd &` launched as an async shell job with no job control
+// (any plain `&`, a CI step, a Makefile target, nohup) forked its child
+// while cpass's own SIGINT disposition was still SIG_IGN, the POSIX
+// default such a job inherits. The forked child inherited SIG_IGN too and,
+// because an ignored signal survives exec(), stayed permanently deaf to
+// SIGINT no matter how promptly cpass forwarded it afterward. Launched via
+// a raw `sh -c '... &'`, not the test harness's own spawner (exec.Command
+// never reproduces this inherited disposition), this is the actual repro.
+func TestRunBackgroundedForwardsSIGINT(t *testing.T) {
+	ve := newVault(t)
+	// The backgrounded job's own stdout/stderr are redirected to /dev/null,
+	// not left pointing at the pipe launch.Output() reads: fork inherits
+	// file descriptors across `&`, so if cpass (and the sleep it wraps) kept
+	// holding that pipe's write end open, Output() would block waiting for
+	// EOF until the background job itself exited -- up to the full 30s --
+	// and never return the pid in time to test anything.
+	script := fmt.Sprintf("%s run -- sleep 30 >/dev/null 2>&1 & echo $!", cpassBin)
+	launch := exec.Command("sh", "-c", script)
+	launch.Env = append(baseEnv(), "CPASS_HOME="+ve.home, "CPASS_KEY="+ve.key)
+	out, err := launch.Output()
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || pid <= 0 {
+		t.Fatalf("parse backgrounded cpass pid from %q: %v", out, err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) }) // best-effort if the assertion below fails first
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		_ = syscall.Kill(pid, syscall.SIGINT)
+		if syscall.Kill(pid, 0) != nil {
+			return // the backgrounded cpass (and the `sleep` it wraps) is gone
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("cpass pid %d (wrapping `sleep 30` in the background) still alive after repeated SIGINT for ~2s", pid)
 }
