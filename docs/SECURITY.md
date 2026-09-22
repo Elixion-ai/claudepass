@@ -169,9 +169,29 @@ Vault (`broker.UnlockKey`):
    never the default) and is documented in full below.
 3. **Linux, CI, or macOS with `CPASS_UNLOCK=socket`**: a Broker process.
    `cpass unlock` prompts for a master passphrase on a real terminal,
-   derives the key with **scrypt** (`N=2^15, r=8, p=1`, a random 16-byte
-   salt persisted at `$CPASS_HOME/broker.salt` with mode `0600`, so the same
-   passphrase always re-derives the same key), and hands that key to a
+   derives the key with **scrypt** (`N=2^18, r=8, p=1` for a Vault whose
+   passphrase is derived for the first time on a machine — measured
+   ~335ms and ~256MiB per derivation on ordinary current hardware,
+   `internal/broker/passphrase_test.go`'s `BenchmarkDeriveKey`), targeting an
+   offline-resistant cost (`vault.cpv` is a file an attacker who copies it
+   can brute-force offline with unlimited parallel guesses, unlike a login
+   prompt) that still stays safe on a small CI runner. A random 16-byte salt
+   is persisted at `$CPASS_HOME/broker.salt` with mode `0600` so the same
+   passphrase always re-derives the same key, and the `N`/`r`/`p` used for it
+   are persisted alongside it at `$CPASS_HOME/broker.kdf` (mode `0600`) so a
+   future cost change never has to guess how an existing salt was derived. A
+   `broker.salt` from before this record existed has no `broker.kdf` next to
+   it; that absence itself means "derived with this project's original
+   `N=2^15, r=8, p=1` parameters" (~60ms, ~32MiB — fine for the login this
+   project shipped as v1's threat model, too weak for the offline-copy one
+   above), and it keeps being derived that way indefinitely so the same
+   passphrase keeps reproducing the same key. There is no in-place upgrade
+   of an existing passphrase Vault onto the new parameters yet — raising `N`
+   changes the derived key, which would need the Vault's data key re-wrapped
+   under it — so moving one over today means creating a fresh Vault (`cpass
+   init`, unset `CPASS_HOME` or point it elsewhere first) and re-adding its
+   Handles; a macOS Vault on the default Keychain unlock path is unaffected
+   either way. Once derived, that key is handed to a
    detached `cpass broker-serve` process over a pipe — never a command-line
    argument, so it never appears in `ps`. That process listens on a
    user-only Unix domain socket (mode `0600`) at `$XDG_RUNTIME_DIR/cpass.sock`
@@ -598,6 +618,7 @@ All paths below are relative to `$CPASS_HOME` unless stated otherwise.
 | `$CPASS_HOME/vault.cpv` | The Vault: the encrypted envelope described above. | `0600` (dir `0700`) |
 | `$CPASS_HOME/vault.cpv.tmp` | Transient — the Vault's atomic-write staging file; renamed over `vault.cpv` on save, never left behind on success. | `0600` |
 | `$CPASS_HOME/broker.salt` | The scrypt salt for deriving the unlock key from a passphrase (Linux/CI unlock path only). | `0600` |
+| `$CPASS_HOME/broker.kdf` | The scrypt `N`/`r`/`p` cost the salt above was derived with (Linux/CI unlock path only); absent next to a `broker.salt` from before this file existed, which means the legacy `N=2^15` cost. | `0600` |
 | `$CPASS_HOME/cpass.sock` (or `$XDG_RUNTIME_DIR/cpass.sock` if set) | The Broker process's Unix domain socket (Linux/CI unlock path only). | `0600` |
 | `$CPASS_HOME/redactions.log` | The append-only redaction event log described above. | `0600` |
 | `$CPASS_HOME/run/<16-hex-char id>/` | One per-invocation temp directory for `cpass run`'s file Bindings; holds a `.pid` file and one file per file-bound Secret, all shredded on exit. | `0700` (files `0600`) |
