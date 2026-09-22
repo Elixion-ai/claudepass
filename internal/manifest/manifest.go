@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/Elixion-ai/claudepass/internal/vault"
@@ -254,8 +255,23 @@ func (m *Manifest) Has(handle string) bool {
 	return false
 }
 
+// unquote strips a value's surrounding quotes. Save always writes a
+// double-quoted value through Go's %q, so a double-quoted string is
+// unescaped with strconv.Unquote first — the exact inverse of %q — falling
+// back to a plain strip when that fails (a hand-written value using an
+// escape %q never produces, e.g. a bare backslash before a letter):
+// Save/Load's own round trip stays exact without becoming stricter than
+// Load already was about a hand-authored file. A single-quoted value (this
+// package's own TOML subset never itself writes one, only Load accepts it)
+// has no escapes at all and is always a plain strip.
 func unquote(s string) string {
-	if len(s) >= 2 && (s[0] == '"' && s[len(s)-1] == '"' || s[0] == '\'' && s[len(s)-1] == '\'') {
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		if u, err := strconv.Unquote(s); err == nil {
+			return u
+		}
+		return s[1 : len(s)-1]
+	}
+	if len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'' {
 		return s[1 : len(s)-1]
 	}
 	return s
