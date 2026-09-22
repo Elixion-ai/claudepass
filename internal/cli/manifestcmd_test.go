@@ -202,3 +202,42 @@ func TestManifestCheckEffectiveNeedsAProjectManifest(t *testing.T) {
 		t.Fatalf("stderr: %q", errb.String())
 	}
 }
+
+// TestManifestInitWarnsAtABroadRoot is the regression test for CLA-96:
+// `cpass manifest init` run at the caller's own home directory must warn,
+// loudly but not fatally, before writing .claudepass.toml — a Manifest
+// there would turn every Global Handle this machine ever declares into an
+// ambient default for every subdirectory beneath it.
+func TestManifestInitWarnsAtABroadRoot(t *testing.T) {
+	manifestTestEnv(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Chdir(home)
+	e, out, errb := newPlainEnv()
+	code := runManifest(e, "init")
+	if code != ExitOK {
+		t.Fatalf("init: %d; stderr=%s", code, errb)
+	}
+	if !strings.Contains(errb.String(), "broad ancestor") {
+		t.Fatalf("want a broad-root warning, got stderr=%q", errb.String())
+	}
+	if !strings.Contains(out.String(), "created ") {
+		t.Fatalf("init must still succeed even with the warning: stdout=%q", out.String())
+	}
+}
+
+// TestManifestInitStaysQuietForAnOrdinaryDirectory is the flip side: an
+// ordinary project directory, never $HOME or /, must draw no warning at
+// all — the whole point is that this stays silent for the common case.
+func TestManifestInitStaysQuietForAnOrdinaryDirectory(t *testing.T) {
+	manifestTestEnv(t)
+	t.Chdir(t.TempDir())
+	e, _, errb := newPlainEnv()
+	code := runManifest(e, "init")
+	if code != ExitOK {
+		t.Fatalf("init: %d; stderr=%s", code, errb)
+	}
+	if errb.String() != "" {
+		t.Fatalf("an ordinary directory must draw no warning at all: stderr=%q", errb.String())
+	}
+}

@@ -45,6 +45,18 @@ func manifestInit(e *env, args []string) int {
 	if _, err := os.Stat(p); err == nil {
 		return e.fail(ExitError, "%s already exists", p)
 	}
+	// Warn before writing: a Manifest planted at the filesystem root or the
+	// caller's own home directory turns every Global Handle this machine
+	// ever declares into an ambient default for every subdirectory beneath
+	// it — scratch checkouts and downloads included, none of them reviewed
+	// or introduced to ClaudePass on their own. Never fatal, and silent for
+	// an ordinary project root (BroadRoot's own withhold-rather-than-guess
+	// error handling keeps a broken os.UserHomeDir() from blocking init).
+	if broad, _ := manifest.BroadRoot("."); broad {
+		if wd, err := os.Getwd(); err == nil {
+			e.notice("%s is a broad ancestor (your home directory, or /) — every Global Handle you ever declare will reach every directory beneath it, not just this project; consider running cpass manifest init somewhere narrower", wd)
+		}
+	}
 	m := &manifest.Manifest{Path: p, GlobalDisabled: *noGlobal}
 	if err := m.Save(); err != nil {
 		return e.failErr(err)

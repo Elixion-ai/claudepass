@@ -58,6 +58,19 @@ func Refs(dir string, includeGlobal bool) (refs []broker.Ref, notices []string, 
 				for _, en := range gm.Entries {
 					refs = append(refs, broker.Ref{Handle: en.Handle, Declared: en.Binding, FromGlobal: true})
 				}
+				// `cpass manifest init` warns at the moment a Manifest is
+				// planted at a broad ancestor, but a Manifest can end up
+				// broad other ways too — hand-copied, git-cloned straight
+				// into $HOME. This is the run-time backstop: only once this
+				// Manifest actually hands a directory a Global Handle,
+				// worth saying, and cheap enough (one filepath comparison)
+				// to check on every run without it costing an ordinary
+				// project root anything.
+				if len(gm.Entries) > 0 {
+					if broad, _ := BroadRoot(filepath.Dir(p)); broad {
+						notices = append(notices, broadRootNotice(filepath.Dir(p)))
+					}
+				}
 			}
 		}
 	}

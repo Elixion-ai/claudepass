@@ -296,3 +296,62 @@ func TestGlobalReachableMatchesRefs(t *testing.T) {
 		t.Fatalf("an opted-out project must not be reachable: %v %v", reachable, err)
 	}
 }
+
+// TestRefsWarnsWhenABroadRootManifestServesAGlobalHandle is the regression
+// test for CLA-96: a Manifest whose own root is a broad ancestor (here,
+// $HOME) must draw a run-time notice the moment it actually hands the
+// caller a Global Handle — the backstop for a Manifest that ended up broad
+// some way other than `cpass manifest init` (hand-copied, git-cloned
+// straight into $HOME).
+func TestRefsWarnsWhenABroadRootManifestServesAGlobalHandle(t *testing.T) {
+	root := fixture(t, []Entry{{Handle: "openai/key"}}, nil)
+	t.Setenv("HOME", root)
+	refs, notices, err := Refs(root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := handles(refs); len(got) != 1 || got[0] != "openai/key" {
+		t.Fatalf("the Global Handle must still be served: %v", got)
+	}
+	found := false
+	for _, n := range notices {
+		if strings.Contains(n, "broad ancestor") && strings.Contains(n, root) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("want a broad-root notice naming %s, got %v", root, notices)
+	}
+}
+
+// TestRefsStaysQuietForAnOrdinaryProjectRoot is the flip side: an ordinary
+// project directory — never $HOME, never / — must never draw the
+// broad-root notice, however many Global Handles it receives.
+func TestRefsStaysQuietForAnOrdinaryProjectRoot(t *testing.T) {
+	root := fixture(t, []Entry{{Handle: "openai/key"}, {Handle: "stripe/live"}}, nil)
+	_, notices, err := Refs(root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range notices {
+		if strings.Contains(n, "broad ancestor") {
+			t.Fatalf("an ordinary project root must never draw the broad-root notice: %v", notices)
+		}
+	}
+}
+
+// TestRefsBroadRootStaysQuietWithNoGlobalHandleServed: the warning is about
+// a broad-root Manifest actually serving a Global Handle, not merely
+// existing at a broad root — a machine with nothing declared globally yet
+// must not be warned about a hazard that has no effect yet.
+func TestRefsBroadRootStaysQuietWithNoGlobalHandleServed(t *testing.T) {
+	root := fixture(t, nil, []Entry{{Handle: "db/url"}})
+	t.Setenv("HOME", root)
+	_, notices, err := Refs(root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notices) != 0 {
+		t.Fatalf("no Global Handle was served, so no notice should fire: %v", notices)
+	}
+}
