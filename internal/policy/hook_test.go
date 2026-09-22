@@ -44,6 +44,10 @@ func TestEvaluateHook(t *testing.T) {
 		{"echo mentioning cat as data", "echo cat .env", false},
 		{"printf mentioning cat as data", `printf 'cat .env'`, false},
 		{"find's own . argument is not the source builtin", `find . -name "*.key"`, false},
+		// CLA-64 review: the printer exemption above must skip past a
+		// leading VAR=value assignment before checking the command word,
+		// not just look at word 0 literally.
+		{"leading assignment before echo still exempts its data argument", "DEBUG=1 echo cat .env", false},
 
 		// refused: secret-bearing file reads
 		{"cat dotenv", "cat .env", true},

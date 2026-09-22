@@ -137,15 +137,18 @@ func hookWalk(command string, depth int) *Refusal {
 				// A pure-output program's own arguments are data it
 				// prints, not programs it runs: `echo cat .env` never
 				// executes cat. This exempts only an argument of
-				// echo/printf/print's own command line (word 0 of this
-				// simple command) — a reader named anywhere else is still
+				// echo/printf/print's own command line — word 0 of this
+				// simple command, or the first word after a leading run of
+				// VAR=value assignments, so a printer prefixed with one (e.g.
+				// DEBUG=1 echo ...) is exempted the same way (printerArg,
+				// CLA-64 review) — a reader named anywhere else is still
 				// caught, exactly as before, which is what keeps a reader
 				// behind a wrapper this list doesn't enumerate (`find .
 				// -exec cat .env \;`, `timeout 5 cat .env`, `nice cat
 				// .env`, `xargs cat < .env`, `sudo cat .env`) refused
 				// without narrowing detection to argv[0] plus an
 				// allowlist of wrappers.
-				if i <= 0 || !printers[base(words[0].raw)] {
+				if !printerArg(words, i) {
 					for _, arg := range words[i+1:] {
 						if matchesSecretFile(arg.raw) {
 							return &Refusal{
@@ -222,6 +225,22 @@ func commandStart(words []word, i int) bool {
 		}
 	}
 	return true
+}
+
+// printerArg reports whether word position i in words is an argument
+// printed by this simple command's own echo/printf/print: its command word
+// (word 0, or the first word after a leading run of VAR=value assignments,
+// found the same way commandStart finds one) must itself be a printer, and
+// i must come strictly after it. This is what exempts `echo cat .env` and
+// `DEBUG=1 echo cat .env` alike (CLA-64, and CLA-64's review fix for the
+// leading-assignment case) — a reader word here is data the printer
+// prints, not a program that runs.
+func printerArg(words []word, i int) bool {
+	j := 0
+	for j < len(words) && assignment.MatchString(words[j].raw) {
+		j++
+	}
+	return j < len(words) && i > j && printers[base(words[j].raw)]
 }
 
 // addInlineValueRefusal reports whether args (the words after `cpass add`)
