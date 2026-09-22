@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
@@ -172,6 +173,49 @@ func TestRunStripsCpassKeyFromChild(t *testing.T) {
 		if env["PATH"] == "" {
 			t.Fatalf("ordinary variables like PATH must still be inherited (args %v): %v", args, env)
 		}
+	}
+}
+
+// TestRunStreamsWithoutBufferingDelay is the e2e regression for PRD story
+// #18 (docs/PRD.md): a long-running command's first line must reach the
+// Agent well before the command itself exits, not only once the pipe
+// closes and the internal Redactor-writer unit tests (idleFlush, Close)
+// happen to agree. It reads the live pipe with a short per-read deadline,
+// not a fixed sleep, as the actual assertion.
+func TestRunStreamsWithoutBufferingDelay(t *testing.T) {
+	ve := newVault(t)
+	cmd := exec.Command(cpassBin, "run", "--", helperBin)
+	cmd.Env = append(append(baseEnv(), "CPASS_HOME="+ve.home, "CPASS_KEY="+ve.key), "HELPER_STREAM_SLEEP_MS=2000")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	lines := make(chan string, 2)
+	go func() {
+		sc := bufio.NewScanner(stdout)
+		for sc.Scan() {
+			lines <- sc.Text()
+		}
+		close(lines)
+	}()
+	deadline := time.Second
+	if raceEnabled {
+		deadline = 1500 * time.Millisecond
+	}
+	select {
+	case line, ok := <-lines:
+		if !ok || line != "stream-line-1" {
+			t.Fatalf("first line: got %q ok=%v", line, ok)
+		}
+	case <-time.After(deadline):
+		_ = cmd.Process.Kill()
+		t.Fatalf("first line did not arrive within %v; output is being buffered until the child exits", deadline)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("cpass run: %v", err)
 	}
 }
 
