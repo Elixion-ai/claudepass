@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,6 +103,40 @@ func TestIntegrateCodexRemove(t *testing.T) {
 			t.Fatalf("unexpected stderr %q", errb.String())
 		}
 	})
+}
+
+// TestIntegrateClaudeStampsPluginVersionFromCLIVersion is CLA-82's
+// end-to-end regression test: plugin.json's own "version" field must track
+// a tagged release, not stay frozen at whatever the embedded source file
+// says. It simulates a release build the way GoReleaser's ldflags do (see
+// .goreleaser.yaml) — setting the package-level Version var directly,
+// since that's exactly what -X github.com/.../internal/cli.Version={{
+// .Version }} does at link time — then asserts the plugin.json `cpass
+// integrate claude` installs carries that same tagged version, with no
+// separate release-time stamping step to keep in sync or forget.
+func TestIntegrateClaudeStampsPluginVersionFromCLIVersion(t *testing.T) {
+	origVersion := Version
+	t.Cleanup(func() { Version = origVersion })
+	Version = "v3.4.5"
+
+	dir := t.TempDir()
+	var out, errb bytes.Buffer
+	code := Main([]string{"integrate", "claude", "--path", dir}, strings.NewReader(""), &out, &errb)
+	if code != ExitOK {
+		t.Fatalf("exit = %d, stderr = %q", code, errb.String())
+	}
+
+	manifestRaw, err := os.ReadFile(filepath.Join(dir, "claudepass", ".claude-plugin", "plugin.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(manifestRaw, &manifest); err != nil {
+		t.Fatalf("plugin.json is not valid JSON: %v", err)
+	}
+	if manifest["version"] != "v3.4.5" {
+		t.Fatalf("plugin.json version = %v, want the tagged release version v3.4.5", manifest["version"])
+	}
 }
 
 // TestIntegrateClaudeRemove is CLA-78's acceptance case for `cpass

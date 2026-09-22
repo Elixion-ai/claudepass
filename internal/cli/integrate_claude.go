@@ -63,7 +63,7 @@ func integrateClaude(e *env, args []string) int {
 		return ExitOK
 	}
 
-	changed, err := integrate.WriteClaudePlugin(target)
+	changed, err := integrate.WriteClaudePlugin(target, effectiveVersion())
 	if err != nil {
 		return e.failErr(err)
 	}

@@ -2,15 +2,24 @@ package integrate
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	pluginfiles "github.com/Elixion-ai/claudepass/plugins/claude-code"
 )
+
+// testVersion stands in for the running cpass binary's own version (what
+// cli.effectiveVersion() returns) across this file's tests — a real caller
+// always has one to pass, so no test here calls WriteClaudePlugin with an
+// empty version.
+const testVersion = "v1.2.3-test"
 
 func TestWriteClaudePluginFreshInstall(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "claudepass")
-	changed, err := WriteClaudePlugin(dir)
+	changed, err := WriteClaudePlugin(dir, testVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,12 +50,83 @@ func TestWriteClaudePluginFreshInstall(t *testing.T) {
 	}
 }
 
-func TestWriteClaudePluginSecondCallReportsUnchanged(t *testing.T) {
+// TestWriteClaudePluginStampsRequestedVersion is CLA-82's regression test:
+// plugin.json's own "version" field was frozen at whatever the embedded
+// source file happened to say (unchanged across 7 tagged releases) because
+// WriteClaudePlugin copied it byte-for-byte. It must instead always carry
+// the version passed in — normally the installing binary's own version,
+// which for a release build is exactly the tagged release version
+// (ldflags-injected into cli.Version, read back by cli.effectiveVersion) —
+// so there is nothing left to remember to bump at release time. Every
+// other field must still match the embedded source file untouched.
+func TestWriteClaudePluginStampsRequestedVersion(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "claudepass")
-	if _, err := WriteClaudePlugin(dir); err != nil {
+	if _, err := WriteClaudePlugin(dir, "v7.8.9"); err != nil {
 		t.Fatal(err)
 	}
-	changed, err := WriteClaudePlugin(dir)
+	manifestRaw, err := os.ReadFile(filepath.Join(dir, ".claude-plugin", "plugin.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(manifestRaw, &manifest); err != nil {
+		t.Fatalf("plugin.json is not valid JSON: %v", err)
+	}
+	if manifest["version"] != "v7.8.9" {
+		t.Fatalf("plugin.json version = %v, want v7.8.9", manifest["version"])
+	}
+
+	sourceRaw, err := pluginfiles.FS.ReadFile(pluginManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source map[string]any
+	if err := json.Unmarshal(sourceRaw, &source); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"name", "displayName", "description", "author"} {
+		got, want := fmt.Sprint(manifest[field]), fmt.Sprint(source[field])
+		if got != want {
+			t.Fatalf("plugin.json %s = %v, want %v (unchanged from the embedded source)", field, got, want)
+		}
+	}
+}
+
+// TestWriteClaudePluginVersionBumpIsNotSilentlyIgnored asserts a stale
+// installed version is treated as drift, not as "already up to date": a
+// second call with a different version reports changed and rewrites
+// plugin.json, exactly the same as any other content change would.
+func TestWriteClaudePluginVersionBumpIsNotSilentlyIgnored(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "claudepass")
+	if _, err := WriteClaudePlugin(dir, "v1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := WriteClaudePlugin(dir, "v1.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("a version bump must report changed, not silently keep the stale installed version")
+	}
+	manifestRaw, err := os.ReadFile(filepath.Join(dir, ".claude-plugin", "plugin.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(manifestRaw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest["version"] != "v1.0.1" {
+		t.Fatalf("plugin.json version = %v, want v1.0.1", manifest["version"])
+	}
+}
+
+func TestWriteClaudePluginSecondCallReportsUnchanged(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "claudepass")
+	if _, err := WriteClaudePlugin(dir, testVersion); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := WriteClaudePlugin(dir, testVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +140,7 @@ func TestWriteClaudePluginSkillMatchesSharedSnippet(t *testing.T) {
 	// every other integration (Codex's AGENTS.md, `cpass integrate
 	// --print`): one Snippet, no drift between surfaces.
 	dir := filepath.Join(t.TempDir(), "claudepass")
-	if _, err := WriteClaudePlugin(dir); err != nil {
+	if _, err := WriteClaudePlugin(dir, testVersion); err != nil {
 		t.Fatal(err)
 	}
 	skill, err := os.ReadFile(filepath.Join(dir, "skills", "claudepass", "SKILL.md"))
@@ -85,7 +165,7 @@ func TestWriteClaudePluginSkillMatchesSharedSnippet(t *testing.T) {
 
 func TestRemoveClaudePluginOnAFreshInstall(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "claudepass")
-	if _, err := WriteClaudePlugin(dir); err != nil {
+	if _, err := WriteClaudePlugin(dir, testVersion); err != nil {
 		t.Fatal(err)
 	}
 	removed, err := RemoveClaudePlugin(dir)
@@ -113,7 +193,7 @@ func TestRemoveClaudePluginWhenNothingInstalledIsANoop(t *testing.T) {
 
 func TestRemoveClaudePluginIsIdempotent(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "claudepass")
-	if _, err := WriteClaudePlugin(dir); err != nil {
+	if _, err := WriteClaudePlugin(dir, testVersion); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := RemoveClaudePlugin(dir); err != nil {
