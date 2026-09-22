@@ -145,7 +145,7 @@ func hookWalk(command string, depth int) *Refusal {
 				// .env`, `xargs cat < .env`, `sudo cat .env`) refused
 				// without narrowing detection to argv[0] plus an
 				// allowlist of wrappers.
-				if !(i > 0 && printers[base(words[0].raw)]) {
+				if i <= 0 || !printers[base(words[0].raw)] {
 					for _, arg := range words[i+1:] {
 						if matchesSecretFile(arg.raw) {
 							return &Refusal{
