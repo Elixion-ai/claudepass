@@ -1,6 +1,9 @@
 package policy
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // word is one shell word with its raw text (quotes removed, expansions kept
 // as written) and any command substitutions it contained. A word that
@@ -52,12 +55,48 @@ type pendingHeredoc struct {
 	strip  bool // <<- : strip leading tabs from the body and the terminator line
 }
 
+// shellKeywords are shell reserved words that, in command-start position
+// (the first word of a not-yet-begun simple command — cur is still empty
+// when the word completes), begin a NEW simple-command context exactly the
+// way ';'/'&&'/'||' already separate commands, instead of becoming argv[0]
+// of a bogus pseudo-command literally named "if"/"then"/etc. Without this,
+// `if cat .env; then true; fi` tokenized as one simple command
+// ["if","cat",".env"] — prog=="if" matches no policy rule, so the real
+// `cat .env` invocation was never separately evaluated at all
+// (command-policy:control-flow-keyword-bypass). Elsewhere in a word list
+// (an argument, not a command's own first word) these are ordinary text,
+// exactly like "in" inside `for i in 1 2 3` — the loop body's own command,
+// after a `do`, still gets its own fresh command-start check.
+var shellKeywords = map[string]bool{
+	"if": true, "then": true, "elif": true, "else": true, "fi": true,
+	"while": true, "until": true, "do": true, "done": true,
+	"for": true, "in": true, "case": true, "esac": true, "select": true,
+}
+
+// isWordBoundaryByte reports whether s[i] (or end of string) is a
+// whitespace/operator byte that could end a bare `{`/`}` token — used to
+// tell a standalone `{`/`}` command-grouping operator from one glued to
+// adjacent text, e.g. a brace-expansion span like ".{env,bashrc}"
+// (command-policy:brace-expansion-hides-filename).
+func isWordBoundaryByte(s string, i int) bool {
+	if i >= len(s) {
+		return true
+	}
+	switch s[i] {
+	case ' ', '\t', '\n', ';', '|', '&', '(', ')':
+		return true
+	}
+	return false
+}
+
 // splitCommands breaks a shell string into simple commands (lists of
 // words), treating ; & | && || newlines ( ) { } and redirections as
 // separators. It understands quotes, backslashes, $(...), backticks,
-// line-continuations (backslash-newline, elided like a real shell), and
-// heredocs/here-strings. It is deliberately conservative: unknown syntax
-// becomes ordinary words.
+// ANSI-C ($'...') and locale ($"...") quoting, line-continuations
+// (backslash-newline, elided like a real shell), heredocs/here-strings,
+// reserved words that begin a new command (if/then/.../done/for/.../esac),
+// and single-level, non-nested brace expansion ({a,b,c}, {n..m}, {a..z}).
+// It is deliberately conservative: unknown syntax becomes ordinary words.
 func splitCommands(s string) [][]word {
 	var cmds [][]word
 	var cur []word
@@ -68,16 +107,26 @@ func splitCommands(s string) [][]word {
 
 	flushWord := func() {
 		if inWord {
-			cur = append(cur, word{raw: buf.String(), subs: subs})
+			w := buf.String()
+			ws := subs
 			buf.Reset()
 			subs = nil
 			inWord = false
+			if len(cur) == 0 && shellKeywords[w] {
+				// A reserved word in command-start position: discard it
+				// (it carries no subs of its own — no $()/backtick text
+				// can equal a bare keyword) rather than let it become
+				// argv[0] of a fake command; the word that follows is
+				// judged as the real one.
+				return
+			}
+			cur = append(cur, word{raw: w, subs: ws})
 		}
 	}
 	flushCmd := func() {
 		flushWord()
 		if len(cur) > 0 {
-			cmds = append(cmds, cur)
+			cmds = append(cmds, expandBraces(cur))
 			cur = nil
 		}
 	}
@@ -110,38 +159,35 @@ func splitCommands(s string) [][]word {
 			}
 			inWord = true
 		case c == '"':
-			i++
+			text, sb, next := scanDoubleQuotedBody(s, i+1)
+			buf.WriteString(text)
+			subs = append(subs, sb...)
 			inWord = true
-			for i < len(s) && s[i] != '"' {
-				if s[i] == '\\' && i+1 < len(s) {
-					if s[i+1] == '\n' {
-						i += 2
-						continue
-					}
-					buf.WriteByte(s[i+1])
-					i += 2
-					continue
-				}
-				if s[i] == '$' && i+1 < len(s) && s[i+1] == '(' {
-					inner, n := matchParen(s[i+2:])
-					subs = append(subs, inner)
-					buf.WriteString("$(" + inner + ")")
-					i += 2 + n
-					continue
-				}
-				if s[i] == '`' {
-					j := strings.IndexByte(s[i+1:], '`')
-					if j >= 0 {
-						subs = append(subs, s[i+1:i+1+j])
-						buf.WriteString(s[i : i+j+2])
-						i += j + 2
-						continue
-					}
-				}
-				buf.WriteByte(s[i])
-				i++
-			}
-			i++ // closing quote
+			i = next
+		case c == '$' && i+1 < len(s) && s[i+1] == '\'':
+			// ANSI-C quoting, $'...': contributes only its unescaped text
+			// to the word, consuming no literal leading '$'
+			// (command-policy:quoting-ansi-c-and-locale-strings) —
+			// without this case the '$' fell through to the default
+			// handler as a literal byte and the following '...' was then
+			// parsed as an ordinary single-quoted string, so `cat
+			// $'.env'` mangled into the word "$.env", which matches no
+			// secret-file glob.
+			text, next := scanAnsiCString(s, i+2)
+			buf.WriteString(text)
+			inWord = true
+			i = next
+		case c == '$' && i+1 < len(s) && s[i+1] == '"':
+			// Locale-translated quoting, $"...": behaves like an ordinary
+			// double-quoted string — translation is a runtime-only
+			// concern this checker can safely ignore — consuming no
+			// literal leading '$' either, for the same reason as $'...'
+			// above.
+			text, sb, next := scanDoubleQuotedBody(s, i+2)
+			buf.WriteString(text)
+			subs = append(subs, sb...)
+			inWord = true
+			i = next
 		case c == '$' && i+1 < len(s) && s[i+1] == '(':
 			inner, n := matchParen(s[i+2:])
 			subs = append(subs, inner)
@@ -222,14 +268,28 @@ func splitCommands(s string) [][]word {
 				pending = nil
 				i = pos
 				if len(cur) > 0 {
-					cmds = append(cmds, cur)
+					cmds = append(cmds, expandBraces(cur))
 					cur = nil
 				}
 				continue
 			}
 			flushCmd()
 			i++
-		case c == ';' || c == '|' || c == '&' || c == '(' || c == ')' || c == '{' || c == '}':
+		case c == ';' || c == '|' || c == '&' || c == '(' || c == ')':
+			flushCmd()
+			i++
+		case (c == '{' || c == '}') && !inWord && isWordBoundaryByte(s, i+1):
+			// A standalone `{`/`}` token: real bash's command-grouping
+			// reserved word, exactly like ';'/'&&'/'||' above. Only
+			// recognized as such when it is its own whitespace/operator-
+			// delimited token (mirroring shellKeywords' command-start
+			// check) — glued to adjacent text (a brace-expansion span like
+			// ".{env,bashrc}", or any other glued spelling) it falls
+			// through to the default case below as ordinary text instead,
+			// so the word is never silently truncated
+			// (command-policy:brace-expansion-hides-filename); expandBraces
+			// then expands a recognized {a,b,c}/{n..m}/{a..z} span within
+			// that intact word into the separate words it stands for.
 			flushCmd()
 			i++
 		case c == '<' && i+1 < len(s) && s[i+1] == '<':
@@ -459,4 +519,303 @@ func isDigits(s string) bool {
 		}
 	}
 	return true
+}
+
+// scanDoubleQuotedBody reads the body of a double-quoted string — the
+// ordinary "..." form, or its locale-translated cousin $"..." (the only
+// difference between the two is the literal bytes that introduce them;
+// translation itself is a runtime-only concern this checker can safely
+// ignore, matching the untranslated fallback) — starting right after its
+// opening quote, up to and including its closing quote. Command
+// substitutions and backtick substitutions inside are recorded into subs
+// exactly like the plain '"' case always has; a trailing backslash-newline
+// is elided, matching real shell line-continuation semantics inside a
+// double-quoted string. i pointing past end of string (an unterminated
+// quote) reads to end of string, same as before this was factored out.
+func scanDoubleQuotedBody(s string, i int) (text string, subs []string, next int) {
+	var buf strings.Builder
+	for i < len(s) && s[i] != '"' {
+		if s[i] == '\\' && i+1 < len(s) {
+			if s[i+1] == '\n' {
+				i += 2
+				continue
+			}
+			buf.WriteByte(s[i+1])
+			i += 2
+			continue
+		}
+		if s[i] == '$' && i+1 < len(s) && s[i+1] == '(' {
+			inner, n := matchParen(s[i+2:])
+			subs = append(subs, inner)
+			buf.WriteString("$(" + inner + ")")
+			i += 2 + n
+			continue
+		}
+		if s[i] == '`' {
+			j := strings.IndexByte(s[i+1:], '`')
+			if j >= 0 {
+				subs = append(subs, s[i+1:i+1+j])
+				buf.WriteString(s[i : i+j+2])
+				i += j + 2
+				continue
+			}
+		}
+		buf.WriteByte(s[i])
+		i++
+	}
+	if i < len(s) {
+		i++ // closing quote
+	}
+	return buf.String(), subs, i
+}
+
+// scanAnsiCString reads the body of bash's ANSI-C-quoted string, $'...' —
+// i pointing right after its opening quote — up to and including its
+// closing quote, applying the same backslash-escape processing a real
+// shell does inside $'...': \n \t \r \a \b \f \v \e \\ \' \" \? all
+// contribute the byte they name, \xHH (1-2 hex digits) and \0NNN/\NNN (1-3
+// octal digits) contribute the byte they encode, and any other backslash
+// sequence keeps its escaped character literally, dropping only the
+// backslash — matching real bash's own fallback for a sequence it doesn't
+// recognize. Command substitutions and parameter expansions are NOT
+// processed inside $'...' (a real shell does not perform them there
+// either — only backslash escapes). Returns the unescaped text and the
+// index right after the closing quote (or end of string if unterminated).
+func scanAnsiCString(s string, i int) (string, int) {
+	var buf strings.Builder
+	for i < len(s) && s[i] != '\'' {
+		if s[i] != '\\' || i+1 >= len(s) {
+			buf.WriteByte(s[i])
+			i++
+			continue
+		}
+		c := s[i+1]
+		switch c {
+		case 'n':
+			buf.WriteByte('\n')
+			i += 2
+		case 't':
+			buf.WriteByte('\t')
+			i += 2
+		case 'r':
+			buf.WriteByte('\r')
+			i += 2
+		case 'a':
+			buf.WriteByte('\a')
+			i += 2
+		case 'b':
+			buf.WriteByte('\b')
+			i += 2
+		case 'f':
+			buf.WriteByte('\f')
+			i += 2
+		case 'v':
+			buf.WriteByte('\v')
+			i += 2
+		case 'e', 'E':
+			buf.WriteByte(0x1b)
+			i += 2
+		case '\\', '\'', '"', '?':
+			buf.WriteByte(c)
+			i += 2
+		case 'x':
+			j, n, val := i+2, 0, 0
+			for j < len(s) && n < 2 && isHexDigit(s[j]) {
+				val = val*16 + hexVal(s[j])
+				j++
+				n++
+			}
+			if n > 0 {
+				buf.WriteByte(byte(val))
+				i = j
+			} else {
+				buf.WriteByte(c)
+				i += 2
+			}
+		case '0', '1', '2', '3', '4', '5', '6', '7':
+			j, n, val := i+1, 0, 0
+			for j < len(s) && n < 3 && s[j] >= '0' && s[j] <= '7' {
+				val = val*8 + int(s[j]-'0')
+				j++
+				n++
+			}
+			buf.WriteByte(byte(val))
+			i = j
+		default:
+			buf.WriteByte(c)
+			i += 2
+		}
+	}
+	if i < len(s) {
+		i++ // closing quote
+	}
+	return buf.String(), i
+}
+
+func isHexDigit(b byte) bool {
+	return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'f') || (b >= 'A' && b <= 'F')
+}
+
+func hexVal(b byte) int {
+	switch {
+	case b >= '0' && b <= '9':
+		return int(b - '0')
+	case b >= 'a' && b <= 'f':
+		return int(b-'a') + 10
+	default:
+		return int(b-'A') + 10
+	}
+}
+
+// maxBraceExpansion bounds how many alternatives expandBraceWord/
+// numericRange/letterRange will generate for one {..} span, so a huge
+// range like {0..999999999} bails out (leaving the word unexpanded,
+// exactly like any other shape this function doesn't attempt) instead of
+// building a huge slice.
+const maxBraceExpansion = 256
+
+// expandBraces expands each word in words that carries a single-level,
+// non-nested brace-expansion span ({a,b,c}, {n..m}, {a..z}) into the
+// several words it stands for — the same flattening a real shell performs
+// on a command line before that command ever runs, so e.g. `cat
+// .{env,bashrc}` presents ".env" and ".bashrc" as separately checkable
+// arguments instead of the one intact-but-unmatchable literal
+// ".{env,bashrc}" (command-policy:brace-expansion-hides-filename). A
+// heredoc-body word (hasHeredoc) is never a candidate — its raw text is
+// empty and its actual body is checked by other means — so it passes
+// through unchanged.
+func expandBraces(words []word) []word {
+	out := make([]word, 0, len(words))
+	for _, w := range words {
+		if w.hasHeredoc {
+			out = append(out, w)
+			continue
+		}
+		for _, r := range expandBraceWord(w.raw) {
+			out = append(out, word{raw: r, subs: w.subs})
+		}
+	}
+	return out
+}
+
+// expandBraceWord expands the first {..} span in w that parses as a plain
+// comma list or a numeric/single-letter range, replacing it with each of
+// its alternatives in turn (single-level: a further {..} span nested
+// inside is left unattempted, and a second, later span in the same word is
+// left for a future pass to expand as its own word — still strictly safer
+// than not expanding at all, since every result is still checked
+// individually). A word with no {..} span, or one that doesn't parse as
+// either shape (nested braces, no comma and no "..", an unparseable
+// range, ...), is returned unchanged — real bash's own fallback for
+// anything it can't expand is also to leave the literal text alone.
+func expandBraceWord(w string) []string {
+	start := strings.IndexByte(w, '{')
+	if start < 0 {
+		return []string{w}
+	}
+	depth := 0
+	end := -1
+	for i := start; i < len(w); i++ {
+		switch w[i] {
+		case '{':
+			depth++
+			if depth > 1 {
+				return []string{w} // nested: not attempted
+			}
+		case '}':
+			depth--
+			if depth == 0 {
+				end = i
+			}
+		}
+		if end >= 0 {
+			break
+		}
+	}
+	if end < 0 {
+		return []string{w}
+	}
+	alts := braceAlternatives(w[start+1 : end])
+	if len(alts) < 2 {
+		return []string{w}
+	}
+	prefix, suffix := w[:start], w[end+1:]
+	out := make([]string, 0, len(alts))
+	for _, a := range alts {
+		out = append(out, prefix+a+suffix)
+	}
+	return out
+}
+
+// braceAlternatives parses the interior of a single {..} span as either a
+// comma-separated list (a,b,c — real bash requires at least one comma; a
+// brace with neither a comma nor ".." is not an expansion at all) or a
+// ".."-range (numeric, or a single a-z/A-Z letter, ascending or
+// descending), returning nil when neither shape matches.
+func braceAlternatives(inner string) []string {
+	if inner == "" {
+		return nil
+	}
+	if strings.Contains(inner, ",") {
+		return strings.Split(inner, ",")
+	}
+	if idx := strings.Index(inner, ".."); idx >= 0 {
+		a, b := inner[:idx], inner[idx+2:]
+		if out, ok := numericRange(a, b); ok {
+			return out
+		}
+		if out, ok := letterRange(a, b); ok {
+			return out
+		}
+	}
+	return nil
+}
+
+func numericRange(a, b string) ([]string, bool) {
+	lo, errA := strconv.Atoi(a)
+	hi, errB := strconv.Atoi(b)
+	if errA != nil || errB != nil {
+		return nil, false
+	}
+	step := 1
+	if lo > hi {
+		step = -1
+	}
+	var out []string
+	for n := lo; ; n += step {
+		out = append(out, strconv.Itoa(n))
+		if n == hi {
+			break
+		}
+		if len(out) > maxBraceExpansion {
+			return nil, false
+		}
+	}
+	return out, true
+}
+
+func letterRange(a, b string) ([]string, bool) {
+	if len(a) != 1 || len(b) != 1 {
+		return nil, false
+	}
+	lo, hi := a[0], b[0]
+	isAlpha := func(c byte) bool { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }
+	if !isAlpha(lo) || !isAlpha(hi) {
+		return nil, false
+	}
+	step := 1
+	if lo > hi {
+		step = -1
+	}
+	var out []string
+	for c := int(lo); ; c += step {
+		out = append(out, string(rune(c)))
+		if byte(c) == hi {
+			break
+		}
+		if len(out) > maxBraceExpansion {
+			return nil, false
+		}
+	}
+	return out, true
 }

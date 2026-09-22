@@ -133,6 +133,41 @@ func TestEvaluateHook(t *testing.T) {
 		{"bare set", "set", true},
 		{"export dash p", "export -p", true},
 		{"proc self environ", "cat /proc/self/environ", true},
+
+		// round 2 review: command-policy:control-flow-keyword-bypass — a
+		// shell reserved word in command-start position is never a real
+		// program name; the real command inside must still be checked.
+		// (The reveal variant — a bound variable printed from an if/while
+		// body — has no Bound value at this Bound-independent hook layer
+		// to check against at all; it is covered at the Evaluate layer,
+		// where a Handle is actually bound, by
+		// TestControlFlowKeywordCommandPosition and this ticket's e2e
+		// case below.)
+		{"if condition reads a secret file", "if cat .env; then true; fi", true},
+		{"while condition reads a secret file", "while cat .env; do break; done", true},
+		{"until condition reads a secret file", "until cat .env; do break; done", true},
+		{"if/then/fi with nothing dangerous is allowed", "if true; then echo hello; fi", false},
+		{"for loop over a literal list is allowed", "for i in 1 2 3; do echo $i; done", false},
+
+		// round 2 review: command-policy:quoting-ansi-c-and-locale-strings
+		{"ANSI-C quoting names a secret file", `cat $'.env'`, true},
+		{"locale quoting names a secret file", `cat $".env"`, true},
+		{"ANSI-C quoting around benign text is allowed", `cat $'hello'`, false},
+
+		// round 2 review: command-policy:brace-expansion-hides-filename
+		{"brace expansion names a secret file", "cat .{env,bashrc}", true},
+		{"brace expansion with nothing dangerous is allowed", "echo .{txt,md}", false},
+
+		// round 2 review: command-policy:dynamic-command-name-not-resolved
+		{"a whole variable naming a literal command reading a secret file", `x='cat .env'; $x`, true},
+		{"a whole variable naming a literal, benign command is allowed", `x='echo hello'; $x`, false},
+
+		// round 2 review:
+		// command-policy:evaluate-missing-hook-per-word-wrapper-coverage —
+		// already caught by hookWalk's own per-word scan before this
+		// round, kept here so the hook-level table stays a complete,
+		// standalone record of every shape this ticket batch closes.
+		{"find -exec cat dotenv still refused at the hook layer", `find . -exec cat .env \;`, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -193,6 +228,18 @@ func TestEvaluateHookProtectedDirs(t *testing.T) {
 	// An unrelated path outside the run dir root is unaffected.
 	if err := EvaluateHook("cat " + filepath.Join(home, "vault.cpv")); err != nil {
 		t.Fatalf("a path outside the run dir root must not be refused: %v", err)
+	}
+	// command-policy:protecteddirs-relative-path-after-cd (round 2
+	// review): a same-command `cd` into the run directory followed by a
+	// bare relative filename must resolve back to the absolute path
+	// underProtected checks against.
+	targetDir := filepath.Join(home, "run", "abc123")
+	if err := EvaluateHook("cd " + targetDir + " && cat gcp-sa"); err == nil {
+		t.Fatalf("a relative reference after a same-command cd into the run dir should be refused: %s", targetDir)
+	}
+	// Paired benign: cd-ing somewhere unrelated stays allowed.
+	if err := EvaluateHook("cd " + t.TempDir() + " && cat notes.txt"); err != nil {
+		t.Fatalf("cd to an unrelated directory must not be refused: %v", err)
 	}
 }
 

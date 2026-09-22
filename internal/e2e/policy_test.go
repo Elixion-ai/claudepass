@@ -276,6 +276,109 @@ func TestPolicyRunHeredocUnquotedExpansionAnyProgram(t *testing.T) {
 	}
 }
 
+// TestPolicyRunRound2ReviewFindings is the fixer round's e2e proof, driven
+// against a real built `cpass` binary, for every shape the round-2 review
+// reported that a shell string can express: each refused shape must be
+// refused through the actual `cpass run` invocation an Agent would make
+// (Command Policy's real execution-gating surface, not just the unit-level
+// Evaluate), the raw value must never reach stdout/stderr either way, and
+// the paired benign shape alongside it must still run normally.
+func TestPolicyRunRound2ReviewFindings(t *testing.T) {
+	ve := leakVault(t)
+	pairs := []struct {
+		name             string
+		refused, allowed string
+	}{
+		// command-policy:control-flow-keyword-bypass — a shell reserved
+		// word in command-start position is never a real program name;
+		// the real command inside (or the reveal in its body) must still
+		// be checked, not merely relied on by Redaction downstream.
+		{"if condition reads a secret file", "if cat .env; then true; fi", "if true; then echo hello; fi"},
+		{"while condition reads a secret file", "while cat .env; do break; done", "while false; do echo hello; done"},
+		{"until condition reads a secret file", "until cat .env; do break; done", "until true; do break; done"},
+		{"if body reveals a bound variable", "if true; then echo $STRIPE_LIVE; fi", "if true; then echo hello; fi"},
+		// command-policy:quoting-ansi-c-and-locale-strings
+		{"ANSI-C quoting names a secret file", `cat $'.env'`, `echo $'hello'`},
+		{"locale quoting names a secret file", `cat $".env"`, `echo $"hello"`},
+		// command-policy:brace-expansion-hides-filename
+		{"brace expansion names a secret file", "cat .{env,bashrc}", "echo .{txt,md}"},
+		// command-policy:dynamic-command-name-not-resolved
+		{"a whole variable naming a literal command reading a secret file", "x='cat .env'; $x", "x='echo hello'; $x"},
+		// command-policy:reader-here-string-reveal-bypass
+		{"cat here-string reveals a bound variable", "cat <<< $STRIPE_LIVE", "cat <<< hello"},
+	}
+	for _, p := range pairs {
+		t.Run(p.name, func(t *testing.T) {
+			r := sh(ve, p.refused)
+			if r.code != 3 || !strings.HasPrefix(r.stderr, "cpass: refused: ") {
+				t.Fatalf("refused case should be refused: %s", r)
+			}
+			if strings.Contains(r.stdout+r.stderr, leakVal) {
+				t.Fatalf("leaked: %s", r)
+			}
+			r = sh(ve, p.allowed)
+			if r.code != 0 {
+				t.Fatalf("allowed case should run: %s", r)
+			}
+		})
+	}
+}
+
+// TestPolicyRunFindExecReadsSecretFileAsDirectArgv is
+// command-policy:evaluate-missing-hook-per-word-wrapper-coverage's e2e
+// proof at the direct-argv surface (no shell string at all): Evaluate
+// previously special-cased only a fixed `wrappers` map plus `timeout`, so
+// a reader behind `find -exec` — a wrapper on neither list — was never
+// inspected when passed straight to `cpass run`, even though the
+// byte-identical text handed to `cpass policy --hook` was already refused
+// by hookWalk's own per-word scan.
+func TestPolicyRunFindExecReadsSecretFileAsDirectArgv(t *testing.T) {
+	ve := leakVault(t)
+	r := ve.run(nil, "run", "--with", "stripe/live", "--", "find", ".", "-exec", "cat", ".env", ";")
+	if r.code != 3 || !strings.Contains(r.stderr, "Secret-bearing file") {
+		t.Fatalf("find -exec wrapping cat .env must be refused as direct argv: %s", r)
+	}
+	if strings.Contains(r.stdout+r.stderr, leakVal) {
+		t.Fatalf("leaked: %s", r)
+	}
+	// Paired benign: find with nothing dangerous behind -exec, and no
+	// -exec at all, must both stay allowed.
+	r = ve.run(nil, "run", "--with", "stripe/live", "--", "find", ".", "-maxdepth", "0", "-exec", "echo", "hello", ";")
+	if r.code != 0 {
+		t.Fatalf("find -exec echo hello must stay allowed: %s", r)
+	}
+}
+
+// TestPolicyRunProtectedDirsRelativePathAfterCd is
+// command-policy:protecteddirs-relative-path-after-cd's e2e proof:
+// underProtected's absolute-prefix check must still recognize a live
+// file-Binding run directory referenced by a relative filename after a
+// same-command `cd` into it. The check is purely a static textual prefix
+// match against the run-dir root (ProtectedDirs), independent of whether
+// any file actually exists there, so a fixed id stands in for the random
+// one an Agent would otherwise have to discover live.
+func TestPolicyRunProtectedDirsRelativePathAfterCd(t *testing.T) {
+	ve := leakVault(t)
+	rundir := filepath.Join(ve.home, "run", "deadbeefdeadbeef")
+	r := sh(ve, "cd "+rundir+" && cat gcp-sa")
+	if r.code != 3 || !strings.Contains(r.stderr, "Secret file") {
+		t.Fatalf("a relative reference after a same-command cd into the run dir should be refused: %s", r)
+	}
+	if strings.Contains(r.stdout+r.stderr, leakVal) {
+		t.Fatalf("leaked: %s", r)
+	}
+	// Paired benign: cd-ing somewhere unrelated and reading a relative
+	// file there must stay allowed.
+	elsewhere := t.TempDir()
+	if err := os.WriteFile(filepath.Join(elsewhere, "notes.txt"), []byte("hi"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r = sh(ve, "cd "+elsewhere+" && cat notes.txt")
+	if r.code != 0 {
+		t.Fatalf("cd to an unrelated directory must not be refused: %s", r)
+	}
+}
+
 func TestPolicyProcEnviron(t *testing.T) {
 	ve := leakVault(t)
 	r := ve.run(nil, "run", "--with", "stripe/live", "--", "cat", "/proc/self/environ")

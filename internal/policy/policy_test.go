@@ -110,6 +110,28 @@ func TestEvaluate(t *testing.T) {
 		{"grep dot file binding", []string{"sh", "-c", `grep . $GCP_SA`}, true},
 		{"nohup wrapper", []string{"nohup", "printenv"}, true},
 		{"env wrapper to printenv", []string{"env", "FOO=1", "printenv"}, true},
+		// command-policy:reader-here-string-reveal-bypass (round 2 review):
+		// a reader given no real file operand but a bound Secret's value
+		// via a here-string is functionally "cat used as echo" and must be
+		// refused the same way a printer given $STRIPE_LIVE already is.
+		{"cat here-string reveals bound env var", []string{"sh", "-c", "cat <<< $STRIPE_LIVE"}, true},
+		{"tail here-string reveals bound env var", []string{"sh", "-c", "tail <<< $STRIPE_LIVE"}, true},
+		{"head here-string reveals bound env var", []string{"sh", "-c", "head <<< $STRIPE_LIVE"}, true},
+		{"less here-string reveals bound env var", []string{"sh", "-c", "less <<< $STRIPE_LIVE"}, true},
+		// Paired benign: a here-string with nothing dangerous in it stays
+		// allowed.
+		{"cat here-string with benign text is allowed", []string{"sh", "-c", "cat <<< hello"}, false},
+		// command-policy:evaluate-missing-hook-per-word-wrapper-coverage
+		// (round 2 review): a reader behind `find -exec`, unrecognized by
+		// both the `wrappers` map and the `shells` map, must still be
+		// caught — as both a direct argv (no shell) and a shell-string
+		// invocation.
+		{"find -exec cat dotenv, direct argv", []string{"find", ".", "-exec", "cat", ".env", ";"}, true},
+		{"find -exec cat dotenv, shell string", []string{"sh", "-c", `find . -exec cat .env \;`}, true},
+		// Paired benign: find with nothing dangerous behind -exec stays
+		// allowed, both as direct argv and as a shell string.
+		{"find -exec echo hello, direct argv is allowed", []string{"find", ".", "-exec", "echo", "hello", ";"}, false},
+		{"find -exec cat unrelated file, shell string is allowed", []string{"sh", "-c", `find . -exec cat /etc/hosts \;`}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -160,6 +182,51 @@ func TestProtectedDirs(t *testing.T) {
 	in.Argv = []string{"gcloud", "--key-file", "/home/u/.config/claudepass/run/abc/gcp-sa"}
 	if Evaluate(in) != nil {
 		t.Fatal("non-reader may use the path")
+	}
+	// command-policy:protecteddirs-relative-path-after-cd (round 2 review):
+	// a same-command `cd` into the protected run directory followed by a
+	// bare relative filename must resolve back to the absolute path
+	// underProtected checks against, both for a literal cd target and for
+	// one reached through a literal-value variable the same way a
+	// file-argument literal already resolves (resolveLiteral).
+	in.Argv = []string{"sh", "-c", "cd /home/u/.config/claudepass/run/abc && cat gcp-sa"}
+	if Evaluate(in) == nil {
+		t.Fatal("relative reference to a live file-Binding after a same-command cd should be refused")
+	}
+	in.Argv = []string{"sh", "-c", "RUNDIR=/home/u/.config/claudepass/run/abc; cd $RUNDIR && cat gcp-sa"}
+	if Evaluate(in) == nil {
+		t.Fatal("relative reference after cd via a literal-value variable should be refused")
+	}
+	// Paired benign: cd-ing somewhere unrelated and reading a relative
+	// file there must stay allowed.
+	in.Argv = []string{"sh", "-c", "cd /tmp && cat notes.txt"}
+	if Evaluate(in) != nil {
+		t.Fatal("cd to an unrelated directory must not be refused")
+	}
+}
+
+// TestProtectedDirsRelativePathAgainstExplicitCwd covers
+// command-policy:protecteddirs-relative-path-after-cd's other half: even
+// with no `cd` at all, a bare relative reader argument must resolve
+// against Input.Cwd — the directory the command will actually run in, as
+// the MCP server's run_with_secrets tool supplies it (its own process's
+// directory never follows the Agent's, so it cannot rely on os.Getwd()
+// alone the way cpass run and EvaluateHook do) — not just against a
+// same-command `cd` target.
+func TestProtectedDirsRelativePathAgainstExplicitCwd(t *testing.T) {
+	in := Input{
+		Bound:         bound,
+		ProtectedDirs: []string{"/home/u/.config/claudepass/run"},
+		Cwd:           "/home/u/.config/claudepass/run/abc",
+		Argv:          []string{"cat", "gcp-sa"},
+	}
+	if Evaluate(in) == nil {
+		t.Fatal("a relative reader argument should resolve against the given Cwd and be refused")
+	}
+	// Paired benign: an unrelated Cwd stays allowed.
+	in.Cwd = "/tmp"
+	if Evaluate(in) != nil {
+		t.Fatal("a relative reader argument under an unrelated Cwd must not be refused")
 	}
 }
 
@@ -495,5 +562,259 @@ func TestShellInvocationScriptByPathWithHeredoc(t *testing.T) {
 	argv := []string{"sh", "-c", "bash " + dangerous + " <<'EOF'\necho decoy\nEOF\n"}
 	if err := Evaluate(Input{Argv: argv}); err == nil {
 		t.Fatalf("a dangerous script paired with a benign heredoc must still be refused: %v", argv)
+	}
+}
+
+// TestControlFlowKeywordCommandPosition is
+// command-policy:control-flow-keyword-bypass (round 2 review): a shell
+// reserved word (if/then/elif/else/fi/while/until/do/done/for/in) is never
+// a real program name, so `if cat .env; then true; fi` must still evaluate
+// `cat .env` as a real simple command, the same way `sh -c 'cat .env'`
+// already does — before this fix splitCommands never recognized these
+// words at all, so the whole line tokenized as one bogus simple command
+// with prog=="if", and the real `cat .env` invocation was never separately
+// checked.
+func TestControlFlowKeywordCommandPosition(t *testing.T) {
+	cases := []struct {
+		name    string
+		argv    []string
+		refused bool
+	}{
+		{"if condition reads a secret file", []string{"sh", "-c", "if cat .env; then true; fi"}, true},
+		{"while condition reads a secret file", []string{"sh", "-c", "while cat .env; do break; done"}, true},
+		{"until condition reads a secret file", []string{"sh", "-c", "until cat .env; do break; done"}, true},
+		// The reveal variant: Command Policy's own "refuses ... reveal a
+		// Secret" promise, not merely Redaction downstream, must hold for
+		// a bound variable printed from inside a control-flow body too.
+		{"if body reveals a bound variable", []string{"sh", "-c", "if true; then echo $STRIPE_LIVE; fi"}, true},
+		{"while body reveals a bound variable", []string{"sh", "-c", "while true; do echo $STRIPE_LIVE; break; done"}, true},
+		// Paired benign shapes: an ordinary if/while/for construct with
+		// nothing dangerous in it must stay allowed — this is Command
+		// Policy correctly judging the real commands inside, not merely
+		// refusing every control-flow construct on sight.
+		{"if condition and body are both benign", []string{"sh", "-c", "if true; then echo hello; fi"}, false},
+		{"while loop is benign", []string{"sh", "-c", "while false; do echo hello; done"}, false},
+		{"for loop over a literal list is benign", []string{"sh", "-c", "for i in 1 2 3; do echo $i; done"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: c.argv, Bound: bound})
+			if (err != nil) != c.refused {
+				t.Fatalf("argv %v: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestSplitCommandsControlFlowKeywords is the tokenizer-level regression
+// for TestControlFlowKeywordCommandPosition above: a reserved word in
+// command-start position is discarded so the following word starts a
+// fresh simple command, while the exact same text used as an ordinary
+// argument (not a command's own first word) is left alone.
+func TestSplitCommandsControlFlowKeywords(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want [][]string
+	}{
+		{"if/then/fi around a condition and body", "if cat .env; then true; fi",
+			[][]string{{"cat", ".env"}, {"true"}}},
+		{"while/do/done", "while cat .env; do break; done",
+			[][]string{{"cat", ".env"}, {"break"}}},
+		{"until/do/done", "until cat .env; do break; done",
+			[][]string{{"cat", ".env"}, {"break"}}},
+		{"a reserved word used as data (not command-start) is untouched", "echo if then fi",
+			[][]string{{"echo", "if", "then", "fi"}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cmds := splitCommands(c.in)
+			if len(cmds) != len(c.want) {
+				t.Fatalf("got %d commands: %+v", len(cmds), cmds)
+			}
+			for i := range c.want {
+				if len(cmds[i]) != len(c.want[i]) {
+					t.Fatalf("cmd %d: got %+v want %v", i, cmds[i], c.want[i])
+				}
+				for j := range c.want[i] {
+					if cmds[i][j].raw != c.want[i][j] {
+						t.Fatalf("cmd %d word %d: got %q want %q", i, j, cmds[i][j].raw, c.want[i][j])
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestAnsiCAndLocaleQuoting is
+// command-policy:quoting-ansi-c-and-locale-strings (round 2 review):
+// splitCommands had no case for $'...' (ANSI-C) or $"..." (locale)
+// quoting, so both fell through to the default handler, which wrote a
+// literal '$' and then parsed '...'/"..." as an ordinary quoted string —
+// mangling `cat $'.env'` into the word "$.env", which matches no
+// secret-file glob at all.
+func TestAnsiCAndLocaleQuoting(t *testing.T) {
+	cases := []struct {
+		name    string
+		argv    []string
+		refused bool
+	}{
+		{"ANSI-C quoting as the sole argument", []string{"sh", "-c", `cat $'.env'`}, true},
+		{"locale quoting as the sole argument", []string{"sh", "-c", `cat $".env"`}, true},
+		{"ANSI-C quoting with a real escape still resolves to .env", []string{"sh", "-c", `cat $'.e\x6ev'`}, true},
+		// Glued to a prefix, ANSI-C quoting still merges into one word
+		// with the surrounding text (no literal '$' left behind), but the
+		// resulting basename ("a.env") doesn't match any secret-file glob
+		// (those require the basename to itself start with ".env"), so
+		// this must stay allowed — not refused for the wrong reason.
+		{"ANSI-C quoting glued to a prefix does not create a secret filename", []string{"sh", "-c", `cat a$'.env'`}, false},
+		// Paired benign: the same quoting forms around ordinary,
+		// non-secret text must stay allowed.
+		{"ANSI-C quoting around benign text is allowed", []string{"sh", "-c", `cat $'hello'`}, false},
+		{"locale quoting around benign text is allowed", []string{"sh", "-c", `cat $"hello"`}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: c.argv, Bound: bound})
+			if (err != nil) != c.refused {
+				t.Fatalf("argv %v: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestSplitCommandsAnsiCAndLocaleQuoting is the tokenizer-level regression:
+// $'...' consumes no literal leading '$', applies backslash-escape
+// processing, and $"..." behaves exactly like an ordinary double-quoted
+// string (also consuming no literal leading '$').
+func TestSplitCommandsAnsiCAndLocaleQuoting(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"ANSI-C quoting, no escapes", `cat $'.env'`, ".env"},
+		{"locale quoting, no escapes", `cat $".env"`, ".env"},
+		{"ANSI-C quoting, hex escape", `cat $'.e\x6ev'`, ".env"},
+		{"ANSI-C quoting, octal escape", `cat $'.e\156v'`, ".env"},
+		{"ANSI-C quoting, common escapes", `echo $'a\tb\nc'`, "a\tb\nc"},
+		{"ANSI-C quoting, unrecognized escape drops only the backslash", `echo $'a\qb'`, "aqb"},
+		{"locale quoting embeds a command substitution like a normal double-quoted string", `echo $"pre$(cat .env)post"`, "pre$(cat .env)post"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cmds := splitCommands(c.in)
+			if len(cmds) != 1 || len(cmds[0]) != 2 {
+				t.Fatalf("got %+v", cmds)
+			}
+			if got := cmds[0][1].raw; got != c.want {
+				t.Fatalf("got %q want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestBraceExpansion is command-policy:brace-expansion-hides-filename
+// (round 2 review): bash brace expansion ({a,b}) was not implemented at
+// all, and a bare `{`/`}` was unconditionally treated as a command-
+// grouping separator even when glued to adjacent text, so `cat
+// .{env,bashrc}` mis-tokenized into fragments that never presented ".env"
+// as a checkable argument to cat at all.
+func TestBraceExpansion(t *testing.T) {
+	cases := []struct {
+		name    string
+		argv    []string
+		refused bool
+	}{
+		{"comma list expands to a secret-file basename", []string{"sh", "-c", "cat .{env,bashrc}"}, true},
+		{"comma list, secret file listed second", []string{"sh", "-c", "cat .{bashrc,env}"}, true},
+		{"numeric range expands to a secret-file basename", []string{"sh", "-c", "cat id_rsa{1..2}"}, true},
+		// Paired benign: brace expansion around nothing dangerous stays
+		// allowed.
+		{"comma list with nothing dangerous is allowed", []string{"sh", "-c", "echo .{txt,md}"}, false},
+		{"standalone braces still group commands, unchanged", []string{"sh", "-c", "{ echo hi; }"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: c.argv, Bound: bound})
+			if (err != nil) != c.refused {
+				t.Fatalf("argv %v: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestSplitCommandsBraceExpansion is the tokenizer-level regression: a
+// glued {a,b,c}/{n..m}/{a..z} span expands into the separate words it
+// stands for, exactly like a real shell's own brace expansion, while a
+// standalone `{`/`}` token still separates commands unchanged and a
+// glued-but-unrecognized span (no comma, no "..") is left as intact
+// literal text rather than being truncated.
+func TestSplitCommandsBraceExpansion(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{"comma list", "cat .{env,bashrc}", []string{"cat", ".env", ".bashrc"}},
+		{"comma list, three alternatives", "echo {a,b,c}", []string{"echo", "a", "b", "c"}},
+		{"numeric range", "echo file{1..3}.txt", []string{"echo", "file1.txt", "file2.txt", "file3.txt"}},
+		{"descending numeric range", "echo {3..1}", []string{"echo", "3", "2", "1"}},
+		{"letter range", "echo {a..c}", []string{"echo", "a", "b", "c"}},
+		{"unrecognized span (no comma, no range) is left intact", "echo {notaspan}", []string{"echo", "{notaspan}"}},
+		{"nested braces are left intact (not attempted)", "echo {a,{b,c}}", []string{"echo", "{a,{b,c}}"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cmds := splitCommands(c.in)
+			if len(cmds) != 1 {
+				t.Fatalf("got %d commands: %+v", len(cmds), cmds)
+			}
+			if len(cmds[0]) != len(c.want) {
+				t.Fatalf("got %+v want %v", cmds[0], c.want)
+			}
+			for i := range c.want {
+				if cmds[0][i].raw != c.want[i] {
+					t.Fatalf("word %d: got %q want %q", i, cmds[0][i].raw, c.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestDynamicCommandNameLiteralVariable is
+// command-policy:dynamic-command-name-not-resolved (round 2 review): when
+// a simple command's first word is a whole variable reference ($x/${x})
+// to a plain-string literal already tracked in ev.literals, a real shell
+// expands and re-parses that literal as the actual command line — `x='cat
+// .env'; $x` really executes `cat .env` — so Evaluate must re-split and
+// re-evaluate it the same way eval's argument already is.
+func TestDynamicCommandNameLiteralVariable(t *testing.T) {
+	cases := []struct {
+		name    string
+		argv    []string
+		refused bool
+	}{
+		{"$x names a literal command reading a secret file", []string{"sh", "-c", `x='cat .env'; $x`}, true},
+		{"${x} form, same literal command", []string{"sh", "-c", `x='cat .env'; ${x}`}, true},
+		{"$x with an extra trailing argument appended after word-splitting", []string{"sh", "-c", `x=cat; $x .env`}, true},
+		// Paired benign: a literal command with nothing dangerous in it
+		// stays allowed.
+		{"$x names a literal, benign command", []string{"sh", "-c", `x='echo hello'; $x`}, false},
+		// Paired benign: a variable NOT tracked as a plain-string literal
+		// (assigned from a bound Secret, not a literal) must not be
+		// treated as a resolvable command name by this mechanism — it
+		// falls through to ordinary (unrefused, since running a Secret's
+		// value as a program name doesn't itself print anything) argv
+		// dispatch, unchanged from before this fix.
+		{"an unset/unknown variable as command name is left alone", []string{"sh", "-c", `$UNKNOWN_CMD .env`}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: c.argv, Bound: bound})
+			if (err != nil) != c.refused {
+				t.Fatalf("argv %v: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
+			}
+		})
 	}
 }

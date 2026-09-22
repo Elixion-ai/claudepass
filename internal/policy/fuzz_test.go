@@ -30,6 +30,41 @@ func FuzzSplitCommands(f *testing.F) {
 		"'unterminated",
 		`"unterminated`,
 		"$(unterminated",
+		// round 2: reserved-word command-start dispatch
+		// (command-policy:control-flow-keyword-bypass)
+		"if cat .env; then true; fi",
+		"while cat .env; do break; done",
+		"until cat .env; do break; done",
+		"for i in 1 2 3; do echo $i; done",
+		"case $x in a) cat .env ;; esac",
+		// round 2: ANSI-C and locale quoting
+		// (command-policy:quoting-ansi-c-and-locale-strings)
+		`cat $'.env'`,
+		`cat $".env"`,
+		`cat $'.e\x6ev'`,
+		"cat $'unterminated",
+		`cat $"unterminated`,
+		// round 2: brace expansion
+		// (command-policy:brace-expansion-hides-filename)
+		"cat .{env,bashrc}",
+		"echo {a,b,c}",
+		"echo file{1..3}.txt",
+		"echo {3..1}",
+		"echo {a..z}",
+		"echo {a,{b,c}}",
+		"echo .{unterminated",
+		"echo {,}",
+		"echo {0..999999999}",
+		// round 2: dynamic command name via a whole-variable reference
+		// (command-policy:dynamic-command-name-not-resolved)
+		"x='cat .env'; $x",
+		"x=cat; $x .env",
+		// round 2: here-string reveal through a reader
+		// (command-policy:reader-here-string-reveal-bypass)
+		"cat <<< $STRIPE_LIVE",
+		// round 2: relative path after a same-command cd
+		// (command-policy:protecteddirs-relative-path-after-cd)
+		"cd /some/dir && cat gcp-sa",
 	}
 	for _, s := range seeds {
 		f.Add(s)

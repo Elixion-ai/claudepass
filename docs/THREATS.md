@@ -287,6 +287,40 @@ value can still end up somewhere it shouldn't, today:
       plain text is not scanned for reader programs — it is inline data,
       not a script. None of this is a leak path: every one of these
       shapes is a refusal, not a silent allow.
+11. **Three narrower shapes closed this round leave their own, smaller
+    disclosed edges** (2026-09-22 audit, stream `policy`, round 2):
+    - **A dynamic command name is only resolved back to a real program
+      when it is a whole variable reference (`$x`/`${x}`) to a plain
+      string literal already assigned in the same shell string** —
+      `x='cat .env'; $x` really does execute `cat .env` and is refused the
+      same way. A command substitution naming the program (`` `echo
+      cat` .env ``, `$(echo cat) .env`) or an array expansion
+      (`arr=(cat); ${arr[@]} .env`) needs that substitution's actual
+      *runtime output*, which isn't knowable by any static read of the
+      command text, so neither is resolved and both still run unchecked
+      by this rule specifically (Redaction still catches a value the
+      resulting command then echoes back, the same defense-in-depth
+      backstop every other gap on this page already relies on). A shell
+      function defined and then called (`f(){ cat "$1"; }; f .env`) is
+      the same family and is likewise not inlined at its call site.
+    - **Brace expansion ({a,b,c}, {n..m}, {a..z}) is single-level and
+      non-nested, and only the first `{..}` span in a given word is
+      expanded.** A nested span (`{a,{b,c}}`) or a second span later in
+      the same word is left as intact literal text rather than being
+      truncated — still checked as the one word it already was, just not
+      multiplied into the several words a real shell would produce from
+      it — matching this package's existing, deliberate rule of refusing
+      or under-checking rather than guessing at a shape it cannot fully
+      model.
+    - **A reader's file argument must appear as literal text in the
+      command itself.** `echo .env | xargs cat` — the filename arriving
+      over a pipe from another program's own stdout, never sitting in the
+      command's text as an argument `cat`/`xargs` is invoked with — is
+      invisible to a purely text-based reader: there is no `.env` word
+      anywhere in the command line for `matchesSecretFile` to match
+      against. This is the same limitation item 3 above already states
+      for Redaction's own stdout/stderr-only view, one level up the
+      pipeline.
 
 ## Intercept precision (v0.1.4)
 

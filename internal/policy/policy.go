@@ -34,6 +34,15 @@ type Input struct {
 	// ProtectedDirs are directories (file-Binding run dirs) that readers
 	// may not reference by literal path.
 	ProtectedDirs []string
+	// Cwd is the directory the command will actually run in, when a
+	// caller knows one that can differ from this process's own working
+	// directory — the MCP server's run_with_secrets tool passes its
+	// caller-given cwd here, since that one long-lived process's own
+	// directory never follows the Agent's. Left empty (as cpass run and
+	// EvaluateHook both leave it, since for them the invoking process's
+	// own directory already IS where the command runs), Evaluate falls
+	// back to os.Getwd() itself.
+	Cwd string
 }
 
 // Refusal explains why a command was refused. It is an error so the run
@@ -61,11 +70,28 @@ func Evaluate(in Input) error {
 			}
 		}
 	}
+	// cwd is the directory the command actually runs in — in.Cwd when the
+	// caller supplied one that can differ from this process's own (the
+	// MCP server), otherwise the invoking process's own working directory
+	// (os.Getwd(), which for cpass run and EvaluateHook already IS where
+	// the command runs) — captured once here so a relative-looking
+	// argument to a reader can be resolved against it (resolvePath) the
+	// same way a real shell would resolve it, including after a literal
+	// `cd DIR` tracked within one shell string (see the "cd" case in
+	// simple). Neither source available (in.Cwd empty and os.Getwd
+	// erroring — an unreadable/removed cwd) leaves this "", which
+	// resolvePath treats as "nothing to resolve against" — the same
+	// absolute-path-only behaviour underProtected already had.
+	cwd := in.Cwd
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
 	ev := &evaluator{
 		bound:     map[string]vault.BindingKind{},
 		tainted:   map[string]bool{},
 		literals:  map[string]string{},
 		protected: in.ProtectedDirs,
+		cwd:       cwd,
 	}
 	for _, v := range in.Bound {
 		ev.bound[v.Name] = v.Kind
@@ -83,6 +109,13 @@ type evaluator struct {
 	// written directly as .env.
 	literals  map[string]string
 	protected []string
+	// cwd is this evaluator's current idea of the working directory —
+	// the invoking process's real cwd, updated by a literal `cd DIR` seen
+	// earlier in the same shell string (the "cd" case in simple) — used
+	// by resolvePath to make a relative reader argument comparable against
+	// an absolute ProtectedDirs entry
+	// (command-policy:protecteddirs-relative-path-after-cd).
+	cwd string
 }
 
 func (ev *evaluator) underProtected(w string) bool {
@@ -92,6 +125,20 @@ func (ev *evaluator) underProtected(w string) bool {
 		}
 	}
 	return false
+}
+
+// resolvePath resolves w against ev.cwd when w is a relative path, so
+// underProtected's absolute-prefix check still recognises a live
+// file-Binding referenced by a relative name — after a same-command `cd`
+// into its run directory, or simply because the invoking process's own
+// cwd already is (or is under) a ProtectedDirs entry. An already-absolute
+// w, a flag-shaped w, or one this evaluator has no cwd to resolve against,
+// is returned unchanged.
+func (ev *evaluator) resolvePath(w string) string {
+	if w == "" || ev.cwd == "" || filepath.IsAbs(w) || strings.HasPrefix(w, "-") {
+		return w
+	}
+	return filepath.Join(ev.cwd, w)
 }
 
 const maxDepth = 8
@@ -194,7 +241,7 @@ func (ev *evaluator) argv(argv []string, depth int) error {
 	prog := base(argv[0])
 	if readers[prog] {
 		for _, w := range argv[1:] {
-			if ev.underProtected(w) {
+			if ev.underProtected(ev.resolvePath(w)) {
 				return &Refusal{Rule: prog + " would print a Secret file", Advice: "pass the path to the tool that needs the file instead"}
 			}
 			if r := secretFileRefusal(prog, w); r != nil {
@@ -234,6 +281,44 @@ func (ev *evaluator) argv(argv []string, depth int) error {
 			return &Refusal{Rule: "shell tracing (-x) echoes expanded variables", Advice: "drop -x"}
 		}
 		return ev.shell(content, depth+1)
+	}
+	if r := readerWordRefusal(argv); r != nil {
+		return r
+	}
+	return nil
+}
+
+// readerWordRefusal mirrors hookWalk's per-word reader-name fallback
+// (internal/policy/hook.go) for a flat argv with no shell involved: even
+// when argv[0] isn't itself a reader, a reader name appearing anywhere
+// else in argv — the tail of a wrapper neither `wrappers` nor `shells`
+// enumerates, e.g. `find . -exec cat .env \;` — is still a real
+// subprocess invocation a real exec family call (execvp inside -exec, in
+// find's own case) will make, and its own file-argument words are still
+// checkable text sitting right there in argv. Before this, Evaluate (the
+// function cpass run and the MCP server actually gate real execution
+// with) special-cased only the fixed `wrappers` map plus `timeout`,
+// leaving every other wrapper completely unchecked — a parity gap with
+// EvaluateHook's hookWalk, which already scans every word position for
+// exactly this reason
+// (command-policy:evaluate-missing-hook-per-word-wrapper-coverage).
+// argv[0] itself is exempt when it is a pure-output printer
+// (echo/printf/print): the remaining words are then data it prints, never
+// programs it runs — the same exemption hookWalk's printerArg applies.
+func readerWordRefusal(argv []string) *Refusal {
+	if len(argv) == 0 || printers[base(argv[0])] {
+		return nil
+	}
+	for i := 1; i < len(argv); i++ {
+		prog := base(argv[i])
+		if !readers[prog] {
+			continue
+		}
+		for _, arg := range argv[i+1:] {
+			if r := secretFileRefusal(prog, arg); r != nil {
+				return r
+			}
+		}
 	}
 	return nil
 }
@@ -442,9 +527,47 @@ func (ev *evaluator) simple(words []word, depth int) error {
 		return nil
 	}
 	rest := words[i:]
-	prog := base(rest[0].raw)
 	args := rest[1:]
+	// command-policy:dynamic-command-name-not-resolved — the cheapest,
+	// highest-value case: a whole variable reference ($x/${x}) naming the
+	// command itself, where x was earlier assigned a plain string literal
+	// (ev.literals, the same map resolveLiteral already reads for a
+	// file-argument literal), is exactly what a real shell expands and
+	// re-parses as the actual command line before running it — `x='cat
+	// .env'; $x` really executes `cat .env`. Re-split and re-evaluate
+	// that literal text (plus any words following $x, which a real shell
+	// leaves as further arguments after $x's own word-splitting) as a
+	// fresh command, the same way eval's argument already is below.
+	// Command substitution ($(...)) and array ($x/${arr[@]}) forms need
+	// the substitution's actual runtime *output*, which can't be known
+	// statically, and remain a disclosed gap (docs/THREATS.md).
+	if resolved := ev.resolveLiteral(rest[0].raw); resolved != rest[0].raw {
+		parts := make([]string, 0, len(args)+1)
+		parts = append(parts, resolved)
+		for _, a := range args {
+			parts = append(parts, a.raw)
+		}
+		return ev.shell(strings.Join(parts, " "), depth+1)
+	}
+	prog := base(rest[0].raw)
 	switch {
+	case prog == "cd":
+		// Track a literal `cd DIR` target the same way a plain-string
+		// variable assignment already is (ev.literals) — so a following
+		// relative reader argument in this same shell string resolves
+		// against it (resolvePath), closing
+		// command-policy:protecteddirs-relative-path-after-cd's
+		// `cd $RUNDIR && cat gcp-sa` shape. Only a single, resolvable
+		// (no leftover "$", not flag-shaped) argument updates it; `cd`
+		// with no argument, `cd -`, or a target this evaluator can't
+		// resolve to a literal leaves ev.cwd unchanged rather than
+		// guessing.
+		if len(args) == 1 {
+			if resolved := ev.resolveLiteral(args[0].raw); !strings.HasPrefix(resolved, "-") && !strings.ContainsRune(resolved, '$') {
+				ev.cwd = ev.resolvePath(resolved)
+			}
+		}
+		return nil
 	case prog == "export" || prog == "declare" || prog == "typeset":
 		if len(args) == 0 {
 			return &Refusal{Rule: prog + " with no arguments prints all variables", Advice: "name the variable you want to set"}
@@ -493,8 +616,19 @@ func (ev *evaluator) simple(words []word, depth int) error {
 			if v := ev.referencesFile(a.raw); v != "" {
 				return &Refusal{Rule: fmt.Sprintf("%s would print the file behind $%s", prog, v), Advice: "pass the path to the tool that needs the file instead"}
 			}
+			// command-policy:reader-here-string-reveal-bypass: a reader
+			// given a bound/tainted variable with no matching file
+			// operand — a here-string (`cat <<< $STRIPE_LIVE`) is the
+			// live shape, since <<<'s target flows through this same
+			// ordinary-word/argument logic — is functionally "cat used
+			// as echo" and reveals the value on stdout exactly like
+			// `echo $STRIPE_LIVE` does; refused the same way a printer
+			// argument already is above.
+			if v := ev.references(a.raw); v != "" {
+				return &Refusal{Rule: fmt.Sprintf("%s would print $%s", prog, v), Advice: "pass the variable to the tool that needs it instead"}
+			}
 			resolved := ev.resolveLiteral(a.raw)
-			if ev.underProtected(resolved) {
+			if ev.underProtected(ev.resolvePath(resolved)) {
 				return &Refusal{Rule: prog + " would print a Secret file", Advice: "pass the path to the tool that needs the file instead"}
 			}
 			if r := secretFileRefusal(prog, resolved); r != nil {

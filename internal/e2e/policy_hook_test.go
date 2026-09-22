@@ -97,6 +97,52 @@ func TestPolicyHookAcceptanceFixtures(t *testing.T) {
 	}
 }
 
+// TestPolicyHookRound2ReviewFindings is the fixer round's e2e proof, at the
+// PreToolUse hook layer driven against a real built `cpass policy --hook`
+// invocation, for every file-read-class shape the round-2 review reported.
+// The two Bound-value-dependent classes (a reveal via a bound variable
+// inside a control-flow body, and the here-string reveal) have no Bound
+// value at this Bound-independent hook layer to check against at all —
+// they are covered above, at the cpass run e2e layer, where a Handle is
+// actually bound.
+func TestPolicyHookRound2ReviewFindings(t *testing.T) {
+	ve := newVault(t)
+	cases := []struct {
+		name    string
+		command string
+		blocked bool
+		want    string
+	}{
+		{"if condition reads a secret file", "if cat .env; then true; fi", true, "Secret-bearing file"},
+		{"while condition reads a secret file", "while cat .env; do break; done", true, "Secret-bearing file"},
+		{"until condition reads a secret file", "until cat .env; do break; done", true, "Secret-bearing file"},
+		{"if/then/fi with nothing dangerous is allowed", "if true; then echo hello; fi", false, ""},
+		{"ANSI-C quoting names a secret file", `cat $'.env'`, true, "Secret-bearing file"},
+		{"locale quoting names a secret file", `cat $".env"`, true, "Secret-bearing file"},
+		{"ANSI-C quoting around benign text is allowed", `cat $'hello'`, false, ""},
+		{"brace expansion names a secret file", "cat .{env,bashrc}", true, "Secret-bearing file"},
+		{"brace expansion with nothing dangerous is allowed", "echo .{txt,md}", false, ""},
+		{"a whole variable naming a literal command reading a secret file", `x='cat .env'; $x`, true, "Secret-bearing file"},
+		{"a whole variable naming a literal, benign command is allowed", `x='echo hello'; $x`, false, ""},
+		{"find -exec cat dotenv is refused at the hook layer", `find . -exec cat .env \;`, true, "Secret-bearing file"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := ve.run(preToolUseJSON(c.command), "policy", "--hook")
+			if c.blocked {
+				if r.code != 2 || !strings.HasPrefix(r.stderr, "cpass: refused: ") {
+					t.Fatalf("want a refused message on stderr: %s", r)
+				}
+				if !strings.Contains(r.stderr, c.want) {
+					t.Fatalf("stderr should mention %q: %s", c.want, r)
+				}
+			} else if r.code != 0 {
+				t.Fatalf("want exit 0, got %s", r)
+			}
+		})
+	}
+}
+
 func TestPolicyHookBlocksCpassAddInlineValue(t *testing.T) {
 	ve := newVault(t)
 	r := ve.run(preToolUseJSON("cpass add stripe/live sk_live_51H8xJ2eZvKYlo2CTaddinlineVALUEabc"), "policy", "--hook")
