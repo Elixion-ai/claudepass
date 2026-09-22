@@ -316,12 +316,21 @@ and exercised, not just written:
   back to `unsafe.Pointer` to hand it to `CFDictionaryCreate` is the
   intended, necessary way to call these APIs from cgo, not arithmetic on
   a Go-managed allocation — the distinction `go vet`'s unsafeptr
-  heuristic cannot make, so it fires on sight regardless. This finding
-  does not gate anything: the project's actual quality bar (`go vet -tags
-  e2e ./...`, `golangci-lint run`) never runs against the `touchid` tag —
-  `.golangci.yml` pins `build-tags` to `e2e` only — so it never reaches
-  CI or a release build; it is called out here, correctly, rather than
-  claimed as a clean pass that does not occur.
+  heuristic cannot make, so it fires on sight regardless. `.golangci.yml`
+  still pins `build-tags` to `e2e` only, so `golangci-lint run` (the
+  project's actual lint bar) never runs against the `touchid` tag; it is
+  called out here, correctly, rather than claimed as a clean pass that
+  does not occur.
+- **`ci.yml`'s `touchid build/vet` step (macOS only, CLA-86)** now runs
+  both of the above on every push and PR, so a future refactor or
+  cgo/Go version bump that actually breaks this path — silent until now,
+  found only by a real user trying `--touch-id` — fails CI instead. It
+  runs `go build -tags touchid ./...` as a hard gate, and
+  `go vet -tags touchid ./internal/broker/...` as a second hard gate that
+  treats *exactly* the one documented `cfPtr` finding above as expected:
+  that specific line is allowed through, anything else vet reports fails
+  the job. `TestTouchIDUserPresence` itself stays out of this step and
+  every other CI run, manual-only, for the reason the next bullet gives.
 - `internal/broker/touchid_darwin_test.go` (`go test -tags touchid
   ./internal/broker/ -run TestTouchIDUserPresence -v`) mechanically proves
   the access-control mechanism itself — see that file's doc comment —
