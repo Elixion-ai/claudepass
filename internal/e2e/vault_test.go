@@ -116,6 +116,62 @@ func TestRmAndMv(t *testing.T) {
 	}
 }
 
+// TestRmOfAnExposedHandleMentionsTheBackup is CLA-59's CLI-facing
+// requirement: `cpass rm` of an Exposed Secret must say the value still
+// exists, encrypted, in vault.cpv.bak — a plain (non-Exposed) rm gets no
+// such notice.
+func TestRmOfAnExposedHandleMentionsTheBackup(t *testing.T) {
+	ve := newVault(t)
+	ve.add("plain/one", "plain-value-not-exposed")
+	ve.add("seen/one", "already-seen-value", "--exposed")
+
+	if r := ve.run(nil, "rm", "plain/one"); r.code != 0 || strings.Contains(r.stderr, "vault.cpv.bak") {
+		t.Fatalf("rm of a non-Exposed handle should stay quiet: %s", r)
+	}
+	r := ve.run(nil, "rm", "seen/one")
+	if r.code != 0 {
+		t.Fatalf("rm: %s", r)
+	}
+	if !strings.Contains(r.stderr, "seen/one") || !strings.Contains(r.stderr, "vault.cpv.bak") {
+		t.Fatalf("rm of an Exposed handle should mention the backup: %s", r)
+	}
+}
+
+// TestVaultCpvBakDecryptsIndependently is CLA-59's end-to-end check that the
+// backup Save produces is a real, independently openable Vault, not just a
+// file that happens to exist: copy it over a fresh vault.cpv (same key) and
+// have the real cpass binary read it back.
+func TestVaultCpvBakDecryptsIndependently(t *testing.T) {
+	ve := newVault(t) // cpass init: the first on-disk write, nothing to back up yet.
+	if _, err := os.Stat(ve.vaultPath() + ".bak"); err == nil {
+		t.Fatal("no .bak yet after just cpass init")
+	}
+	ve.add("first/one", "first-generation-value") // backs up init's empty generation.
+	ve.add("second/one", "second-generation-value")
+	if r := ve.run(nil, "rm", "second/one"); r.code != 0 {
+		t.Fatalf("rm: %s", r)
+	}
+	// .bak now trails the live vault by one generation: it still has
+	// second/one (removed above) but predates the rm itself, so it must
+	// still be readable as a Vault in its own right, under the same key.
+	bak, err := os.ReadFile(ve.vaultPath() + ".bak")
+	if err != nil {
+		t.Fatalf("vault.cpv.bak missing: %v", err)
+	}
+	recovered := newVault(t)
+	recovered.key = ve.key
+	if err := os.WriteFile(recovered.vaultPath(), bak, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := recovered.run(nil, "ls")
+	if r.code != 0 {
+		t.Fatalf("the recovered vault.cpv.bak does not open: %s", r)
+	}
+	if !strings.Contains(r.stdout, "first/one") || !strings.Contains(r.stdout, "second/one") {
+		t.Fatalf("recovered .bak should still list first/one and second/one: %q", r.stdout)
+	}
+}
+
 func TestBindingFlagsAndExposed(t *testing.T) {
 	ve := newVault(t)
 	ve.add("gcp/sa", "{\"type\":\"service_account\"}", "--file", "--binding", "GOOGLE_APPLICATION_CREDENTIALS")

@@ -124,6 +124,26 @@ func OpenVault() (*vault.Vault, error) {
 	return vault.Open(p, key)
 }
 
+// UpdateVault is the write counterpart to OpenVault: it resolves the same
+// path and unlock key, then runs fn against a freshly opened Vault under
+// vault.Update's exclusive lock, saving the result if fn returns nil. Every
+// `cpass` command that changes the Vault calls this (or vault.Update
+// directly, when it already holds a *vault.Vault from an earlier
+// broker.OpenVault and needs the lock around a slower step in between —
+// see cmdCapture) rather than its own Open ... Save, so two `cpass`
+// processes can never race each other's write (CLA-55).
+func UpdateVault(fn func(v *vault.Vault) error) (*vault.Vault, error) {
+	p, err := VaultPath()
+	if err != nil {
+		return nil, err
+	}
+	key, err := UnlockKey()
+	if err != nil {
+		return nil, err
+	}
+	return vault.Update(p, key, fn)
+}
+
 // EnvCI forces CI mode: Handles resolve from the environment, no Vault.
 const EnvCI = "CPASS_CI"
 

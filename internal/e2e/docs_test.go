@@ -233,11 +233,14 @@ var knownPathConstants = []struct {
 	source  string
 }{
 	{"vault.cpv", "internal/broker/broker.go: VaultPath"},
+	{"vault.cpv.bak", "internal/vault/vault.go: Save (the CLA-59 backup generation)"},
+	{"vault.cpv.lock", "internal/vault/vault.go: lockSuffix, used by Update (CLA-55)"},
 	{"broker.salt", "internal/broker/passphrase.go: saltPath"},
 	{"cpass.sock", "internal/broker/process_unix.go: socketFileName"},
 	{"redactions.log", "internal/run/run.go: logPath"},
 	{"CPASS_HOME/run", "internal/run/files.go: runRoot (the file-Binding temp-dir root)"},
 	{".claudepass.toml", "internal/manifest/manifest.go: FileName"},
+	{"global.toml.lock", "internal/manifest/global.go: UpdateGlobal (CLA-93)"},
 }
 
 // TestSecurityDocListsEveryKnownPath asserts docs/SECURITY.md's path table

@@ -4,6 +4,10 @@
 // key, and the entry list encrypted under the data key. Both layers use
 // XChaCha20-Poly1305, so a wrong key fails at the unwrap and a modified body
 // fails at the open; the two are reported as distinct errors.
+//
+// Open, mutate the in-memory Entry map, Save is not by itself safe against
+// another process doing the same thing at once — see Update, the one
+// correct way to do that cycle (CLA-55).
 package vault
 
 import (
@@ -17,6 +21,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Elixion-ai/claudepass/internal/atomicfile"
+	"github.com/Elixion-ai/claudepass/internal/lockfile"
 )
 
 // FormatVersion is the on-disk envelope version.
@@ -193,7 +200,26 @@ func aadFor(env envelope) []byte {
 	return []byte(fmt.Sprintf("cpass-vault-v%d:%s:%s", env.Version, env.KeyNonce, env.WrappedKey))
 }
 
-// Save encrypts and atomically writes the Vault to disk with mode 0600.
+// Save encrypts and writes the Vault to disk with mode 0600, via
+// internal/atomicfile: staged in a per-invocation-unique temp file in the
+// same directory (never the fixed v.path+".tmp" two Saves could otherwise
+// race each other's rename on), fsynced, renamed into place, and the
+// directory fsynced after — so a crash or power loss right after cpass
+// reports success can no longer revert vault.cpv to its pre-write state
+// with no indication anything was lost (CLA-56).
+//
+// Before that overwrite, Save preserves the generation it is about to
+// replace as vault.cpv.bak — also via atomicfile, so the backup itself
+// never lands half-written — best effort: a brand-new Vault has no prior
+// generation yet, which is not an error. This is the Vault's only backup
+// or recovery mechanism (CLA-59); docs/SECURITY.md documents the
+// consequence that a Handle removed by this Save still exists, encrypted,
+// in vault.cpv.bak until the next write.
+//
+// Save on its own does not make two concurrent writers safe: it guarantees
+// only that the write it was given lands whole or not at all, atomically
+// with respect to a concurrent reader. See Update for the actual
+// read-modify-write serialization (CLA-55).
 func (v *Vault) Save() error {
 	entries := v.List("")
 	plain, err := json.Marshal(body{Entries: entries})
@@ -217,11 +243,53 @@ func (v *Vault) Save() error {
 	if err := os.MkdirAll(filepath.Dir(v.path), 0o700); err != nil {
 		return err
 	}
-	tmp := v.path + ".tmp"
-	if err := os.WriteFile(tmp, out, 0o600); err != nil {
+	if old, err := os.ReadFile(v.path); err == nil {
+		if err := atomicfile.Write(v.path+".bak", old, 0o600); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return os.Rename(tmp, v.path)
+	return atomicfile.Write(v.path, out, 0o600)
+}
+
+// lockSuffix names the sidecar lock file Update holds for the whole
+// Open -> mutate -> Save cycle: path+".lock", next to the Vault itself.
+const lockSuffix = ".lock"
+
+// Update is the one correct way for a `cpass` process to change the Vault:
+// it holds an exclusive lock (internal/lockfile) for the whole cycle,
+// opens path fresh under that lock (so it always sees the latest state, not
+// whatever a caller happened to Open earlier), runs fn, and Saves if fn
+// returns nil. Every write command funnels through this (directly, or via
+// broker.UpdateVault) so two `cpass` processes writing the same Vault at
+// once can never race each other's Open -> mutate -> Save and silently
+// drop one of their changes (CLA-55).
+//
+// A reader (Get, List, Count, and so broker.Resolve/OpenVault) never calls
+// this: Save's atomic rename already keeps a concurrent read consistent on
+// its own, and making every read wait on the write lock would serialize
+// `cpass ls` behind an unrelated `cpass add` for no reason.
+func Update(path string, key []byte, fn func(v *Vault) error) (*Vault, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	lock, err := lockfile.Acquire(path+lockSuffix, lockfile.DefaultTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("vault: locking for write: %w", err)
+	}
+	defer func() { _ = lock.Release() }()
+	v, err := Open(path, key)
+	if err != nil {
+		return nil, err
+	}
+	if err := fn(v); err != nil {
+		return nil, err
+	}
+	if err := v.Save(); err != nil {
+		return nil, err
+	}
+	return v, nil
 }
 
 // Path is the file the Vault lives in.

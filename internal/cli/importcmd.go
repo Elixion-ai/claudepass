@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -61,19 +62,21 @@ func cmdImport(e *env) int {
 		items = append(items, item{handle: handle, binding: en.Name, value: en.Value})
 	}
 
-	v, code := openVault(e)
+	_, code := updateVault(e, func(v *vault.Vault) error {
+		for _, it := range items {
+			if _, err := v.Get(it.handle); err == nil {
+				return fmt.Errorf("handle %s already exists in the Vault", it.handle)
+			}
+		}
+		for _, it := range items {
+			if _, err := v.Add(it.handle, it.value, vault.AddOptions{Binding: vault.Binding{Name: it.binding}}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if code != ExitOK {
 		return code
-	}
-	for _, it := range items {
-		if _, err := v.Get(it.handle); err == nil {
-			return e.fail(ExitError, "handle %s already exists in the Vault", it.handle)
-		}
-	}
-	for _, it := range items {
-		if _, err := v.Add(it.handle, it.value, vault.AddOptions{Binding: vault.Binding{Name: it.binding}}); err != nil {
-			return e.failErr(err)
-		}
 	}
 
 	m, err := findOrNewManifest(".")
@@ -82,10 +85,6 @@ func cmdImport(e *env) int {
 	}
 	for _, it := range items {
 		m.Add(manifest.Entry{Handle: it.handle, Binding: vault.Binding{Name: it.binding}})
-	}
-
-	if err := v.Save(); err != nil {
-		return e.failErr(err)
 	}
 	if err := m.Save(); err != nil {
 		return e.failErr(err)

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -56,29 +57,29 @@ func cmdIntercept(e *env) int {
 		return ExitOK
 	}
 
-	v, code := openVault(e)
+	var stored []string
+	_, code := updateVault(e, func(v *vault.Vault) error {
+		used := map[string]bool{}
+		for _, en := range v.List("") {
+			used[en.Handle] = true
+		}
+		for _, m := range matches {
+			handle := uniqueHandle(used, inferredOrInbox(m))
+			if _, err := v.Add(handle, m.Value, vault.AddOptions{}); err != nil {
+				return err
+			}
+			// Always plain: this text ends up in the stderr Claude Code's
+			// UserPromptSubmit hook re-displays to the human (see
+			// cmdIntercept's doc comment), not a terminal cpass itself
+			// controls, so it must never carry escapes regardless of this
+			// process's stderr TTY-ness — the same reasoning as
+			// cmdPolicy's hook branch (policycmd.go).
+			stored = append(stored, storedTextForMode(colorNone, m.Kind, handle))
+		}
+		return nil
+	})
 	if code != ExitOK {
 		return code
-	}
-	used := map[string]bool{}
-	for _, en := range v.List("") {
-		used[en.Handle] = true
-	}
-	var stored []string
-	for _, m := range matches {
-		handle := uniqueHandle(used, inferredOrInbox(m))
-		if _, err := v.Add(handle, m.Value, vault.AddOptions{}); err != nil {
-			return e.failErr(err)
-		}
-		// Always plain: this text ends up in the stderr Claude Code's
-		// UserPromptSubmit hook re-displays to the human (see cmdIntercept's
-		// doc comment), not a terminal cpass itself controls, so it must
-		// never carry escapes regardless of this process's stderr TTY-ness —
-		// the same reasoning as cmdPolicy's hook branch (policycmd.go).
-		stored = append(stored, storedTextForMode(colorNone, m.Kind, handle))
-	}
-	if err := v.Save(); err != nil {
-		return e.failErr(err)
 	}
 	// Claude Code's UserPromptSubmit hook protocol: exit 2 blocks the
 	// submission and shows this stderr text to the human, who resubmits.
@@ -88,30 +89,36 @@ func cmdIntercept(e *env) int {
 	return ExitUsage
 }
 
+// errNothingToStore signals interceptBypass's update callback that no match
+// was actually stored, so broker.UpdateVault skips the Save — Update always
+// Saves on a nil return, and an empty prompt-scan result must not spend a
+// write (or a lock) on a Vault that hasn't actually changed.
+var errNothingToStore = errors.New("intercept: nothing to store")
+
 // interceptBypass stores every detected value as Exposed and never blocks:
 // a bypassed prompt must always pass through, even if the Vault happens to
-// be locked (storage is then simply skipped).
+// be locked, or the write lock is contended (storage is then simply
+// skipped) — any error here is deliberately swallowed.
 func interceptBypass(e *env, matches []detect.Match) {
-	v, err := broker.OpenVault()
-	if err != nil {
-		return
-	}
-	used := map[string]bool{}
-	for _, en := range v.List("") {
-		used[en.Handle] = true
-	}
 	var stored []string
-	for _, m := range matches {
-		handle := uniqueHandle(used, inferredOrInbox(m))
-		if _, err := v.Add(handle, m.Value, vault.AddOptions{Exposed: "bypass"}); err != nil {
-			continue
+	_, err := broker.UpdateVault(func(v *vault.Vault) error {
+		used := map[string]bool{}
+		for _, en := range v.List("") {
+			used[en.Handle] = true
 		}
-		stored = append(stored, handle)
-	}
-	if len(stored) == 0 {
-		return
-	}
-	if err := v.Save(); err != nil {
+		for _, m := range matches {
+			handle := uniqueHandle(used, inferredOrInbox(m))
+			if _, err := v.Add(handle, m.Value, vault.AddOptions{Exposed: "bypass"}); err != nil {
+				continue
+			}
+			stored = append(stored, handle)
+		}
+		if len(stored) == 0 {
+			return errNothingToStore
+		}
+		return nil
+	})
+	if err != nil {
 		return
 	}
 	e.notice("bypass — stored and flagged Exposed: %s", strings.Join(stored, ", "))

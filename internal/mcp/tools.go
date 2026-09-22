@@ -290,12 +290,17 @@ func (s *server) callCapture(id json.RawMessage, raw json.RawMessage) {
 		s.writeError(id, -32602, "command must be a non-empty array")
 		return
 	}
-	v, err := broker.OpenVault()
+	// Fail fast, before running argv, and reject the common case of an
+	// already-used Handle without holding the write lock across a child
+	// process of arbitrary duration — see the broker.UpdateVault call below,
+	// at the end, for the check that actually has to be race-free with
+	// another writer (CLA-55).
+	precheck, err := broker.OpenVault()
 	if err != nil {
 		s.writeResult(id, textResult(true, err.Error()))
 		return
 	}
-	if _, err := v.Get(a.Handle); err == nil {
+	if _, err := precheck.Get(a.Handle); err == nil {
 		s.writeResult(id, textResult(true, fmt.Sprintf("handle %s already exists", a.Handle)))
 		return
 	}
@@ -318,12 +323,19 @@ func (s *server) callCapture(id json.RawMessage, raw json.RawMessage) {
 	}
 	value := strings.TrimSuffix(stdout.String(), "\n")
 	value = strings.TrimSuffix(value, "\r")
-	entry, err := v.Add(a.Handle, value, vault.AddOptions{})
+	var entry vault.Entry
+	_, err = broker.UpdateVault(func(v *vault.Vault) error {
+		// Re-checked here, not just above: argv may have run for a while,
+		// and this is the freshly reopened, lock-protected state another
+		// writer could have changed in the meantime (CLA-55).
+		if _, err := v.Get(a.Handle); err == nil {
+			return fmt.Errorf("handle %s already exists", a.Handle)
+		}
+		var err error
+		entry, err = v.Add(a.Handle, value, vault.AddOptions{})
+		return err
+	})
 	if err != nil {
-		s.writeResult(id, textResult(true, err.Error()))
-		return
-	}
-	if err := v.Save(); err != nil {
 		s.writeResult(id, textResult(true, err.Error()))
 		return
 	}
