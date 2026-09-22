@@ -229,9 +229,13 @@ func checkCollision(bound map[string]Ref, name string, r Ref) error {
 	if ok && (prev.FromGlobal || r.FromGlobal) {
 		return fmt.Errorf("handle collision: %s and %s both bind %s", prev.Handle, r.Handle, name)
 	}
-	if !ok {
-		bound[name] = r
-	}
+	// Record r regardless of whether name was already bound: a second,
+	// non-colliding Ref for the same name (two project Handles silently
+	// last-write-winning into one variable) must still replace the
+	// bookkeeping entry, so a later Global-involved collision against that
+	// name names the Ref that is actually still standing, not whichever one
+	// happened to be seen first.
+	bound[name] = r
 	return nil
 }
 

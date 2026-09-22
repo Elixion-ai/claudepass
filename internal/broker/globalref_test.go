@@ -103,3 +103,34 @@ func TestFromGlobalSurvivesResolution(t *testing.T) {
 		t.Fatalf("FromGlobal must reach the injection step: %+v", out)
 	}
 }
+
+// TestCollisionNamesTheActualColliderNotAStaleFirstSight is the regression
+// test for checkCollision's bookkeeping bug: bound[name] was only written
+// the first time a variable name was seen (the !ok branch), so a second,
+// non-colliding Ref for the same name left the map pointing at the first
+// one. Every real call path today positions Global-sourced Refs first, so
+// the stale entry is never actually reachable through Refs — but nothing
+// stops a future reordering (or a hand-built Ref slice, as here) from
+// hitting it, and the wrong Handle named in a collision error sends whoever
+// reads it chasing the wrong pair.
+func TestCollisionNamesTheActualColliderNotAStaleFirstSight(t *testing.T) {
+	ciEnv(t)
+	t.Setenv("SHARED_VAR", "value-from-the-environment")
+	refs := []Ref{
+		{Handle: "project/a", Declared: vault.Binding{Name: "SHARED_VAR"}},
+		{Handle: "project/b", Declared: vault.Binding{Name: "SHARED_VAR"}},
+		{Handle: "global/c", Declared: vault.Binding{Name: "SHARED_VAR"}, FromGlobal: true},
+	}
+	_, _, err := Resolve(refs)
+	if err == nil {
+		t.Fatal("want a collision error once a Global Ref shares the variable")
+	}
+	for _, want := range []string{"project/b", "global/c"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q must name the actual colliding pair (%q missing)", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "project/a") {
+		t.Fatalf("error %q named the stale first-sight Handle instead of the real collider", err)
+	}
+}
