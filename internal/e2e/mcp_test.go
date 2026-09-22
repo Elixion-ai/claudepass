@@ -5,10 +5,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // mcpSession drives `cpass mcp` as a live subprocess talking JSON-RPC 2.0
@@ -531,5 +534,68 @@ func TestMCPListHandlesFiltersToGlobal(t *testing.T) {
 	text, _ = s.callToolText("list_handles", map[string]any{})
 	if !strings.Contains(text, "a/one") || !strings.Contains(text, "b/two") {
 		t.Fatalf("unfiltered listing must show both: %s", text)
+	}
+}
+
+// TestMCPCancelledRunWithSecretsUnblocksQueuedPing is CLA-76's repro: a
+// sleep-wrapped run_with_secrets call, a notifications/cancelled for it,
+// then a ping, sent back to back with none of their responses read in
+// between (the exact ordering that used to leave the cancellation and the
+// ping both sitting unread on stdin until the blocking call finished on its
+// own). It asserts two separate things the fix promises: the ping's
+// response arrives long before the sleep would finish on its own (the read
+// loop was never blocked behind it), and the cancelled call never gets a
+// response at all — per the MCP Cancellation spec — and its child was
+// actually killed rather than left to finish in the background.
+func TestMCPCancelledRunWithSecretsUnblocksQueuedPing(t *testing.T) {
+	ve := newVault(t)
+	s := startMCP(t, ve)
+	s.initialize()
+
+	marker := filepath.Join(t.TempDir(), "marker")
+	s.nextID++
+	sleepID := s.nextID
+	s.write(map[string]any{
+		"jsonrpc": "2.0", "id": sleepID, "method": "tools/call",
+		"params": map[string]any{
+			"name": "run_with_secrets",
+			"arguments": map[string]any{
+				"command": []string{"sh", "-c", "sleep 3 && touch " + marker},
+			},
+		},
+	})
+	s.write(map[string]any{
+		"jsonrpc": "2.0", "method": "notifications/cancelled",
+		"params": map[string]any{"requestId": sleepID},
+	})
+
+	start := time.Now()
+	s.call("ping", nil)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("ping took %s: the sleep-wrapped call still blocked the read loop", elapsed)
+	}
+
+	// Give the child's own 3s sleep well past enough time to have finished
+	// and touched marker if it were still running unattended, then check it
+	// never did — proof the cancellation actually killed it rather than
+	// merely detaching from it — and that no response ever arrived for
+	// sleepID, per the MCP Cancellation spec.
+	time.Sleep(4 * time.Second)
+	for _, line := range bytes.Split(bytes.TrimSpace([]byte(s.rawOut.String())), []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var m struct {
+			ID any `json:"id"`
+		}
+		if err := json.Unmarshal(line, &m); err != nil {
+			continue
+		}
+		if id, ok := m.ID.(float64); ok && int(id) == sleepID {
+			t.Fatalf("cancelled request got a response, want none: %s", line)
+		}
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("child process kept running after cancellation instead of being killed")
 	}
 }

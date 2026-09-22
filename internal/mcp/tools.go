@@ -93,9 +93,11 @@ func (s *server) handleToolsCall(req request) {
 	case "list_handles":
 		s.callListHandles(req.ID, p.Arguments)
 	case "run_with_secrets":
-		s.callRunWithSecrets(req.ID, p.Arguments)
+		id, args := req.ID, p.Arguments
+		s.callAsync(id, func(cancel <-chan struct{}) { s.callRunWithSecrets(id, args, cancel) })
 	case "capture":
-		s.callCapture(req.ID, p.Arguments)
+		id, args := req.ID, p.Arguments
+		s.callAsync(id, func(cancel <-chan struct{}) { s.callCapture(id, args, cancel) })
 	default:
 		s.writeError(req.ID, -32602, "unknown tool: "+p.Name)
 	}
@@ -181,7 +183,14 @@ type runArgs struct {
 	NoGlobal bool      `json:"no_global"`
 }
 
-func (s *server) callRunWithSecrets(id json.RawMessage, raw json.RawMessage) {
+// callRunWithSecrets runs in its own goroutine (see callAsync in cancel.go)
+// so a slow child does not block the stdin read loop; cancel is that
+// call's own run.Spec.Cancel, closed by a matching notifications/cancelled
+// (handleCancelled, cancel.go) to kill the child early. Every response
+// this writes still goes through writeResult/writeError exactly as if it
+// ran synchronously — those already drop it if cancel fired (see
+// suppressed in cancel.go) — so nothing below needs to check cancel itself.
+func (s *server) callRunWithSecrets(id json.RawMessage, raw json.RawMessage, cancel <-chan struct{}) {
 	var a runArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
 		s.writeError(id, -32602, "invalid arguments: "+err.Error())
@@ -215,6 +224,7 @@ func (s *server) callRunWithSecrets(id json.RawMessage, raw json.RawMessage) {
 		// UnsafeAllow is always false: an MCP client is never the human
 		// terminal that --unsafe-allow requires, so Command Policy always
 		// applies here, the same as an Agent-invoked `cpass run`.
+		Cancel: cancel, // CLA-76: notifications/cancelled kills the child
 	})
 	if err != nil {
 		if errors.Is(err, run.ErrNoCommand) {
@@ -276,7 +286,10 @@ type captureArgs struct {
 	Cwd     string   `json:"cwd"`
 }
 
-func (s *server) callCapture(id json.RawMessage, raw json.RawMessage) {
+// callCapture runs in its own goroutine (see callAsync in cancel.go) so a
+// slow child does not block the stdin read loop; cancel is documented on
+// callRunWithSecrets above and behaves identically here.
+func (s *server) callCapture(id json.RawMessage, raw json.RawMessage, cancel <-chan struct{}) {
 	var a captureArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
 		s.writeError(id, -32602, "invalid arguments: "+err.Error())
@@ -303,6 +316,7 @@ func (s *server) callCapture(id json.RawMessage, raw json.RawMessage) {
 	code, err := run.Run(run.Spec{
 		Argv: a.Command, Dir: a.Cwd, RawStdout: true,
 		Stdout: &stdout, Stderr: &stderr, Warn: &warn,
+		Cancel: cancel, // CLA-76: notifications/cancelled kills the child
 	})
 	if err != nil {
 		if errors.Is(err, run.ErrNoCommand) {

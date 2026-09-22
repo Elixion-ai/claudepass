@@ -56,13 +56,22 @@ type Spec struct {
 	// the same plain "cpass: <handle> is Exposed since <date>, rotate it"
 	// wording, unchanged.
 	FormatExposed func(handle, since string) string
+	// Cancel, when set and then closed, kills the child (see
+	// killProcessGroup) as soon as possible instead of waiting on it to
+	// exit on its own. cpass mcp sets this per call from a request's own
+	// notifications/cancelled (see internal/mcp) so a client can actually
+	// interrupt a run_with_secrets/capture call it no longer wants; the CLI
+	// never sets it; forwardSignals' relay of an OS SIGINT/SIGTERM/SIGHUP to
+	// the child is unrelated and unaffected either way.
+	Cancel <-chan struct{}
 }
 
 // ErrNoCommand is returned when Argv is empty.
 var ErrNoCommand = errors.New("no command given after --")
 
 // Run resolves the Spec's Handles, injects them, runs the command, and
-// returns its exit code. A child killed by a signal yields 128+signal.
+// returns its exit code. A child killed by a signal yields 128+signal — a
+// child Spec.Cancel killed included, since that is exactly what it does.
 func Run(spec Spec) (int, error) {
 	if len(spec.Argv) == 0 {
 		return 2, ErrNoCommand
@@ -145,12 +154,33 @@ func Run(spec Spec) (int, error) {
 	cmd.Env = env
 	cmd.Dir = spec.Dir
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = spec.Stdin, stdout, stderr
+	if spec.Cancel != nil {
+		// Isolate the child (and anything it forks, e.g. a wrapping shell's
+		// own children) into its own process group so a cancellation can
+		// kill the whole thing at once — see killProcessGroup. The CLI
+		// never sets Cancel, so an interactive `cpass run`'s child keeps
+		// sharing cpass's own process group, and so the terminal's own
+		// Ctrl-C delivery, exactly as before; this only changes process-
+		// group membership for a call cpass mcp made cancellable.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	if err := cmd.Start(); err != nil {
 		return 127, fmt.Errorf("cannot start %s: %w", spec.Argv[0], err)
 	}
 	stop := forwardSignals(cmd.Process)
+	cancelDone := make(chan struct{})
+	if spec.Cancel != nil {
+		go func() {
+			select {
+			case <-spec.Cancel:
+				killProcessGroup(cmd.Process)
+			case <-cancelDone:
+			}
+		}()
+	}
 	err = cmd.Wait()
 	stop()
+	close(cancelDone)
 	dir.destroy()
 	// Best-effort: the child has already exited, there is nothing left to
 	// do with a broken stdout/stderr (e.g. a downstream reader that closed
@@ -206,6 +236,21 @@ func forwardSignals(p *os.Process) func() {
 		}
 	}()
 	return func() { signal.Stop(ch); close(done) }
+}
+
+// killProcessGroup terminates p unconditionally: SIGKILL to its whole
+// process group when it has one of its own (Spec.Cancel's caller sets
+// Setpgid above precisely so this reaches a wrapping shell's own children
+// too, e.g. "sh -c sleep 30" — a single p.Kill() would leave sleep
+// orphaned and running), falling back to killing p alone otherwise. A
+// cancellation has already told the child it is no longer wanted; there is
+// no one left to negotiate a graceful SIGTERM shutdown with.
+func killProcessGroup(p *os.Process) {
+	if pgid, err := syscall.Getpgid(p.Pid); err == nil {
+		_ = syscall.Kill(-pgid, syscall.SIGKILL) // best-effort: p may have already exited
+		return
+	}
+	_ = p.Kill() // best-effort, same reason
 }
 
 func exitCode(err error) int {
