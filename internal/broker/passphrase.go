@@ -115,7 +115,15 @@ func loadOrCreateParams() ([]byte, kdfParams, error) {
 		return nil, kdfParams{}, err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(sp), 0o700); err != nil {
+	dir := filepath.Dir(sp)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, kdfParams{}, err
+	}
+	// MkdirAll is a no-op on a directory that already exists, regardless of
+	// its current mode, so a loosened CPASS_HOME would otherwise stay
+	// loosened forever. Chmod unconditionally to make sure it ends up 0700
+	// either way.
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return nil, kdfParams{}, err
 	}
 	salt = make([]byte, saltBytes)

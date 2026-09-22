@@ -3,6 +3,7 @@ package vault
 import (
 	"bytes"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -38,6 +39,28 @@ func TestRoundTrip(t *testing.T) {
 	}
 	if _, err := Open(p, key(2)); !errors.Is(err, ErrWrongKey) {
 		t.Fatalf("want ErrWrongKey, got %v", err)
+	}
+}
+
+// TestSaveTightensExistingDirPermissions covers CLA-58: a CPASS_HOME
+// directory that already exists (e.g. left at 0755 by a stray umask, or
+// simply reused across cpass versions) must be tightened to 0700 on Save,
+// not left as-is because MkdirAll is a no-op on it.
+func TestSaveTightensExistingDirPermissions(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "vaultdir")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "v.cpv")
+	if _, err := Create(p, key(1)); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o700 {
+		t.Fatalf("vault dir mode = %v, want 0700", st.Mode().Perm())
 	}
 }
 

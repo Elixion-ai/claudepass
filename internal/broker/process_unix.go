@@ -53,6 +53,39 @@ func SocketPath() (string, error) {
 	return p, nil
 }
 
+// ensureSocketDir creates dir (the socket's parent) if missing, and makes
+// sure it ends up mode 0700 either way. MkdirAll alone is a no-op on a
+// directory that already exists regardless of its current mode, so an
+// XDG_RUNTIME_DIR or CPASS_HOME loosened before this call (a stray umask, a
+// directory reused from before this fix) would otherwise stay loosened
+// forever: the "any process running as the same user" trust boundary
+// docs/SECURITY.md documents for this socket depends on the directory
+// actually being user-only.
+func ensureSocketDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(dir, 0o700)
+}
+
+// bindSocketPrivately binds and listens on a Unix domain socket at path
+// with a restrictive process umask for the duration of the call. bind(2)
+// creates the socket file itself, before Serve's own explicit os.Chmod ever
+// runs; a permissive process umask (022, or inherited from a launcher)
+// would otherwise leave it briefly group/world-accessible in that window.
+// The umask closes that window; the Chmod that follows in Serve stays as
+// defense in depth for the final, steady-state permission.
+func bindSocketPrivately(path string) (*net.UnixListener, error) {
+	addr, err := net.ResolveUnixAddr("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	old := syscall.Umask(0o077)
+	l, err := net.ListenUnix("unix", addr)
+	syscall.Umask(old)
+	return l, err
+}
+
 // RequestKey asks a running Broker process for the key it holds. It returns
 // ErrLocked if none is running (nothing listening on the socket) or if the
 // exchange fails for any reason — from the caller's perspective those are
@@ -160,14 +193,10 @@ func StartBroker(key []byte, timeout time.Duration) error {
 // cpass broker-serve; not for direct use.
 func Serve(socketPath string, key []byte, timeout time.Duration) error {
 	_ = os.Remove(socketPath) // best-effort: clear a stale socket left by a crashed Broker
-	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+	if err := ensureSocketDir(filepath.Dir(socketPath)); err != nil {
 		return err
 	}
-	addr, err := net.ResolveUnixAddr("unix", socketPath)
-	if err != nil {
-		return err
-	}
-	l, err := net.ListenUnix("unix", addr)
+	l, err := bindSocketPrivately(socketPath)
 	if err != nil {
 		return fmt.Errorf("broker: listen on %s: %w", socketPath, err)
 	}

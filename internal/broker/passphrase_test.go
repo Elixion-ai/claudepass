@@ -100,6 +100,27 @@ func TestDeriveKeyLegacyFixtureStillUnlocks(t *testing.T) {
 	}
 }
 
+// TestDeriveKeyTightensExistingDirPermissions covers CLA-58: a CPASS_HOME
+// that already exists (e.g. left at 0755 by a stray umask, or simply reused
+// across cpass versions) must be tightened to 0700, not left as-is because
+// MkdirAll is a no-op on a directory that already exists.
+func TestDeriveKeyTightensExistingDirPermissions(t *testing.T) {
+	dir := withHome(t)
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DeriveKey("whatever whatever"); err != nil {
+		t.Fatalf("DeriveKey: %v", err)
+	}
+	st, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o700 {
+		t.Fatalf("CPASS_HOME mode = %v, want 0700", st.Mode().Perm())
+	}
+}
+
 // TestDeriveKeyCorruptSalt covers the pre-existing corrupt-salt-length
 // error path, now routed through loadOrCreateParams instead of
 // loadOrCreateSalt.
