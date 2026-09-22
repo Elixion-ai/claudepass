@@ -35,7 +35,9 @@ that.
   command that changes the Vault (`add`, `rm`, `mv`, `capture`, `import`,
   `intercept`, `mark-exposed`, `rotate-done`, and the MCP `capture` tool)
   holds an exclusive `flock` on a sidecar `vault.cpv.lock` for the whole
-  Open-Vault-mutate-Save cycle, not just the Save itself — without it, two
+  Open-Vault-mutate-Save cycle, not just the Save itself, and `cpass init`
+  (`vault.Create`) takes the same lock around its exists-check-then-create
+  so two concurrent inits cannot both create (CLA-98) — without it, two
   `cpass` processes each doing that cycle at once can silently lose
   whichever one Saves first, since the second one's Save is a full snapshot
   of its own now-stale in-memory copy. `flock` is macOS/Linux only (ADR-0007
