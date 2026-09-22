@@ -451,14 +451,15 @@ detail.
    program itself, since a Secret value is never the thing being executed
    and a real executable path can otherwise read as high-entropy without
    being one.
-3. Builds the child's environment: `os.Environ()` plus one variable per
-   env-bound Handle, set to its value. A file-bound Handle instead gets a
-   fresh Secret file, mode `0600`, inside a per-invocation directory, mode
-   `0700`, at `$CPASS_HOME/run/<16-hex-char id>/` — the variable holds that
-   file's *path*, never the value. That directory also carries a `.pid`
-   file naming the `cpass` process that created it, so a directory
-   orphaned by a `cpass` process that was itself killed gets swept and
-   shredded by the next `cpass run` invocation, not left behind.
+3. Builds the child's environment: `os.Environ()` with `CPASS_KEY` itself
+   stripped out first (see below), plus one variable per env-bound Handle,
+   set to its value. A file-bound Handle instead gets a fresh Secret file,
+   mode `0600`, inside a per-invocation directory, mode `0700`, at
+   `$CPASS_HOME/run/<16-hex-char id>/` — the variable holds that file's
+   *path*, never the value. That directory also carries a `.pid` file
+   naming the `cpass` process that created it, so a directory orphaned by a
+   `cpass` process that was itself killed gets swept and shredded by the
+   next `cpass run` invocation, not left behind.
 4. Spawns the command with `stdin` passed through unmodified, `stdout` and
    `stderr` piped through the Redactor (unless the caller is `cpass
    capture`, which bypasses redaction on stdout only — see below), and
@@ -477,6 +478,26 @@ detail.
    its output (`cpass: redacted <handle> from output (<n>×); the Agent must
    use the value, not print it`). Both are stderr notices for the human,
    never anything that blocks or changes the child's own output.
+
+**`CPASS_KEY` never reaches a wrapped command's environment, however it got
+into `cpass`'s own.** Only it is stripped: it alone carries Secret material
+(the Vault's unlock key), while the other `CPASS_*` variables `cpass` itself
+reads (`CPASS_HOME`, `CPASS_UNLOCK`, `CPASS_CI`, `CPASS_KEYCHAIN_SERVICE`)
+are mode selectors with no Secret value and pass through unchanged on
+purpose — so a nested `cpass` inside a wrapped script (a Makefile target, a
+CI step that itself shells out to `cpass run`) still resolves `CPASS_HOME`
+and still finds the Vault; it just **cannot use the `CPASS_KEY` env-unlock
+path any more to open it** (that value is exactly what got stripped) and
+instead needs the macOS Keychain or the Linux/CI Broker socket, whichever
+this machine already uses for unattended unlock — neither needs an
+environment key. Separately, whenever `CPASS_KEY` *was* this invocation's
+own unlock source (it is tried first, ahead of the Keychain and the Broker
+socket, and only consulted at all when secrets are being resolved from the
+Vault — CI mode never opens it), its value is also registered as a redact
+Pattern, under the reserved pseudo-Handle `cpass/vault-key`, before the
+child ever starts: defense in depth, so a child that still echoes it back
+through some *other* route than the one just closed off gets it caught and
+marked `[REDACTED:cpass/vault-key]` rather than shown raw.
 
 `cpass capture <handle> -- <command>` and the MCP server's
 `run_with_secrets` and `capture` tools call this exact same function
@@ -578,7 +599,7 @@ installing it) to install `cpass` in the first place.
 | Variable | Read by | Purpose |
 |---|---|---|
 | `CPASS_HOME` | `broker.Home` | Overrides the ClaudePass home directory (default `os.UserConfigDir()/claudepass`); everything below is relative to it. |
-| `CPASS_KEY` | `broker.UnlockKey` | Base64 of a 32-byte unlock key; the first key source tried, ahead of the Keychain and the Broker socket. The supported way to run unattended (CI). |
+| `CPASS_KEY` | `broker.UnlockKey` | Base64 of a 32-byte unlock key; the first key source tried, ahead of the Keychain and the Broker socket. The supported way to run unattended (CI). Stripped from every `cpass run`/`capture`/MCP child's environment regardless of what it wraps (see "What `cpass run` does" above) — a nested `cpass` inside a wrapped script must use the Keychain or Broker socket instead, not this variable. |
 | `CPASS_UNLOCK` | `broker.UseKeychain` | Set to `socket` to force the Linux/CI Broker-process unlock path even on macOS. |
 | `CPASS_KEYCHAIN_SERVICE` | `broker.KeychainService` | Overrides the macOS Keychain service name (production always uses `cpass`; tests point this at a throwaway name so they never touch a real login Keychain). |
 | `CPASS_CI` | `broker.CIMode` | `1` forces CI mode (Handles resolve from the environment CI already provides, not the Vault); `0` forces it off. |

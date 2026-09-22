@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"path/filepath"
@@ -88,8 +89,21 @@ func Run(spec Spec) (int, error) {
 			return 3, err
 		}
 	}
-	env := os.Environ()
+	env := stripSecretEnv(os.Environ())
 	var patterns []redact.Pattern
+	// CPASS_KEY (the Vault's unlock key, base64) never reaches a child's
+	// environment (stripSecretEnv above), however it reached cpass's own —
+	// but if it *was* the source this invocation actually unlocked the
+	// Vault with (broker.UnlockKey tries it first, ahead of the Keychain
+	// and the Broker socket, and only when secrets are being resolved from
+	// the Vault at all: CI mode never opens it), register it as a redact
+	// Pattern too, as defense in depth against some *other* route a child
+	// might still echo it back through. Reaching this point with
+	// broker.Resolve having returned no error already confirms it was
+	// actually used, not merely present and unrelated.
+	if key := os.Getenv(broker.EnvKey); key != "" && len(spec.Refs) > 0 && !broker.CIMode() {
+		patterns = append(patterns, redact.Variants(cpassKeyPseudoHandle, key)...)
+	}
 	var dir *runDir
 	defer func() { dir.destroy() }()
 	for _, s := range secrets {
@@ -187,6 +201,36 @@ func setEnv(env []string, name, value string) []string {
 		}
 	}
 	return append(env, prefix+value)
+}
+
+// cpassKeyPseudoHandle labels the redact Pattern registered for CPASS_KEY
+// itself (see env := stripSecretEnv... above) — not a real Vault Handle, a
+// reserved name (the "cpass/" segment no project Handle collides with in
+// practice) so [REDACTED:cpass/vault-key] and the redaction log both read
+// unambiguously as "the unlock key", not "some Handle named this".
+const cpassKeyPseudoHandle = "cpass/vault-key"
+
+// stripSecretEnv removes cpass's own Secret-bearing control variable from a
+// copy of os.Environ() before it becomes a child's environment. Only
+// CPASS_KEY carries Secret material — the Vault's unlock key, base64 — so
+// it alone is stripped, unconditionally, regardless of --with/Refs. Every
+// other CPASS_* variable cpass itself reads (CPASS_HOME, CPASS_UNLOCK,
+// CPASS_CI, CPASS_KEYCHAIN_SERVICE) is a mode selector carrying no Secret
+// value, and is passed through unchanged on purpose: a nested `cpass run`
+// inside a wrapped script (a Makefile target, a CI step that itself shells
+// out to `cpass`) still resolves CPASS_HOME and still finds the Vault — it
+// just cannot use the CPASS_KEY env-unlock path (the one thing that got
+// stripped) and instead needs the macOS Keychain or the Linux/CI Broker
+// socket, neither of which needs an env key (see docs/SECURITY.md).
+func stripSecretEnv(env []string) []string {
+	out := env[:0:0] // fresh backing array: os.Environ() is never aliased elsewhere
+	for _, kv := range env {
+		if strings.HasPrefix(kv, broker.EnvKey+"=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // forwardSignals relays SIGINT and SIGTERM to the child so Ctrl-C behaves

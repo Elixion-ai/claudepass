@@ -139,3 +139,33 @@ func TestRunUnknownProgram(t *testing.T) {
 		t.Fatalf("want 127: %s", r)
 	}
 }
+
+// TestRunStripsCpassKeyFromChild is the regression test for CLA-54:
+// os.Environ() (which carries CPASS_KEY whenever it's how this cpass
+// process itself unlocked the Vault, the documented unattended-CI way to
+// run it) used to be copied into the child unfiltered. Any child that
+// echoes its own environment -- a crash trace, a debug flag, a compromised
+// dependency -- handed over the raw Vault master key, not just one Handle.
+// Runs with zero --with flags too: the strip must not depend on any Handle
+// actually being resolved. The other CPASS_* mode selectors (CPASS_HOME
+// above all -- see the CPASS_HOME assertion) must still reach the child, or
+// a nested `cpass run` inside a wrapped script would break.
+func TestRunStripsCpassKeyFromChild(t *testing.T) {
+	ve := newVault(t)
+	ve.add("a/one", "value-number-one")
+	for _, args := range [][]string{nil, {"--with", "a/one"}} {
+		env, r := childEnv(t, ve, nil, args...)
+		if r.code != 0 {
+			t.Fatalf("run %v: %s", args, r)
+		}
+		if v, ok := env["CPASS_KEY"]; ok && v != "" {
+			t.Fatalf("child saw CPASS_KEY=%q with args %v: %v", v, args, env)
+		}
+		if env["CPASS_HOME"] != ve.home {
+			t.Fatalf("CPASS_HOME is a mode selector, not a Secret, and must still reach the child (args %v): %v", args, env)
+		}
+		if env["PATH"] == "" {
+			t.Fatalf("ordinary variables like PATH must still be inherited (args %v): %v", args, env)
+		}
+	}
+}
