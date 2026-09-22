@@ -514,12 +514,15 @@ padded and unpadded), at all five byte-alignments; hex, in both lower- and
 upper-case; percent-encoding (`url.QueryEscape` and `url.PathEscape`
 forms); and JSON string-escaping.
 Matching is streaming, over a sliding window at least as long as the
-longest such encoded form, so a match split across two separate writes
-(e.g. by a pipe buffer, or a command that flushes mid-value) is still
-caught; a partial match still pending is released as ordinary output after
-a short (100 ms, for a partial under 4 bytes) or longer (1.5 s) idle period,
-so interactive tools stay responsive rather than hanging on a byte that
-turns out not to complete a match.
+longest such encoded form, so within a single stream a match split across
+two separate writes (e.g. by a pipe buffer, or a command that flushes
+mid-value) is still caught; a partial match still pending is released as
+ordinary output after a short (100 ms, for a partial under 4 bytes) or
+longer (1.5 s) idle period, so interactive tools stay responsive rather
+than hanging on a byte that turns out not to complete a match. stdout and
+stderr are each matched independently, by their own `redact.Writer` with
+its own sliding window — a split across the two streams, not within one of
+them, is not caught; see the next bullet list.
 
 **Documented limitation** (identified closing CLA-21, streaming Redaction):
 a value the wrapped command writes in chunks shorter than 4 bytes with more
@@ -545,6 +548,11 @@ What it structurally cannot cover, regardless of tuning:
   other way before printing it — its own bespoke encoding, compression,
   encryption, reversal, re-chunking with separators inserted mid-value — is
   not recognised and passes through unredacted.
+- **Only within one stream at a time.** stdout and stderr each get their
+  own `redact.Writer` and independent match state; a value split across
+  the two streams — part on one, part on the other — is never matched on
+  either, because neither Writer's window ever sees the whole thing. See
+  `docs/THREATS.md`'s known-leak-path list, item 4.
 
 ## The redaction log
 
