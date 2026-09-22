@@ -130,7 +130,7 @@ fills. `player-tank.svg` and `intruder-tank-env.svg` mirror `game.js`'s
 `PAL` hex constants exactly.
 
 The header/footer brand-glyph, every page's `<link rel=icon>` favicon, and
-`site/assets/icon.html`'s generated app icon (`icon.png`,
+`tools/asset-templates/icon.html`'s generated app icon (`icon.png`,
 `favicon-512.png`) are all one shape now — canon-wordmark-type's
 Door/Dial/Handle vault glyph — scaled from the same 16-unit proportions
 (Door = full square radius-none, Dial = a circle 37.5% of the Door's
