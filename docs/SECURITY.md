@@ -181,6 +181,52 @@ that.
   has no exit code to give). Two Handles a project declares itself into the
   same variable keep today's silent last-write-wins, so no existing project
   starts failing on a version bump it never opted into.
+- **Broad-root warnings** (`manifest.BroadRoot`, `internal/manifest/broadroot.go`):
+  a Manifest planted at the filesystem root or the caller's own home
+  directory turns every Global Handle this machine ever declares into an
+  ambient default for every subdirectory beneath it — scratch checkouts and
+  downloads included, none of them reviewed or introduced to ClaudePass on
+  their own. Two triggers, never fatal: `cpass manifest init` checks
+  `BroadRoot` on the resolved working directory and warns before writing the
+  file if it matches; `manifest.Refs` checks it again at run time, in case a
+  Manifest ended up broad some other way (hand-copied, git-cloned straight
+  into `$HOME`), but only once it has actually placed a surviving
+  `FromGlobal` Ref into the merged list — a project that has overridden
+  every Handle it shares a name with a broad-root Global Manifest draws no
+  notice, because none reached it. That run-time notice fires once per
+  Manifest, not on every call: `shouldWarnBroadRoot` records the Manifest's
+  own directory by creating a per-root marker file (named by that
+  directory's hash) under `$CPASS_HOME/broadroot-warned/` the first time it
+  fires, and skips every call after. The marker is created with
+  `O_CREATE|O_EXCL`, so the check ("has this root already been recorded?")
+  and the record step are one atomic filesystem operation rather than a
+  read followed by a separate write — several `cpass` processes racing the
+  very first time a broad-root Manifest ever serves a Global Handle (an
+  Agent's parallel tool-call batch, or several agents sharing one machine)
+  can only ever have one of them win the marker's creation, so only one
+  emits the notice. This matters because `manifest.Refs` is the Handle
+  source for both `cpass run` (notices go straight to stderr) and the MCP
+  `run_with_secrets` tool (notices ride into the tool_result content block,
+  landing directly in an Agent's own Context) — unsuppressed, the line
+  would repeat on every single tool call a broad-root project makes. The
+  marker check fails open: if the marker directory cannot be created or
+  written, the notice fires again rather than silently disappearing. See
+  `docs/THREATS.md` item 10 for what this warning does not catch (a
+  merely-large ancestor, a symlinked or bind-mounted equivalent).
+- **`manifest check --effective`'s `MISSING` is deliberately stricter than
+  `cpass run`'s own graceful handling of a Global Handle.** The command
+  (`manifestCheckEffective`, `internal/cli/manifestcmd.go`) tags every
+  unresolvable Ref `MISSING` and exits `1` if any exist, regardless of
+  whether that Ref is `FromGlobal` — it does not distinguish a Global
+  Handle, which `cpass run` and `run_with_secrets` merely skip with a
+  notice and continue past, from a project-declared one, which they
+  hard-fail on. A project whose only unresolvable Handle is a drifted
+  ambient Global one therefore sees `manifest check --effective` exit `1`
+  even though the real `cpass run` for that same project would succeed. This
+  is intentional for a pre-flight/audit command — it answers "is everything
+  this project could receive actually available", not "would `cpass run`
+  succeed" — but a CI job using `--effective` to gate on the latter question
+  should know the two can disagree.
 - **The opt-out's round-trip guarantee, and its one real limit.** `Load` and
   `Save` (`internal/manifest/manifest.go`) keep, verbatim, any `[options]`
   key this binary doesn't itself parse and any whole section that is

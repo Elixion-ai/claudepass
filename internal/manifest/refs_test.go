@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Elixion-ai/claudepass/internal/broker"
@@ -253,5 +255,213 @@ func TestUnreadableGlobalManifestCostsOnlyItsOwnHandles(t *testing.T) {
 	}
 	if _, _, err := Refs(root, true); err == nil {
 		t.Fatal("a corrupt project Manifest must still be fatal")
+	}
+}
+
+// TestGlobalReachableMatchesRefs is the regression seam for cpass manifest
+// check --effective: GlobalReachable must agree with what Refs itself would
+// have done — true for an onboarded project's own root and subdirectories,
+// false outside any project, across a nested repository, and once the
+// project opts out (per-Handle presence in the merged Refs list already
+// covers the Global-Manifest-missing-entirely case).
+func TestGlobalReachableMatchesRefs(t *testing.T) {
+	root := fixture(t, []Entry{{Handle: "openai/key"}}, []Entry{{Handle: "db/url"}})
+
+	if reachable, err := GlobalReachable(root); err != nil || !reachable {
+		t.Fatalf("the project's own root must be reachable: %v %v", reachable, err)
+	}
+	sub := mkdir(t, root, "internal", "cli")
+	if reachable, err := GlobalReachable(sub); err != nil || !reachable {
+		t.Fatalf("a subdirectory of the project must be reachable: %v %v", reachable, err)
+	}
+
+	outside := t.TempDir()
+	if reachable, err := GlobalReachable(outside); err != nil || reachable {
+		t.Fatalf("a directory outside any project must not be reachable: %v %v", reachable, err)
+	}
+
+	nested := mkdir(t, root, "tmp", "untrusted")
+	mkdir(t, nested, ".git")
+	if reachable, err := GlobalReachable(nested); err != nil || reachable {
+		t.Fatalf("a nested repository must not be reachable: %v %v", reachable, err)
+	}
+
+	m, err := Load(filepath.Join(root, FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.GlobalDisabled = true
+	if err := m.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if reachable, err := GlobalReachable(root); err != nil || reachable {
+		t.Fatalf("an opted-out project must not be reachable: %v %v", reachable, err)
+	}
+}
+
+// TestRefsWarnsWhenABroadRootManifestServesAGlobalHandle is the regression
+// test for CLA-96: a Manifest whose own root is a broad ancestor (here,
+// $HOME) must draw a run-time notice the moment it actually hands the
+// caller a Global Handle — the backstop for a Manifest that ended up broad
+// some way other than `cpass manifest init` (hand-copied, git-cloned
+// straight into $HOME).
+func TestRefsWarnsWhenABroadRootManifestServesAGlobalHandle(t *testing.T) {
+	root := fixture(t, []Entry{{Handle: "openai/key"}}, nil)
+	t.Setenv("HOME", root)
+	refs, notices, err := Refs(root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := handles(refs); len(got) != 1 || got[0] != "openai/key" {
+		t.Fatalf("the Global Handle must still be served: %v", got)
+	}
+	found := false
+	for _, n := range notices {
+		if strings.Contains(n, "broad ancestor") && strings.Contains(n, root) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("want a broad-root notice naming %s, got %v", root, notices)
+	}
+}
+
+// TestRefsStaysQuietForAnOrdinaryProjectRoot is the flip side: an ordinary
+// project directory — never $HOME, never / — must never draw the
+// broad-root notice, however many Global Handles it receives.
+func TestRefsStaysQuietForAnOrdinaryProjectRoot(t *testing.T) {
+	root := fixture(t, []Entry{{Handle: "openai/key"}, {Handle: "stripe/live"}}, nil)
+	_, notices, err := Refs(root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range notices {
+		if strings.Contains(n, "broad ancestor") {
+			t.Fatalf("an ordinary project root must never draw the broad-root notice: %v", notices)
+		}
+	}
+}
+
+// TestRefsBroadRootStaysQuietWithNoGlobalHandleServed: the warning is about
+// a broad-root Manifest actually serving a Global Handle, not merely
+// existing at a broad root — a machine with nothing declared globally yet
+// must not be warned about a hazard that has no effect yet.
+func TestRefsBroadRootStaysQuietWithNoGlobalHandleServed(t *testing.T) {
+	root := fixture(t, nil, []Entry{{Handle: "db/url"}})
+	t.Setenv("HOME", root)
+	_, notices, err := Refs(root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notices) != 0 {
+		t.Fatalf("no Global Handle was served, so no notice should fire: %v", notices)
+	}
+}
+
+// TestRefsBroadRootStaysQuietWhenProjectOverridesEveryGlobalHandle is the
+// regression test for CLA-96's minor finding: the notice must reflect
+// whether a Global Handle actually survives into the merged Refs list, not
+// merely whether the Global Manifest happens to declare one. A project that
+// has overridden every Handle it shares a name with a broad-root Global
+// Manifest — the supported, documented way to neutralise an unwanted Global
+// default — must not be told a Global Handle reached it, because none did.
+func TestRefsBroadRootStaysQuietWhenProjectOverridesEveryGlobalHandle(t *testing.T) {
+	root := fixture(t,
+		[]Entry{{Handle: "openai/key"}},
+		[]Entry{{Handle: "openai/key", Binding: vault.Binding{Name: "FROM_PROJECT"}}})
+	t.Setenv("HOME", root)
+	refs, notices, err := Refs(root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range refs {
+		if r.FromGlobal {
+			t.Fatalf("the project's own Entry must have replaced the Global one: %+v", refs)
+		}
+	}
+	for _, n := range notices {
+		if strings.Contains(n, "broad ancestor") {
+			t.Fatalf("no Global Handle survived the override, so no broad-root notice should fire: %v", notices)
+		}
+	}
+}
+
+// TestRefsWarnsAboutBroadRootOnlyOnce is the regression test for CLA-96's
+// major finding: the ticket's own acceptance criteria and docs/THREATS.md
+// item 10 both promise the run-time backstop fires "the first time" a
+// broad-root Manifest actually hands a directory a Global Handle, not on
+// every call. Three consecutive Refs calls against the same broad-root
+// Manifest — mirroring three consecutive `cpass run` invocations — must
+// draw the notice only on the first.
+func TestRefsWarnsAboutBroadRootOnlyOnce(t *testing.T) {
+	root := fixture(t, []Entry{{Handle: "openai/key"}}, nil)
+	t.Setenv("HOME", root)
+
+	countBroadRootNotices := func() int {
+		_, notices, err := Refs(root, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, notice := range notices {
+			if strings.Contains(notice, "broad ancestor") {
+				n++
+			}
+		}
+		return n
+	}
+
+	if n := countBroadRootNotices(); n != 1 {
+		t.Fatalf("first call: want 1 broad-root notice, got %d", n)
+	}
+	if n := countBroadRootNotices(); n != 0 {
+		t.Fatalf("second call: want the notice suppressed, got %d", n)
+	}
+	if n := countBroadRootNotices(); n != 0 {
+		t.Fatalf("third call: want the notice suppressed, got %d", n)
+	}
+}
+
+// TestRefsWarnsAboutBroadRootOnlyOnceUnderConcurrency is the regression test
+// for the round-2 review finding on CLA-96: shouldWarnBroadRoot's check
+// ("has this root already been recorded?") and its record step ("mark it
+// recorded") must be one atomic operation, not a read followed by a
+// separate write, or several `cpass run` / MCP `run_with_secrets` calls
+// racing the very first time a broad-root Manifest ever serves a Global
+// Handle — an Agent's parallel tool-call batch, or several agents sharing
+// one machine — can each pass the "not yet warned" check before any of them
+// finishes writing, and each emit its own notice. Many goroutines call Refs
+// concurrently against the same never-before-warned broad-root Manifest;
+// across all of them, the notice must appear exactly once.
+func TestRefsWarnsAboutBroadRootOnlyOnceUnderConcurrency(t *testing.T) {
+	root := fixture(t, []Entry{{Handle: "openai/key"}}, nil)
+	t.Setenv("HOME", root)
+
+	const concurrency = 60
+	var wg sync.WaitGroup
+	var total int64
+	start := make(chan struct{})
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, notices, err := Refs(root, true)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			for _, notice := range notices {
+				if strings.Contains(notice, "broad ancestor") {
+					atomic.AddInt64(&total, 1)
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if total != 1 {
+		t.Fatalf("want exactly 1 broad-root notice across %d concurrent calls, got %d", concurrency, total)
 	}
 }

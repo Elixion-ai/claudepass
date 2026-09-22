@@ -235,6 +235,22 @@ value can still end up somewhere it shouldn't, today:
     pid forever (today's bug) or tracking process identity more precisely
     than a bare pid, which no supported platform here gives `cpass` a
     portable way to do.
+12. **The broad-root warning (`manifest.BroadRoot`) only recognises the
+    filesystem root and the caller's own home directory, nothing wider.**
+    A Manifest planted at either turns every Global Handle this machine
+    ever declares into an ambient default for every subdirectory beneath
+    it — `cpass manifest init` warns loudly at the moment such a Manifest
+    is created, and `manifest.Refs` warns again, on stderr, the first time
+    that Manifest actually hands a directory a Global Handle, in case it
+    ended up broad some other way (hand-copied, git-cloned straight into
+    `$HOME`). Neither warning blocks anything: declaring and consuming
+    Global Handles from a broad root both keep working, on purpose, since
+    ClaudePass has no way to know whether that is actually what someone
+    wants. Not covered: a merely-large ancestor short of the two exact
+    cases above (`/Users`, `/home`, a mounted volume root), and a
+    symlinked or bind-mounted path to either that `filepath.EvalSymlinks`
+    cannot resolve. The same honest shape as 10 above — a named, narrow
+    check, stated as exactly that.
 
 ## Intercept precision (v0.1.4)
 

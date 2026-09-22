@@ -64,7 +64,68 @@ func Refs(dir string, includeGlobal bool) (refs []broker.Ref, notices []string, 
 	for _, en := range m.Entries {
 		refs = replaceOrAppend(refs, broker.Ref{Handle: en.Handle, Declared: en.Binding})
 	}
+	// `cpass manifest init` warns at the moment a Manifest is planted at a
+	// broad ancestor, but a Manifest can end up broad other ways too —
+	// hand-copied, git-cloned straight into $HOME. This is the run-time
+	// backstop, checked after the merge above (not merely on
+	// len(gm.Entries) > 0) so a project that has overridden every Global
+	// Handle it shares a name with — the supported way to neutralise an
+	// unwanted Global default — does not get warned about one that never
+	// actually reached it this run. shouldWarnBroadRoot makes it fire once
+	// per Manifest rather than on every call: worth saying, but not on
+	// every single `cpass run`.
+	if anyFromGlobal(refs) {
+		if broad, _ := BroadRoot(filepath.Dir(p)); broad {
+			if shouldWarnBroadRoot(filepath.Dir(p)) {
+				notices = append(notices, broadRootNotice(filepath.Dir(p)))
+			}
+		}
+	}
 	return refs, notices, nil
+}
+
+// anyFromGlobal reports whether any Ref in the merged list still carries
+// its Global origin — i.e. at least one Global Handle actually reached this
+// run, as opposed to having been declared globally but overridden by every
+// directory that could have received it.
+func anyFromGlobal(refs []broker.Ref) bool {
+	for _, r := range refs {
+		if r.FromGlobal {
+			return true
+		}
+	}
+	return false
+}
+
+// GlobalReachable reports whether the Global Manifest, if any, actually
+// reaches dir — the same gate Refs applies internally when deciding whether
+// to layer it in at all: dir must belong to a project with its own
+// Manifest, that project must not have opted out
+// (`[options] global = false`), and the walk from dir up to the Manifest's
+// root must not cross a nested repository of its own (globalReaches).
+//
+// It exists for callers outside Refs that need to know reachability on its
+// own, without also wanting the merged Ref list — `cpass manifest check
+// --effective` uses it to tell a project Entry that overrides a reachable
+// Global default apart from one that merely happens to share a Handle name
+// with a Global Manifest that was never going to reach this directory
+// anyway (opted out, or across a nested-repository boundary).
+func GlobalReachable(dir string) (bool, error) {
+	p, err := Find(dir)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	m, err := Load(p)
+	if err != nil {
+		return false, err
+	}
+	if m.GlobalDisabled {
+		return false, nil
+	}
+	return globalReaches(dir, filepath.Dir(p))
 }
 
 // replaceOrAppend puts r in refs, replacing any Ref for the same Handle —
