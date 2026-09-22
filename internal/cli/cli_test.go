@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -502,6 +503,77 @@ func TestLsFlagAfterPositional(t *testing.T) {
 		_, errb, code := run("ls", "demo", "other")
 		if code != ExitUsage {
 			t.Fatalf("cpass ls demo other: exit = %d, want ExitUsage (%d): %s", code, ExitUsage, errb)
+		}
+	})
+}
+
+// TestVersionFallsBackToBuildInfo is the regression test for the bug where
+// `go install .../cmd/cpass@<tag>` always reported its own version as
+// "dev": Version is only ever set by GoReleaser's ldflags, which that
+// install path never runs. effectiveVersion must fall back to
+// runtime/debug.ReadBuildInfo's Main.Version — indirected here through
+// readBuildInfo, faked to stand in for what a real `go install` build
+// embeds, since this test binary's own build info can't be made to look
+// like one on demand.
+func TestVersionFallsBackToBuildInfo(t *testing.T) {
+	origVersion, origReadBuildInfo := Version, readBuildInfo
+	t.Cleanup(func() { Version, readBuildInfo = origVersion, origReadBuildInfo })
+
+	t.Run("dev falls back to Main.Version from build info", func(t *testing.T) {
+		Version = "dev"
+		readBuildInfo = func() (*debug.BuildInfo, bool) {
+			return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true
+		}
+		var out, errb bytes.Buffer
+		code := Main([]string{"version"}, strings.NewReader(""), &out, &errb)
+		if code != ExitOK {
+			t.Fatalf("exit = %d, want ExitOK: %s", code, errb.String())
+		}
+		if got := out.String(); got != "cpass v1.2.3\n" {
+			t.Fatalf("stdout = %q, want %q", got, "cpass v1.2.3\n")
+		}
+	})
+
+	t.Run("ldflags-injected Version wins over build info", func(t *testing.T) {
+		Version = "v9.9.9"
+		readBuildInfo = func() (*debug.BuildInfo, bool) {
+			return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true
+		}
+		var out, errb bytes.Buffer
+		code := Main([]string{"version"}, strings.NewReader(""), &out, &errb)
+		if code != ExitOK {
+			t.Fatalf("exit = %d, want ExitOK: %s", code, errb.String())
+		}
+		if got := out.String(); got != "cpass v9.9.9\n" {
+			t.Fatalf("stdout = %q, want %q", got, "cpass v9.9.9\n")
+		}
+	})
+
+	t.Run("(devel) is treated the same as no build info", func(t *testing.T) {
+		Version = "dev"
+		readBuildInfo = func() (*debug.BuildInfo, bool) {
+			return &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, true
+		}
+		var out, errb bytes.Buffer
+		code := Main([]string{"version"}, strings.NewReader(""), &out, &errb)
+		if code != ExitOK {
+			t.Fatalf("exit = %d, want ExitOK: %s", code, errb.String())
+		}
+		if got := out.String(); got != "cpass dev\n" {
+			t.Fatalf("stdout = %q, want %q", got, "cpass dev\n")
+		}
+	})
+
+	t.Run("no build info available falls back to dev", func(t *testing.T) {
+		Version = "dev"
+		readBuildInfo = func() (*debug.BuildInfo, bool) { return nil, false }
+		var out, errb bytes.Buffer
+		code := Main([]string{"--version"}, strings.NewReader(""), &out, &errb)
+		if code != ExitOK {
+			t.Fatalf("exit = %d, want ExitOK: %s", code, errb.String())
+		}
+		if got := out.String(); got != "cpass dev\n" {
+			t.Fatalf("stdout = %q, want %q", got, "cpass dev\n")
 		}
 	})
 }

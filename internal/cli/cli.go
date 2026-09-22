@@ -7,12 +7,42 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"sort"
 	"strings"
 )
 
-// Version is injected at build time.
+// Version is injected at build time, via GoReleaser's ldflags
+// (.goreleaser.yaml) — the archives `curl`/Homebrew install carry a real
+// tag here. `go install .../cmd/cpass@<tag>` (README's third documented
+// install method) never gets that injection, so this stays "dev" on that
+// path; effectiveVersion is what actually decides what `cpass version`
+// prints.
 var Version = "dev"
+
+// readBuildInfo is debug.ReadBuildInfo, indirected so a test can substitute
+// a fake result without needing a real `go install` build of its own.
+var readBuildInfo = debug.ReadBuildInfo
+
+// effectiveVersion is what `cpass version`/`--version` prints. When Version
+// wasn't injected by ldflags, it falls back to runtime/debug.ReadBuildInfo's
+// Main.Version — the module version Go itself auto-embeds into every binary
+// built with `go install pkg@version`, needing no ldflags at all — so that
+// install path reports something better than "dev" too. "(devel)" is what
+// ReadBuildInfo reports for a plain `go build` run against a local checkout
+// with no resolved module version (e.g. this repo's own `go build
+// ./cmd/cpass`): that case has nothing more useful to say than "dev"
+// itself, so it's treated the same as no build info at all.
+func effectiveVersion() string {
+	if Version != "dev" {
+		return Version
+	}
+	info, ok := readBuildInfo()
+	if !ok || info.Main.Version == "" || info.Main.Version == "(devel)" {
+		return Version
+	}
+	return info.Main.Version
+}
 
 // Exit codes.
 const (
@@ -67,7 +97,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return ExitOK
 	}
 	if args[0] == "version" || args[0] == "--version" {
-		fprintln(stdout, "cpass", Version)
+		fprintln(stdout, "cpass", effectiveVersion())
 		return ExitOK
 	}
 	c, ok := commands[args[0]]
