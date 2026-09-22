@@ -1,10 +1,11 @@
 package manifest
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/Elixion-ai/claudepass/internal/broker"
 )
@@ -71,21 +72,32 @@ func broadRootNotice(root string) string {
 		root)
 }
 
-// broadRootWarnedFileName is the sentinel Refs uses to remember which
-// broad-root Manifest directories it has already warned about.
-const broadRootWarnedFileName = "broadroot-warned"
+// broadRootWarnedDirName is the sentinel directory Refs uses to remember
+// which broad-root Manifest directories it has already warned about: one
+// empty marker file per root, named by that root's hash (see
+// broadRootWarnedMarkerPath).
+const broadRootWarnedDirName = "broadroot-warned"
 
-// broadRootWarnedPath is where that sentinel lives: alongside the Vault and
+// broadRootWarnedDir is where that sentinel lives: alongside the Vault and
 // the Global Manifest itself, under $CPASS_HOME, so it is per-machine (one
 // warning history per Vault) and respects the same CPASS_HOME override the
 // tests already use to keep every case isolated from a developer's real
 // home.
-func broadRootWarnedPath() (string, error) {
+func broadRootWarnedDir() (string, error) {
 	home, err := broker.Home()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, broadRootWarnedFileName), nil
+	return filepath.Join(home, broadRootWarnedDirName), nil
+}
+
+// broadRootWarnedMarkerPath names the marker file for root inside dir. root
+// is an arbitrary directory path — it can contain separators, spaces or
+// anything else the filesystem allows — so it is hashed into a fixed-width,
+// filename-safe token rather than used as a path component directly.
+func broadRootWarnedMarkerPath(dir, root string) string {
+	sum := sha256.Sum256([]byte(root))
+	return filepath.Join(dir, hex.EncodeToString(sum[:]))
 }
 
 // shouldWarnBroadRoot reports whether root (a broad-root Manifest's own
@@ -99,30 +111,42 @@ func broadRootWarnedPath() (string, error) {
 // Agent's own Context), so an unsuppressed repeat would inject this line
 // into that Context on literally every tool call.
 //
-// It fails open: when the sentinel file cannot be read or written (a fresh
-// $CPASS_HOME, a read-only filesystem), it reports "not yet warned" so Refs
-// still emits the notice this run — a security-relevant line appearing too
-// often beats it silently never appearing — it just cannot suppress a
-// repeat until the sentinel becomes writable.
+// The check and the recording are one atomic step, not a read followed by a
+// separate write: it creates root's marker file with O_CREATE|O_EXCL, which
+// the OS guarantees only one caller can win for a given path, on every
+// platform this binary ships for. That closes the race a plain
+// check-then-act (read the sentinel, decide, then write it) leaves open —
+// several `cpass` processes racing the very first time a broad-root
+// Manifest ever serves a Global Handle (an Agent's parallel tool-call
+// batch, or several agents sharing one machine) could otherwise all pass
+// the "not yet warned" read before any of them finished writing, and each
+// emit its own notice.
+//
+// It fails open: when the marker directory cannot be created, or the
+// marker file cannot be created for any reason other than "it already
+// exists" (a fresh $CPASS_HOME, a read-only filesystem), it reports "not
+// yet warned" so Refs still emits the notice this run — a security-relevant
+// line appearing too often beats it silently never appearing — it just
+// cannot suppress a repeat until the marker directory becomes writable.
 func shouldWarnBroadRoot(root string) bool {
-	p, err := broadRootWarnedPath()
+	dir, err := broadRootWarnedDir()
 	if err != nil {
 		return true
 	}
-	existing, err := os.ReadFile(p)
-	if err != nil && !os.IsNotExist(err) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return true
 	}
-	for _, line := range strings.Split(string(existing), "\n") {
-		if line == root {
+	marker := broadRootWarnedMarkerPath(dir, root)
+	f, err := os.OpenFile(marker, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			// Some caller — this one earlier, another process, or a
+			// concurrent goroutine racing this same call — already won
+			// the race to create this root's marker: already warned.
 			return false
 		}
-	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
-		return true
-	}
-	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
+		// Any other error (permissions, a read-only filesystem): fail
+		// open, same as a missing $CPASS_HOME above.
 		return true
 	}
 	defer func() { _ = f.Close() }()

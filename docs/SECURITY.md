@@ -148,17 +148,24 @@ that.
   every Handle it shares a name with a broad-root Global Manifest draws no
   notice, because none reached it. That run-time notice fires once per
   Manifest, not on every call: `shouldWarnBroadRoot` records the Manifest's
-  own directory in a sentinel file at `$CPASS_HOME/broadroot-warned` the
-  first time it fires, and skips every call after. This matters because
-  `manifest.Refs` is the Handle source for both `cpass run` (notices go
-  straight to stderr) and the MCP `run_with_secrets` tool (notices ride into
-  the tool_result content block, landing directly in an Agent's own
-  Context) — unsuppressed, the line would repeat on every single tool call
-  a broad-root project makes. The sentinel check fails open: if it cannot
-  be read or written, the notice fires again rather than silently
-  disappearing. See `docs/THREATS.md` item 10 for what this warning does
-  not catch (a merely-large ancestor, a symlinked or bind-mounted
-  equivalent).
+  own directory by creating a per-root marker file (named by that
+  directory's hash) under `$CPASS_HOME/broadroot-warned/` the first time it
+  fires, and skips every call after. The marker is created with
+  `O_CREATE|O_EXCL`, so the check ("has this root already been recorded?")
+  and the record step are one atomic filesystem operation rather than a
+  read followed by a separate write — several `cpass` processes racing the
+  very first time a broad-root Manifest ever serves a Global Handle (an
+  Agent's parallel tool-call batch, or several agents sharing one machine)
+  can only ever have one of them win the marker's creation, so only one
+  emits the notice. This matters because `manifest.Refs` is the Handle
+  source for both `cpass run` (notices go straight to stderr) and the MCP
+  `run_with_secrets` tool (notices ride into the tool_result content block,
+  landing directly in an Agent's own Context) — unsuppressed, the line
+  would repeat on every single tool call a broad-root project makes. The
+  marker check fails open: if the marker directory cannot be created or
+  written, the notice fires again rather than silently disappearing. See
+  `docs/THREATS.md` item 10 for what this warning does not catch (a
+  merely-large ancestor, a symlinked or bind-mounted equivalent).
 - **`manifest check --effective`'s `MISSING` is deliberately stricter than
   `cpass run`'s own graceful handling of a Global Handle.** The command
   (`manifestCheckEffective`, `internal/cli/manifestcmd.go`) tags every

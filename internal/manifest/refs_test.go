@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Elixion-ai/claudepass/internal/broker"
@@ -417,5 +419,49 @@ func TestRefsWarnsAboutBroadRootOnlyOnce(t *testing.T) {
 	}
 	if n := countBroadRootNotices(); n != 0 {
 		t.Fatalf("third call: want the notice suppressed, got %d", n)
+	}
+}
+
+// TestRefsWarnsAboutBroadRootOnlyOnceUnderConcurrency is the regression test
+// for the round-2 review finding on CLA-96: shouldWarnBroadRoot's check
+// ("has this root already been recorded?") and its record step ("mark it
+// recorded") must be one atomic operation, not a read followed by a
+// separate write, or several `cpass run` / MCP `run_with_secrets` calls
+// racing the very first time a broad-root Manifest ever serves a Global
+// Handle — an Agent's parallel tool-call batch, or several agents sharing
+// one machine — can each pass the "not yet warned" check before any of them
+// finishes writing, and each emit its own notice. Many goroutines call Refs
+// concurrently against the same never-before-warned broad-root Manifest;
+// across all of them, the notice must appear exactly once.
+func TestRefsWarnsAboutBroadRootOnlyOnceUnderConcurrency(t *testing.T) {
+	root := fixture(t, []Entry{{Handle: "openai/key"}}, nil)
+	t.Setenv("HOME", root)
+
+	const concurrency = 60
+	var wg sync.WaitGroup
+	var total int64
+	start := make(chan struct{})
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, notices, err := Refs(root, true)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			for _, notice := range notices {
+				if strings.Contains(notice, "broad ancestor") {
+					atomic.AddInt64(&total, 1)
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if total != 1 {
+		t.Fatalf("want exactly 1 broad-root notice across %d concurrent calls, got %d", concurrency, total)
 	}
 }
