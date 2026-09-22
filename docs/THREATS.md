@@ -138,7 +138,19 @@ value can still end up somewhere it shouldn't, today:
    ways a command tries to read a Secret back out for exactly this
    purpose), and Command Policy is necessarily a list of known patterns,
    not a sandbox.
-4. **Two narrow, deliberate differences remain between the PreToolUse hook
+4. **A value split across stdout and stderr.** stdout and stderr each get
+   their own `redact.Writer`, with independent automaton state
+   (`internal/run.Run` — see `docs/SECURITY.md`'s Redaction section); a
+   value whose bytes are split across the two streams — half printed to
+   one, half to the other — is never matched on either stream, because
+   neither Writer's sliding window ever sees the whole value; both halves
+   print unredacted. A real fix means sharing match state across both
+   streams' concurrently written bytes, which trades this gap for a new
+   one of its own — buffering one stream while waiting to see whether the
+   other completes a match risks over-redaction and race conditions
+   between the two streams' writers — so this is recorded here as a
+   disclosed limitation rather than attempted in this pass.
+5. **Two narrow, deliberate differences remain between the PreToolUse hook
    and the other two surfaces** (closed for the file-glob and raw-literal
    rules themselves by CLA-38 — see below). `cpass policy --hook` alone
    refuses `cpass add <handle> <value>` (an inline second positional
@@ -166,41 +178,41 @@ value can still end up somewhere it shouldn't, today:
    live in the shared `Evaluate`, so all three surfaces refuse the same
    file reads and raw literals; the package doc comment states precisely
    the two differences left above.
-5. **The `!!` Intercept bypass is a deliberate escape hatch, not a filter
+6. **The `!!` Intercept bypass is a deliberate escape hatch, not a filter
    that got weaker.** It exists so a false positive never blocks real
    work; using it on an actual Secret sends that value into the Agent's
    Context on purpose. Marking it Exposed afterward is the intended
    remediation (rotate it), not a mechanism that stops the exposure from
    happening.
-6. **Detection can miss or over-trigger.** `internal/detect`'s prefix list,
+7. **Detection can miss or over-trigger.** `internal/detect`'s prefix list,
    PEM matcher, and entropy heuristic are exactly that — a heuristic. A
    real Secret shaped unlike anything on the prefix list and not
    high-entropy enough to clear the threshold is neither Intercepted nor
    caught by Command Policy's raw-literal check; conversely an ordinary
    high-entropy identifier can occasionally be flagged when it isn't one.
-7. **The macOS Keychain item and the Broker's Unix socket have no access
+8. **The macOS Keychain item and the Broker's Unix socket have no access
    control beyond the ordinary OS user boundary** (detailed in
    `docs/SECURITY.md`). This is the "compromise of the account" scope
    above made concrete: it's the specific, practical way an already-unlocked
    Vault's key would reach a second process running as the same user.
-8. **The human-terminal gate is `isatty()`, nothing stronger.** `cpass
+9. **The human-terminal gate is `isatty()`, nothing stronger.** `cpass
    add`, `cpass capture`'s prompts, and `--unsafe-allow` all distinguish "a
    human is here" from "an Agent is asking" by whether stdin is a terminal.
    A full pty allocated by something other than an interactive shell would
    satisfy that check; a Unix process has no stronger signal available to
    it that a human, specifically, is on the other end.
-9. **The Global Manifest's nested-repository gate keys off a directory
-   having its own `.git`, nothing more.** `manifest.globalReaches` (see
-   `docs/SECURITY.md`'s Global Manifest section, and
-   [ADR-0012](adr/0012-global-manifest-reachability.md)) treats crossing a
-   `.git` on the way up to a project's Manifest as the boundary of an
-   unreviewed nested tree. A tree that carries no `.git` at all — an
-   extracted tarball, a directory copied rather than cloned — is
-   indistinguishable from an ordinary subdirectory of the onboarded
-   project, and so still receives Global Handles. This is the same kind of
-   honest, disclosed limitation as 1-8 above, not a defect the gate was
-   supposed to close and missed: it is, precisely, a `.git`-presence check,
-   stated here as exactly that and nothing stronger.
+10. **The Global Manifest's nested-repository gate keys off a directory
+    having its own `.git`, nothing more.** `manifest.globalReaches` (see
+    `docs/SECURITY.md`'s Global Manifest section, and
+    [ADR-0012](adr/0012-global-manifest-reachability.md)) treats crossing a
+    `.git` on the way up to a project's Manifest as the boundary of an
+    unreviewed nested tree. A tree that carries no `.git` at all — an
+    extracted tarball, a directory copied rather than cloned — is
+    indistinguishable from an ordinary subdirectory of the onboarded
+    project, and so still receives Global Handles. This is the same kind of
+    honest, disclosed limitation as 1-9 above, not a defect the gate was
+    supposed to close and missed: it is, precisely, a `.git`-presence check,
+    stated here as exactly that and nothing stronger.
 
 ## Intercept precision (v0.1.4)
 
