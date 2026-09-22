@@ -246,6 +246,105 @@ func TestCloseZeroesKeyMaterial(t *testing.T) {
 	}
 }
 
+// TestRewrapChangesUnlockKeyKeepsData covers CLA-97's vault primitive:
+// Rewrap must swap which key opens the Vault without touching a single
+// Entry, and must zero the old key it replaces (CLA-60) rather than leaving
+// it sitting in memory once superseded.
+func TestRewrapChangesUnlockKeyKeepsData(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "v.cpv")
+	oldKey := key(1)
+	newKey := key(2)
+
+	v, err := Create(p, oldKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Add("a/one", "value-number-one", AddOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	// v's own copy of the pre-Rewrap key (not oldKey, the caller's slice —
+	// Create keeps its own copy, same as Open) is the one Rewrap must zero
+	// in place; capture its backing array, not a copy of its bytes, so the
+	// check below observes Rewrap's actual mutation.
+	preRewrap := v.key
+	if err := v.Rewrap(newKey); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(v.key, newKey) {
+		t.Fatalf("v.key after Rewrap = %x, want the new key %x", v.key, newKey)
+	}
+	for i, b := range preRewrap {
+		if b != 0 {
+			t.Fatalf("preRewrap[%d] = %#x, want 0: Rewrap must zero the key it replaces (CLA-60)", i, b)
+		}
+	}
+	if err := v.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Open(p, oldKey); !errors.Is(err, ErrWrongKey) {
+		t.Fatalf("Open with the pre-Rewrap key after Save = %v, want ErrWrongKey", err)
+	}
+	v2, err := Open(p, newKey)
+	if err != nil {
+		t.Fatalf("Open with the post-Rewrap key: %v", err)
+	}
+	e, err := v2.Get("a/one")
+	if err != nil || e.Value != "value-number-one" {
+		t.Fatalf("Rewrap must not touch Entries: got %+v, %v", e, err)
+	}
+}
+
+// TestRewrapRefusesWrongSizedKey mirrors Create/Open's own key-size check:
+// Rewrap must never silently accept a key that could not itself unlock
+// anything.
+func TestRewrapRefusesWrongSizedKey(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "v.cpv")
+	v, err := Create(p, key(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Rewrap([]byte("too-short")); err == nil {
+		t.Fatal("Rewrap accepted a wrong-sized key")
+	}
+	if !bytes.Equal(v.key, key(1)) {
+		t.Fatal("a refused Rewrap must leave the existing key untouched")
+	}
+}
+
+// TestUpdateRewrapIsHowABrokerUpgradeActuallyRuns exercises Rewrap the way
+// CLA-97's passphrase-KDF upgrade calls it: inside Update, under its lock,
+// so the re-wrap and the Save that makes it durable happen as one atomic
+// Open -> mutate -> Save cycle (CLA-55) rather than two separate steps a
+// concurrent writer could interleave with.
+func TestUpdateRewrapIsHowABrokerUpgradeActuallyRuns(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "v.cpv")
+	oldKey := key(3)
+	newKey := key(4)
+	if _, err := Create(p, oldKey); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Update(p, oldKey, func(v *Vault) error {
+		return v.Rewrap(newKey)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Open(p, oldKey); !errors.Is(err, ErrWrongKey) {
+		t.Fatalf("Open with the pre-upgrade key = %v, want ErrWrongKey", err)
+	}
+	v, err := Open(p, newKey)
+	if err != nil {
+		t.Fatalf("Open with the upgraded key: %v", err)
+	}
+	v.Close()
+}
+
 // TestSaveTightensExistingDirPermissions covers CLA-58: a CPASS_HOME
 // directory that already exists (e.g. left at 0755 by a stray umask, or
 // simply reused across cpass versions) must be tightened to 0700 on Save,

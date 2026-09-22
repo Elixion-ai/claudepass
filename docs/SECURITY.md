@@ -277,14 +277,39 @@ Vault (`broker.UnlockKey`):
    it; that absence itself means "derived with this project's original
    `N=2^15, r=8, p=1` parameters" (~60ms, ~32MiB — fine for the login this
    project shipped as v1's threat model, too weak for the offline-copy one
-   above), and it keeps being derived that way indefinitely so the same
-   passphrase keeps reproducing the same key. There is no in-place upgrade
-   of an existing passphrase Vault onto the new parameters yet — raising `N`
-   changes the derived key, which would need the Vault's data key re-wrapped
-   under it — so moving one over today means creating a fresh Vault (`cpass
-   init`, unset `CPASS_HOME` or point it elsewhere first) and re-adding its
-   Handles; a macOS Vault on the default Keychain unlock path is unaffected
-   either way. Once derived, that key is handed to a
+   above). **Upgrading an existing passphrase Vault**: `cpass unlock`
+   upgrades one transparently, on its next successful unlock, rather than
+   requiring a fresh Vault and re-added Handles. It re-derives the key under
+   the current parameters (same salt: raising `N` is what makes the old
+   parameters offline-weak, not the salt, so only `N`/`r`/`p` move — nothing
+   is gained by also rotating the salt, and reusing it is what makes the
+   crash-safety below possible without anything extra having to survive an
+   interruption), re-wraps the Vault's data key under that new derivation
+   (`vault.Vault.Rewrap`, inside `vault.Update`'s lock, so a concurrent
+   writer can never interleave with it), and only once that Save has
+   durably succeeded (`internal/atomicfile`, fsynced) writes the new
+   `broker.kdf` (also via `internal/atomicfile`, so a torn write can never
+   leave it holding an unparsable record) — printing `cpass: upgraded this
+   Vault's passphrase key to stronger parameters` on stderr the one time it
+   happens. That order, Vault first and `broker.kdf` only after, is what
+   keeps a crash between the two writes safe: it leaves the Vault already
+   re-wrapped under the new key while `broker.kdf` still names the old (or,
+   for a legacy Vault, no) parameters, and `cpass unlock`'s own retry —
+   whenever the persisted parameters fail to open the Vault, derive again
+   with the current ones and try that before giving up — is what still
+   unlocks that exact residue with the same passphrase; the next successful
+   unlock from there finishes the interrupted upgrade rather than leaving it
+   half-done forever. An already-current Vault's unlock is a plain no-op:
+   no re-derivation, no write, no notice. A macOS Vault on the default
+   Keychain unlock path never has any of this to do, since it never derives
+   a key from a passphrase at all. **Bounds on a `broker.kdf` record read
+   from disk**: writing that file already requires the same-user access
+   docs/THREATS.md places out of scope, but `cpass` still refuses one whose
+   `N` is not a power of two in `[2^15, 2^20]`, or whose `r` exceeds `32` or
+   `p` exceeds `16`, before ever handing it to scrypt — defence in depth
+   against a syntactically valid but extreme value (`N=2^30`, say) that
+   would otherwise try to allocate on the order of a terabyte and hang
+   rather than fail. Once derived, that key is handed to a
    detached `cpass broker-serve` process over a pipe — never a command-line
    argument, so it never appears in `ps`. That process listens on a
    user-only Unix domain socket (mode `0600`) at `$XDG_RUNTIME_DIR/cpass.sock`
@@ -919,7 +944,7 @@ All paths below are relative to `$CPASS_HOME` unless stated otherwise.
 | `$CPASS_HOME/vault.cpv.tmp-*` | Transient — the Vault's atomic-write staging file, one uniquely-named instance per Save (`os.CreateTemp`, never a fixed name two writers could race); renamed over `vault.cpv` (or `vault.cpv.bak`) on save, never left behind on success. | `0600` |
 | `$CPASS_HOME/vault.cpv.lock` | The sidecar `flock` every Vault writer holds for its whole Open-mutate-Save cycle (`vault.Update`); never removed, never itself holds any Vault data. macOS/Linux only. | `0600` |
 | `$CPASS_HOME/broker.salt` | The scrypt salt for deriving the unlock key from a passphrase (Linux/CI unlock path only). | `0600` |
-| `$CPASS_HOME/broker.kdf` | The scrypt `N`/`r`/`p` cost the salt above was derived with (Linux/CI unlock path only); absent next to a `broker.salt` from before this file existed, which means the legacy `N=2^15` cost. | `0600` |
+| `$CPASS_HOME/broker.kdf` | The scrypt `N`/`r`/`p` cost the salt above was derived with (Linux/CI unlock path only); absent next to a `broker.salt` from before this file existed, which means the legacy `N=2^15` cost — see "Upgrading an existing passphrase Vault" below for how that record moves onto the current cost, and its bounds when read back. | `0600` |
 | `$CPASS_HOME/cpass.sock` (or `$XDG_RUNTIME_DIR/cpass.sock` if set) | The Broker process's Unix domain socket (Linux/CI unlock path only). | `0600` |
 | `$CPASS_HOME/redactions.log` | The append-only redaction event log described above. | `0600` |
 | `$CPASS_HOME/run/<16-hex-char id>/` | One per-invocation temp directory for `cpass run`'s file Bindings; holds a `.pid` file and one file per file-bound Secret, all shredded on exit, or swept by the next invocation's `sweepStale` if `cpass` itself was killed before it could clean up (PID-liveness, bounded by a time-based fallback — see `docs/THREATS.md`). | `0700` (files `0600`; shared `run/` parent also tightened to `0700` on every use, the same reused-directory fix as `$CPASS_HOME` itself) |
