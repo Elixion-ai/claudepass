@@ -92,15 +92,29 @@ relies on, since those tests always capture through a pipe.
   Set up the Vault and a Manifest declaring `stripe/live` off-screen too
   (`cpass manifest add stripe/live`, as in the README quickstart).
 - Show the mechanism, not the value: the winning shot is `cpass run
-  --unsafe-allow -- env` printing `STRIPE_LIVE=[REDACTED:stripe/live]`. Bare
-  `env` does nothing but reveal, so Command Policy refuses it outright
-  (exit 3) without `--unsafe-allow` — the human-only override that needs a
-  real terminal to grant, exactly what a person filming this demo is doing.
-  Redaction still catches the value regardless: this one shot proves both
-  halves of the design in order — a human can choose to see the raw
-  command, but never the raw Secret. Verified live against a built binary
-  in an isolated Vault (CLA-74): a bare `cpass run -- env` exits 3 with
-  `cpass: refused: env prints environment variables — …`; with
-  `--unsafe-allow` at a real terminal it exits 0 and prints exactly the
-  line above.
+  --unsafe-allow -- sh -c 'echo STRIPE_LIVE=$STRIPE_LIVE'`, printing
+  `STRIPE_LIVE=[REDACTED:stripe/live]`. Command Policy refuses it outright
+  (exit 3, `echo would print $STRIPE_LIVE`) without `--unsafe-allow` — the
+  human-only override that needs a real terminal to grant, exactly what a
+  person filming this demo is doing. Redaction still catches the value
+  regardless: this one shot proves both halves of the design in order — a
+  human can choose to see the raw command, but never the raw Secret. Never
+  use bare `env` for this (an earlier draft of this doc did): with no
+  arguments it dumps the whole process environment, not one Handle —
+  dozens of ambient variables (`PATH`, `HOME`, …) that overflow this
+  section's own 80×24/one-idea-per-demo guidance, and in a CI-style setup
+  that unlocks via `CPASS_KEY` rather than the macOS Keychain (the
+  documented unattended path, docs/SECURITY.md), `env` broadcasts
+  `CPASS_KEY` itself in the clear, since Redaction only masks Bound Handle
+  values it knows about, never the Vault's own master key. Verified live
+  against a built binary in an isolated Vault (CLA-74): `cpass run -- sh -c
+  'echo STRIPE_LIVE=$STRIPE_LIVE'` exits 3 with `cpass: refused: echo would
+  print $STRIPE_LIVE — pass the variable to the tool that needs it
+  instead`; with `--unsafe-allow` at a real terminal it exits 0, prints
+  `STRIPE_LIVE=[REDACTED:stripe/live]` to stdout, and — cpass's own
+  redaction notice, not part of the "one idea" but always present
+  alongside it — `cpass: redacted stripe/live from output (1×); the Agent
+  must use the value, not print it` to stderr: two lines on screen, both
+  the mechanism working as designed, never the raw Secret or anything else
+  ambient.
 - Amber prompt, `#0e0a06` background, Press Start 2P for any title card.
