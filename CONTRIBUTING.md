@@ -4,7 +4,7 @@ ClaudePass is MIT-licensed and open to contributions. The goal is to be the stan
 
 ## Before you start
 
-- Read [`CONTEXT.md`](CONTEXT.md) for the vocabulary (Secret, Handle, Agent, Broker, Context, Redaction, Command Policy, Vault, Binding, Manifest, Capture, Intercept, Exposed) and use those terms, not the alternatives it lists under "avoid".
+- Read [`CONTEXT.md`](CONTEXT.md) for the vocabulary (Secret, Handle, Agent, Broker, Context, Redaction, Command Policy, Vault, Binding, Manifest, Global Manifest, Capture, Intercept, Exposed) and use those terms, not the alternatives it lists under "avoid".
 - Read the [ADRs](docs/adr/) touching the area you are changing. Do not reverse a decision without writing a superseding ADR; [ADR-0011](docs/adr/0011-free-and-open-source.md) is a recent example.
 - The product spec is [`docs/PRD.md`](docs/PRD.md). What each component does and touches is in [`docs/SECURITY.md`](docs/SECURITY.md); the threat model is [`docs/THREATS.md`](docs/THREATS.md).
 
