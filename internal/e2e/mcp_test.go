@@ -451,3 +451,85 @@ func TestMCPRawValueNeverInAnyFrame(t *testing.T) {
 		t.Fatal("redaction marker missing from the stream")
 	}
 }
+
+// TestMCPRunWithSecretsInjectsGlobalHandles covers the surface the Global
+// Manifest exists for: an Agent's session reaches cpass through this tool,
+// not through the CLI, so a Handle that does not arrive here does not arrive
+// at all.
+func TestMCPRunWithSecretsInjectsGlobalHandles(t *testing.T) {
+	ve := newVault(t)
+	ve.add("a/one", "value-number-one", "-g")
+	repo := t.TempDir()
+	if r := ve.runIn(repo, nil, "manifest", "init"); r.code != 0 {
+		t.Fatalf("manifest init: %s", r)
+	}
+	s := startMCP(t, ve)
+	s.initialize()
+	// The project declares nothing; only the Global Manifest names a/one.
+	// As above, Command Policy refusing the shell echo is the proof that the
+	// variable really was bound — an unbound A_ONE would not trip it.
+	text, isError := s.callToolText("run_with_secrets", map[string]any{
+		"command": []string{"sh", "-c", "echo present-$A_ONE" + "-ok"},
+		"cwd":     repo,
+	})
+	if !isError || !strings.Contains(text, "refused") {
+		t.Fatalf("want a refusal proving the Global Handle was bound: %s", text)
+	}
+	// no_global takes it back out, so the same call is no longer refused.
+	text, isError = s.callToolText("run_with_secrets", map[string]any{
+		"command":   []string{"sh", "-c", "echo present-$A_ONE" + "-ok"},
+		"cwd":       repo,
+		"no_global": true,
+	})
+	if isError {
+		t.Fatalf("no_global should leave nothing bound to refuse: %s", text)
+	}
+}
+
+// TestMCPRunWithSecretsSaysWhenCwdWasGuessed: this server is one long-lived
+// process whose working directory never follows the Agent's, so a call that
+// names no cwd resolved its Manifest somewhere the caller did not choose.
+// That is invisible unless it is said out loud.
+func TestMCPRunWithSecretsSaysWhenCwdWasGuessed(t *testing.T) {
+	ve := newVault(t)
+	s := startMCP(t, ve)
+	s.initialize()
+	text, isError := s.callToolText("run_with_secrets", map[string]any{
+		"command": []string{"true"},
+	})
+	if isError {
+		t.Fatalf("run: %s", text)
+	}
+	if !strings.Contains(text, "no cwd given") || !strings.Contains(text, "pass cwd") {
+		t.Fatalf("want the ambiguous-cwd advisory: %s", text)
+	}
+	// Naming a cwd removes the advisory entirely.
+	text, isError = s.callToolText("run_with_secrets", map[string]any{
+		"command": []string{"true"},
+		"cwd":     t.TempDir(),
+	})
+	if isError || strings.Contains(text, "no cwd given") {
+		t.Fatalf("an explicit cwd must not be warned about: %s", text)
+	}
+}
+
+// TestMCPListHandlesFiltersToGlobal keeps the Agent's own view of which
+// Handles are ambient in step with `cpass ls --global`.
+func TestMCPListHandlesFiltersToGlobal(t *testing.T) {
+	ve := newVault(t)
+	ve.add("a/one", "value-number-one", "-g")
+	ve.add("b/two", "value-number-two")
+	s := startMCP(t, ve)
+	s.initialize()
+	text, isError := s.callToolText("list_handles", map[string]any{"global": true})
+	if isError {
+		t.Fatalf("list_handles: %s", text)
+	}
+	if !strings.Contains(text, "a/one") || strings.Contains(text, "b/two") {
+		t.Fatalf("global filter: %s", text)
+	}
+	text, _ = s.callToolText("list_handles", map[string]any{})
+	if !strings.Contains(text, "a/one") || !strings.Contains(text, "b/two") {
+		t.Fatalf("unfiltered listing must show both: %s", text)
+	}
+}

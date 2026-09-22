@@ -67,9 +67,16 @@ func Run(spec Spec) (int, error) {
 	if len(spec.Argv) == 0 {
 		return 2, ErrNoCommand
 	}
-	secrets, err := broker.Resolve(spec.Refs)
+	secrets, skipped, err := broker.Resolve(spec.Refs)
 	if err != nil {
 		return 1, err
+	}
+	for _, line := range skipped {
+		if spec.Warn != nil {
+			// Best-effort, like every other notice below: a drifted Global
+			// Handle is worth saying out loud, but never worth failing over.
+			_, _ = fmt.Fprintln(spec.Warn, line)
+		}
 	}
 	root, _ := runRoot()
 	if !spec.UnsafeAllow {

@@ -306,7 +306,7 @@ func TestInterceptMultipleStoredFragmentsAreCommaJoined(t *testing.T) {
 // defined: -bogus\nUsage of ls:\n  -exposed\n\t...") straight to stderr,
 // with no "cpass: " prefix at all. usageErr (cli.go) is now the only
 // thing that ever gets to print once a FlagSet fails to parse — every one
-// of the 24 flag.NewFlagSet call sites across internal/cli is covered
+// of the 27 flag.NewFlagSet call sites across internal/cli is covered
 // below by its exact invocation.
 func TestSubcommandFlagErrorsMatchGrammar(t *testing.T) {
 	cases := [][]string{
@@ -331,6 +331,9 @@ func TestSubcommandFlagErrorsMatchGrammar(t *testing.T) {
 		{"manifest", "init", "--bogus"},
 		{"manifest", "add", "--bogus"},
 		{"manifest", "check", "--bogus"},
+		{"manifest", "global", "--bogus"},
+		{"global", "--bogus"},
+		{"local", "--bogus"},
 		{"integrate", "codex", "--bogus"},
 		{"integrate", "claude", "--bogus"},
 		{"integrate", "mcp", "--bogus"},

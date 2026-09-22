@@ -4,10 +4,11 @@ ClaudePass is free and open source under the MIT license (see
 [ADR-0011](adr/0011-free-and-open-source.md)) — you can read the code
 yourself, and this page still says exactly what each component does and
 touches so you don't have to. This page covers the Vault's format and
-cipher, where the unlock key lives on each platform, what the two Claude
-Code hooks read and block, what `cpass run` does to a child process and its
-output, what Redaction can and cannot guarantee, the redaction log, and a
-no-telemetry guarantee. `docs/THREATS.md` covers the threat model and the
+cipher, where the unlock key lives on each platform, the Global Manifest and
+how it reaches a project, what the two Claude Code hooks read and block,
+what `cpass run` does to a child process and its output, what Redaction can
+and cannot guarantee, the redaction log, and a no-telemetry guarantee.
+`docs/THREATS.md` covers the threat model and the
 leak paths this design deliberately leaves open; this page is the "what
 actually happens" reference underneath it. Vocabulary follows
 [`CONTEXT.md`](../CONTEXT.md).
@@ -48,6 +49,102 @@ that.
   enforced wherever a value is stored (`add`, `capture`, `import`,
   `intercept`) — so Redaction is never asked to scrub a string so short it
   would also match large stretches of ordinary output.
+
+## The Global Manifest
+
+- **Location**: `$CPASS_HOME/global.toml` (`internal/manifest/global.go`) —
+  the same TOML subset a project Manifest uses (a `[secrets]` list, an
+  optional `[options]` section) and, like a project Manifest, holding no
+  Secret values. The file is written `0644`; `SaveGlobal` creates
+  `$CPASS_HOME` itself (`0700`) if it doesn't exist yet, the same as the
+  Vault's own directory.
+- **What writes and removes it**: `cpass add <handle> -g` (once the Secret
+  is safely stored), `cpass global <handle>` (promotes a Handle already in
+  the Vault without retyping its value), and `cpass manifest add <handle>
+  -g` all declare one Handle into it. `cpass local <handle>` removes a
+  declaration; the Secret itself, in the Vault, is untouched.
+- **Reachability** (`manifest.globalReaches`): a Global Handle reaches a
+  directory only when both hold — a project Manifest is found from that
+  directory by the ordinary ancestor walk (`manifest.Find`), and no
+  directory between the command's directory and that Manifest's own
+  directory carries its own `.git`. Both ends of that walk are resolved with
+  `filepath.EvalSymlinks` first: the walk itself is lexical while the `.git`
+  check is a syscall the kernel resolves through links, and a link at the
+  project root pointing into a nested repository would otherwise have a
+  lexical parent of the project root itself — stepping over the very
+  directory holding the boundary. A path that cannot be resolved (a dangling
+  link, a directory renamed mid-run) withholds Global Handles rather than
+  guessing. A directory with no Manifest anywhere above it gets no Global
+  Handles at all. A nested repository cloned inside
+  an onboarded project — a dependency under `vendor/`, a scratch checkout
+  under `tmp/` — gets none either, because crossing its own `.git` withholds
+  them: an install script that repository runs cannot reach the machine's
+  ambient Secrets. The outer project's own explicitly declared Handles still
+  reach such a directory, exactly as a committed Manifest has always meant;
+  this gate does not change that. See `docs/THREATS.md` for the one gap this
+  check does not close.
+- **Opting out**: the durable opt-out is a property of the project's own
+  committed Manifest, not a machine-local setting — `cpass manifest global
+  off` (or `cpass manifest init --no-global` at creation) writes
+  `[options]` / `global = false`, and every `cpass run` or
+  `run_with_secrets` call against that project skips the Global Manifest
+  from then on, whoever runs it. `cpass run --no-global`, and the MCP
+  `run_with_secrets` tool's `no_global` argument, do the same for one
+  invocation without touching the file.
+- **Precedence**, most specific wins: the Global Manifest is the base layer;
+  a project Manifest entry for the same Handle replaces it outright, Binding
+  and all (`manifest.Refs`); `--with handle[:VAR]` (repeatable on `cpass
+  run`) then overrides by Handle on top of that; and the MCP
+  `run_with_secrets` tool's explicit `handles` argument, whenever it's
+  given at all — even an empty list — replaces the entire source outright,
+  so a Global Handle can never sneak into an explicit list the caller wrote.
+- **Resolution: skip, not fail, for a Global Handle.** A Handle that reached
+  the run through the Global Manifest and cannot be resolved — removed from
+  the Vault since it was declared, or, in CI mode, its Binding's variable
+  not set in the environment — is skipped rather than failing the run, with
+  a stderr notice: ``cpass: <handle> is declared in your Global Manifest but
+  <reason>; skipping it — run `cpass local <handle>` to stop declaring it``.
+  A Handle a project declared itself, or one named in the MCP
+  `run_with_secrets` tool's `handles` list, still hard-fails exactly as it
+  always has: a drifted machine-wide declaration must not take every
+  project down at once, but a project's own committed contract is still a
+  contract. `cpass run --with handle[:VAR]` counts as naming it: `cmdRun`
+  clears the Ref's Global origin when it merges the override, so a Handle
+  asked for by name hard-fails when it cannot be resolved even if it was
+  also reaching the run ambiently. Nothing a human or an Agent typed out is
+  ever silently skipped.
+- **An unreadable Global Manifest costs only its own Handles.** A
+  `global.toml` that will not parse — a half-written file, a hand edit that
+  went wrong — does not fail the run: `manifest.Refs` skips the Global layer,
+  reports ``cpass: your Global Manifest is unreadable (<err>); skipping
+  Global Handles for this run — run `cpass manifest check -g` once it is
+  fixed`` on stderr, and the project's own declared Handles resolve
+  normally. A project's *own* Manifest failing to parse is still fatal, for
+  the same reason as above. A plain `cpass ls`, and the MCP `list_handles`
+  tool without `global: true`, never read the file at all, so neither can be
+  broken by it; `cpass ls -l` and `cpass ls --global` do read it, and report
+  the failure.
+- **Collisions**: two Handles bound to the same environment variable are
+  refused — `cpass: handle collision: <a> and <b> both bind <VAR>`, exit `1`
+  on `cpass run` — only when at least one of them reached the run through
+  the Global Manifest. The MCP `run_with_secrets` tool refuses the same
+  collision as an `isError: true` tool result whose text is the bare
+  `handle collision: <a> and <b> both bind <VAR>` — MCP tool-level errors
+  are returned as-is, with no `cpass: ` prefix and no process exit code (MCP
+  has no exit code to give). Two Handles a project declares itself into the
+  same variable keep today's silent last-write-wins, so no existing project
+  starts failing on a version bump it never opted into.
+- **The opt-out's round-trip guarantee, and its one real limit.** `Load` and
+  `Save` (`internal/manifest/manifest.go`) keep, verbatim, any `[options]`
+  key this binary doesn't itself parse and any whole section that is
+  neither `[options]` nor `[secrets]`, so a committed `[options]` /
+  `global = false` survives a later `cpass manifest add` or `cpass global`
+  run by any binary at or above this version. **The disclosed exception**: a
+  `cpass` binary built before this feature existed has no notion that
+  `[options]` exists at all, and its own `Save` regenerates the whole file
+  from only what it parsed — so running that older binary against a
+  Manifest that already opted out, and having it write the file again,
+  silently drops the opt-out on that Save.
 
 ## Where the unlock key lives, per platform
 
@@ -334,9 +431,12 @@ detail.
 
 ## What `cpass run` does to the child and its output
 
-1. Resolves every requested Handle — explicit `--with handle[:VAR]`
-   repeats, or every entry in the nearest ancestor `.claudepass.toml`
-   Manifest when `--with` is omitted — to a value via the Broker.
+1. Resolves every requested Handle to a value via the Broker: explicit
+   `--with handle[:VAR]` repeats when given, or else the Global Manifest's
+   Handles layered under the nearest ancestor `.claudepass.toml` Manifest's
+   own declarations when `--with` is omitted — see the Global Manifest
+   section above for the reachability rule, the two opt-outs, and the
+   skip-vs-fail and collision rules that govern this step.
 2. Unless `--unsafe-allow` is given (refused outright without a terminal —
    an Agent invoking `cpass run` itself can never set it), evaluates
    `policy.Evaluate` against the command's argv: it refuses the
@@ -386,6 +486,17 @@ Bindings, signal forwarding, shredding — is identical regardless of surface.
 entirely, because it is about to be stored as the new Secret itself and
 redacting it would corrupt the captured value; its stderr is still
 redacted like an ordinary `run`.
+
+**Always pass `cwd` to the MCP `run_with_secrets` tool.** The MCP server is
+one long-lived process for the whole session; its own working directory
+never follows the Agent's, and that directory is exactly what
+`manifest.Refs` searches from to find a Manifest — and, through it, any
+Global Manifest Handles — at all. Called with no `cwd`, the tool still runs
+the command, against whatever Manifest (if any) sits above wherever the
+server process happened to start, and adds one warning to the result: "cpass:
+no cwd given, so the Manifest was located from this MCP server's own working
+directory, not yours; pass cwd to be sure which project's Handles (and
+Global Handles) are injected."
 
 ## What Redaction can and cannot guarantee
 
@@ -491,6 +602,7 @@ All paths below are relative to `$CPASS_HOME` unless stated otherwise.
 | `$CPASS_HOME/redactions.log` | The append-only redaction event log described above. | `0600` |
 | `$CPASS_HOME/run/<16-hex-char id>/` | One per-invocation temp directory for `cpass run`'s file Bindings; holds a `.pid` file and one file per file-bound Secret, all shredded on exit. | `0700` (files `0600`) |
 | `.claudepass.toml` (repo root, found by walking up from the current directory) | The Manifest: which Handles this project needs and their Bindings. Contains no values; meant to be committed. | `0644` |
+| `$CPASS_HOME/global.toml` | The Global Manifest: the same TOML subset as a project Manifest (`.claudepass.toml`), declaring the Handles this machine gets in every project it reaches. Contains no values. | `0644` (dir `0700`, created like the Vault's own directory if missing) |
 | `<skills-dir>/claudepass/` (default `~/.claude/skills/claudepass`, overridable with `cpass integrate claude --path`) | The installed Claude Code plugin: `.claude-plugin/plugin.json`, `hooks/hooks.json`, `skills/claudepass/SKILL.md`. | `0644` (dirs `0755`) |
 | `AGENTS.md` (repo root, or `cpass integrate codex --path`) | A delimited, idempotent section `cpass integrate codex` writes teaching Codex the CLI. Everything outside the `<!-- cpass:begin/end -->` markers is preserved untouched. | `0644` |
 

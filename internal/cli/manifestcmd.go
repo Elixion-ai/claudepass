@@ -13,12 +13,12 @@ import (
 )
 
 func init() {
-	register(command{"manifest", "declare the Handles a project needs: manifest init|add|check", cmdManifest})
+	register(command{"manifest", "declare the Handles a project needs: manifest init|add|check|global", cmdManifest})
 }
 
 func cmdManifest(e *env) int {
 	if len(e.args) == 0 {
-		return e.fail(ExitUsage, "usage: cpass manifest init | add <handle> [--binding NAME] [--file] | check")
+		return e.fail(ExitUsage, "usage: cpass manifest init | add <handle> [--binding NAME] [--file] [-g] | check [-g] | global <on|off>")
 	}
 	sub, rest := e.args[0], e.args[1:]
 	switch sub {
@@ -28,6 +28,8 @@ func cmdManifest(e *env) int {
 		return manifestAdd(e, rest)
 	case "check":
 		return manifestCheck(e, rest)
+	case "global":
+		return manifestGlobalToggle(e, rest)
 	}
 	return e.fail(ExitUsage, "unknown manifest subcommand %q", sub)
 }
@@ -35,14 +37,15 @@ func cmdManifest(e *env) int {
 func manifestInit(e *env, args []string) int {
 	fs := flag.NewFlagSet("manifest init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	noGlobal := fs.Bool("no-global", false, "opt this project out of the Global Manifest's Handles")
 	if err := fs.Parse(args); err != nil {
-		return e.usageErr(err, "cpass manifest init")
+		return e.usageErr(err, "cpass manifest init [--no-global]")
 	}
 	p := filepath.Join(".", manifest.FileName)
 	if _, err := os.Stat(p); err == nil {
 		return e.fail(ExitError, "%s already exists", p)
 	}
-	m := &manifest.Manifest{Path: p}
+	m := &manifest.Manifest{Path: p, GlobalDisabled: *noGlobal}
 	if err := m.Save(); err != nil {
 		return e.failErr(err)
 	}
@@ -55,24 +58,30 @@ func manifestAdd(e *env, args []string) int {
 	fs.SetOutput(io.Discard)
 	binding := fs.String("binding", "", "environment variable name (default derived from the Handle)")
 	file := fs.Bool("file", false, "file Binding: the variable holds a path to a temp file")
+	global := globalFlag(fs, "declare in the Global Manifest instead of this project's")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
-		return e.usageErr(err, "cpass manifest add <handle> [--binding NAME] [--file]")
+		return e.usageErr(err, "cpass manifest add <handle> [--binding NAME] [--file] [-g]")
 	}
 	if len(pos) != 1 {
-		return e.fail(ExitUsage, "usage: cpass manifest add <handle> [--binding NAME] [--file]")
+		return e.fail(ExitUsage, "usage: cpass manifest add <handle> [--binding NAME] [--file] [-g]")
 	}
 	handle := pos[0]
 	if err := vault.ValidateHandle(handle); err != nil {
 		return e.failErr(err)
 	}
-	m, code := loadManifest(e)
-	if code != ExitOK {
-		return code
-	}
 	entry := manifest.Entry{Handle: handle, Binding: vault.Binding{Name: *binding}}
 	if *file {
 		entry.Binding.Kind = vault.BindFile
+	}
+	if *global {
+		// The Global Manifest needs no project to live in, so this door is
+		// open from any directory — unlike every other manifest subcommand.
+		return declareGlobal(e, entry)
+	}
+	m, code := loadManifest(e)
+	if code != ExitOK {
+		return code
 	}
 	m.Add(entry)
 	if err := m.Save(); err != nil {
@@ -85,12 +94,21 @@ func manifestAdd(e *env, args []string) int {
 func manifestCheck(e *env, args []string) int {
 	fs := flag.NewFlagSet("manifest check", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	global := globalFlag(fs, "check the Global Manifest instead of this project's")
 	if err := fs.Parse(args); err != nil {
-		return e.usageErr(err, "cpass manifest check")
+		return e.usageErr(err, "cpass manifest check [-g]")
 	}
-	m, code := loadManifest(e)
-	if code != ExitOK {
-		return code
+	var m *manifest.Manifest
+	if *global {
+		var err error
+		if m, err = manifest.LoadGlobal(); err != nil {
+			return e.failErr(err)
+		}
+	} else {
+		var code int
+		if m, code = loadManifest(e); code != ExitOK {
+			return code
+		}
 	}
 	if broker.CIMode() {
 		var missing []string
@@ -124,6 +142,36 @@ func reportMissing(e *env, m *manifest.Manifest, missing []string) int {
 		fprintf(e.stderr, "  %s\n", h)
 	}
 	return ExitError
+}
+
+// manifestGlobalToggle writes the project's durable opt-out of the Global
+// Manifest. It is deliberately a property of the committed .claudepass.toml
+// rather than of the machine: a repo that must never see ambient Secrets
+// says so once, in the file its collaborators review, not in a setting one
+// developer happens to have set locally.
+func manifestGlobalToggle(e *env, args []string) int {
+	fs := flag.NewFlagSet("manifest global", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return e.usageErr(err, "cpass manifest global <on|off>")
+	}
+	if fs.NArg() != 1 || (fs.Arg(0) != "on" && fs.Arg(0) != "off") {
+		return e.fail(ExitUsage, "usage: cpass manifest global <on|off>")
+	}
+	m, code := loadManifest(e)
+	if code != ExitOK {
+		return code
+	}
+	m.GlobalDisabled = fs.Arg(0) == "off"
+	if err := m.Save(); err != nil {
+		return e.failErr(err)
+	}
+	verb := "enabled"
+	if m.GlobalDisabled {
+		verb = "disabled"
+	}
+	fprintf(e.stdout, "%s Global Manifest Handles for %s\n", verb, m.Path)
+	return ExitOK
 }
 
 func loadManifest(e *env) (*manifest.Manifest, int) {

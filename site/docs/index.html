@@ -118,6 +118,8 @@ cpass run -- sh -c '[ -n "$STRIPE_LIVE" ] &amp;&amp; echo "deploy: authenticated
         <dd>How a Secret lands in a command's process: either as an environment variable holding the value, or as a temporary file whose path is placed in an environment variable and which is destroyed when the command exits. A Handle carries a default Binding; a command may override it.</dd>
         <dt><img src="/assets/icons/icon-manifest-check.svg" alt="" width="18" height="18"> Manifest</dt>
         <dd>A committed, per-project declaration of which Handles the project needs and their Bindings. Contains no Secret values and is safe to share. For example, <code>.claudepass.toml</code>.</dd>
+        <dt>Global Manifest</dt>
+        <dd>A per-machine declaration, in the same format as a Manifest, of which Handles every onboarded project should receive without naming them itself. Reaches a directory only through that directory's own Manifest, and never crosses into a nested repository. Contains no Secret values. For example, <code>global.toml</code>.</dd>
         <dt>Capture</dt>
         <dd>Storing the output of a command directly into the Vault as a new Secret, so that a value born in a tool result never reaches an Agent.</dd>
         <dt>Intercept</dt>

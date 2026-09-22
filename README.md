@@ -147,9 +147,25 @@ does and doesn't catch. Command Policy refuses, before the command even
 starts, anything whose only real purpose is to reveal a Secret rather than
 use it: `env`, `printenv`, reading a `.env` file, and the like.
 
+## The Global Manifest
+
+Some Handles belong to every project on a machine, not just one — a cloud
+CLI's key, a package registry token. `cpass add stripe/live -g` (or `cpass
+global stripe/live` to promote a Handle already stored) declares it in a
+Global Manifest at `$CPASS_HOME/global.toml`, in the same no-values format
+as a project's own `.claudepass.toml`. `cpass run` injects it into every
+project that has its own Manifest, unless the walk up to that Manifest
+crosses a nested repository's own `.git` (so a dependency cloned into
+`vendor/` never sees it) or the project opted out with `cpass manifest
+global off`; a project's own Manifest entry for a Handle always wins over
+the Global one. `cpass local <handle>` stops declaring a Handle globally
+without touching the stored Secret, and a Global Handle that's since
+vanished from the Vault is skipped with a notice rather than failing the
+run, unlike a Handle the project declared itself.
+
 ## Documentation
 
-- [`CONTEXT.md`](CONTEXT.md) — the vocabulary this repo and this README use throughout (Secret, Handle, Agent, Broker, Context, Redaction, Command Policy, Vault, Binding, Manifest, Capture, Intercept, Exposed).
+- [`CONTEXT.md`](CONTEXT.md) — the vocabulary this repo and this README use throughout (Secret, Handle, Agent, Broker, Context, Redaction, Command Policy, Vault, Binding, Manifest, Global Manifest, Capture, Intercept, Exposed).
 - [`docs/PRD.md`](docs/PRD.md) — the product spec.
 - [`docs/adr/`](docs/adr/) — the design decisions and why alternatives were rejected.
 - [`docs/SECURITY.md`](docs/SECURITY.md) — exactly what the Vault, the Broker, both hooks, `cpass run`, and Redaction do and touch, every `CPASS_*` environment variable, and the no-telemetry guarantee.

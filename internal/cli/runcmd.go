@@ -26,25 +26,21 @@ func cmdRun(e *env) int {
 	fs.SetOutput(io.Discard)
 	var with multiFlag
 	fs.Var(&with, "with", "Handle to inject, optionally with a Binding override (handle:VAR); repeatable")
+	noGlobal := fs.Bool("no-global", false, "skip the Global Manifest's Handles for this run")
 	unsafe := fs.Bool("unsafe-allow", false, "skip Command Policy (humans only; refused without a terminal)")
 	if err := fs.Parse(e.args); err != nil {
-		return e.usageErr(err, "cpass run [--with handle[:VAR]]... [--unsafe-allow] -- <command> [args]")
+		return e.usageErr(err, "cpass run [--with handle[:VAR]]... [--no-global] [--unsafe-allow] -- <command> [args]")
 	}
 	argv := fs.Args()
 	if len(argv) == 0 {
-		return e.fail(ExitUsage, "usage: cpass run [--with handle[:VAR]]... -- <command> [args]")
+		return e.fail(ExitUsage, "usage: cpass run [--with handle[:VAR]]... [--no-global] -- <command> [args]")
 	}
-	var refs []broker.Ref
-	if p, err := manifest.Find("."); err == nil {
-		m, err := manifest.Load(p)
-		if err != nil {
-			return e.failErr(err)
-		}
-		for _, en := range m.Entries {
-			refs = append(refs, broker.Ref{Handle: en.Handle, Declared: en.Binding})
-		}
-	} else if !errors.Is(err, manifest.ErrNotFound) {
+	refs, notices, err := manifest.Refs(".", !*noGlobal)
+	if err != nil {
 		return e.failErr(err)
+	}
+	for _, n := range notices {
+		fprintln(e.stderr, n)
 	}
 	for _, w := range with {
 		r, err := broker.ParseRef(w)
@@ -55,6 +51,13 @@ func cmdRun(e *env) int {
 		for i := range refs {
 			if refs[i].Handle == r.Handle {
 				refs[i].Override = r.Override
+				// Naming a Handle on the command line makes it explicitly
+				// requested, so it stops being ambient: it must hard-fail
+				// when it cannot be resolved, not be skipped as a drifted
+				// Global declaration. Mirrors replaceOrAppend in
+				// internal/manifest/refs.go, which clears the same mark when
+				// a project Manifest supersedes a Global entry.
+				refs[i].FromGlobal = false
 				replaced = true
 			}
 		}
@@ -66,22 +69,22 @@ func cmdRun(e *env) int {
 	if *unsafe && !e.humanPresent() {
 		return e.refuse("--unsafe-allow needs a terminal", "only a human may skip Command Policy")
 	}
-	code, err := run.Run(run.Spec{
+	code, runErr := run.Run(run.Spec{
 		Refs: refs, Argv: argv, UnsafeAllow: *unsafe,
 		Stdin: e.stdin, Stdout: e.stdout, Stderr: e.stderr, Warn: e.stderr,
 		DecorateStdoutMarker: markerDecorator(e.outMode),
 		DecorateStderrMarker: markerDecorator(e.errMode),
 		FormatExposed:        e.exposed,
 	})
-	if err != nil {
-		if errors.Is(err, run.ErrNoCommand) {
-			return e.fail(ExitUsage, "%v", err)
+	if runErr != nil {
+		if errors.Is(runErr, run.ErrNoCommand) {
+			return e.fail(ExitUsage, "%v", runErr)
 		}
 		var ref *policy.Refusal
-		if errors.As(err, &ref) {
+		if errors.As(runErr, &ref) {
 			return e.refuse(ref.Rule, ref.Advice)
 		}
-		return e.fail(code, "%v", err)
+		return e.fail(code, "%v", runErr)
 	}
 	return code
 }

@@ -50,6 +50,12 @@ address:
 - **Command Policy**: refuses, before it runs, a command whose only
   purpose is to defeat the two mechanisms above (dump the environment, cat
   a Secret-bearing file, print a bound variable).
+- **The Global Manifest's reachability gate**: an unreviewed nested tree — a
+  dependency cloned into `vendor/`, a scratch checkout under `tmp/` — cannot
+  silently receive the machine's ambient Global Handles just because `cpass
+  run` would otherwise inject them by default; crossing that tree's own
+  `.git` on the way up withholds them (see `docs/SECURITY.md`'s Global
+  Manifest section).
 - **Intercept**: catches a value a human typed into a prompt before the
   Agent's Context is ever built from that prompt.
 - **Exposed tracking**: when a value does reach a Context anyway — a
@@ -68,7 +74,14 @@ and the PRD's own Out of Scope section).
   Vault's owning user can use every Handle in it; there is no per-Secret
   ACL, no "this Agent may only touch `stripe/test`," no distinction between
   one Agent session and another. If two Agents (or an Agent and a script)
-  share a machine and a Vault, they share every Secret in it.
+  share a machine and a Vault, they share every Secret in it. The Global
+  Manifest's reachability rule (see
+  [ADR-0012](adr/0012-global-manifest-reachability.md)) does not change any
+  of this: it is a directory boundary on one ambient convenience layer, not
+  an authorization system. Every Handle a project's own Manifest declares,
+  and every Handle a command explicitly asks for (`--with`, the MCP
+  `handles` list), is still available to anyone who can run `cpass` as the
+  Vault's owning user, exactly as this bullet already states.
 - **Cloud-hosted Agent sessions.** The Vault is a single local file that
   ClaudePass never syncs, uploads, or ships to a remote sandbox. A session
   running in someone else's cloud sandbox has no Broker to reach on this
@@ -176,6 +189,18 @@ value can still end up somewhere it shouldn't, today:
    A full pty allocated by something other than an interactive shell would
    satisfy that check; a Unix process has no stronger signal available to
    it that a human, specifically, is on the other end.
+9. **The Global Manifest's nested-repository gate keys off a directory
+   having its own `.git`, nothing more.** `manifest.globalReaches` (see
+   `docs/SECURITY.md`'s Global Manifest section, and
+   [ADR-0012](adr/0012-global-manifest-reachability.md)) treats crossing a
+   `.git` on the way up to a project's Manifest as the boundary of an
+   unreviewed nested tree. A tree that carries no `.git` at all — an
+   extracted tarball, a directory copied rather than cloned — is
+   indistinguishable from an ordinary subdirectory of the onboarded
+   project, and so still receives Global Handles. This is the same kind of
+   honest, disclosed limitation as 1-8 above, not a defect the gate was
+   supposed to close and missed: it is, precisely, a `.git`-presence check,
+   stated here as exactly that and nothing stronger.
 
 ## Intercept precision (v0.1.4)
 

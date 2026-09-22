@@ -589,7 +589,7 @@
       <!-- ============================== VOICE & TONE ============================== -->
       <section class="brand-section" id="voice-tone">
         <h2><span class="glyph">▶</span>Voice &amp; Tone</h2>
-        <p class="muted">The 13 <code>CONTEXT.md</code> terms, copied verbatim — including each term's "avoid" list, since this internal reference is where that detail belongs (the public <a href="/docs">/docs</a> vocabulary drops it for readability).</p>
+        <p class="muted">The 14 <code>CONTEXT.md</code> terms, copied verbatim — including each term's "avoid" list, since this internal reference is where that detail belongs (the public <a href="/docs">/docs</a> vocabulary drops it for readability).</p>
         <dl class="term">
           <dt>Secret</dt>
           <dd>A sensitive value (API key, password, token, private key) that must never appear in an agent's context.<br><em>Avoid</em>: Credential, password (as the general term), key</dd>
@@ -611,6 +611,8 @@
           <dd>How a Secret lands in a command's process: either as an environment variable holding the value, or as a temporary file whose path is placed in an environment variable and which is destroyed when the command exits. A Handle carries a default Binding; a command may override it.<br><em>Avoid</em>: Mapping, alias, export, mount</dd>
           <dt>Manifest</dt>
           <dd>A committed, per-project declaration of which Handles the project needs and their Bindings. Contains no Secret values and is safe to share.<br><em>Avoid</em>: Config, env file, profile, .env</dd>
+          <dt>Global Manifest</dt>
+          <dd>A per-machine declaration, in the same format as a Manifest, of which Handles every onboarded project should receive without naming them itself. Reaches a directory only through that directory's own Manifest, and never crosses into a nested repository. Contains no Secret values.<br><em>Avoid</em>: Machine manifest, ambient config, default handles</dd>
           <dt>Capture</dt>
           <dd>Storing the output of a command directly into the Vault as a new Secret, so that a value born in a tool result never reaches an Agent.<br><em>Avoid</em>: Pipe-in, save output, record</dd>
           <dt>Intercept</dt>

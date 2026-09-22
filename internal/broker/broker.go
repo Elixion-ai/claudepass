@@ -151,6 +151,12 @@ type Ref struct {
 	// Declared is the Manifest's Binding for this Handle, if any. It wins
 	// over the Vault's default Binding and is the only source in CI mode.
 	Declared vault.Binding
+	// FromGlobal marks a Ref that reached this command through the Global
+	// Manifest rather than the project's own. Such a Ref is ambient: no
+	// committed file in this project asked for it, so an unresolvable one is
+	// skipped rather than fatal, and a Binding-name collision involving one
+	// is refused rather than silently resolved.
+	FromGlobal bool
 }
 
 // ParseRef parses "handle" or "handle:BINDING".
@@ -167,8 +173,10 @@ func ParseRef(s string) (Ref, error) {
 
 var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-func resolveFromEnv(refs []Ref) ([]Resolved, error) {
+func resolveFromEnv(refs []Ref) ([]Resolved, []string, error) {
 	out := make([]Resolved, 0, len(refs))
+	var skipped []string
+	bound := map[string]Ref{}
 	for _, r := range refs {
 		name := r.Override
 		if name == "" {
@@ -179,15 +187,52 @@ func resolveFromEnv(refs []Ref) ([]Resolved, error) {
 		}
 		val, ok := os.LookupEnv(name)
 		if !ok {
-			return nil, fmt.Errorf("CI mode: %s expects %s in the environment", r.Handle, name)
+			if r.FromGlobal {
+				skipped = append(skipped, skipNotice(r.Handle, name+" is not set in the environment"))
+				continue
+			}
+			return nil, nil, fmt.Errorf("CI mode: %s expects %s in the environment", r.Handle, name)
+		}
+		if err := checkCollision(bound, name, r); err != nil {
+			return nil, nil, err
 		}
 		kind := r.Declared.Kind
 		if kind == "" {
 			kind = vault.BindEnv
 		}
-		out = append(out, Resolved{Handle: r.Handle, Value: val, Binding: vault.Binding{Kind: kind, Name: name}})
+		out = append(out, Resolved{Handle: r.Handle, Value: val, Binding: vault.Binding{Kind: kind, Name: name}, FromGlobal: r.FromGlobal})
 	}
-	return out, nil
+	return out, skipped, nil
+}
+
+// skipNotice renders docs/CLI-STYLE.md's stale-Global-Handle line. A Global
+// Handle that cannot be resolved is a drifted machine-wide declaration, not
+// a broken project: the run continues without it and says so, rather than
+// taking down every project that ever ran `cpass manifest init`.
+func skipNotice(handle, why string) string {
+	return fmt.Sprintf("cpass: %s is declared in your Global Manifest but %s; skipping it — run `cpass local %s` to stop declaring it", handle, why, handle)
+}
+
+// checkCollision refuses two Handles binding the same environment variable
+// when either of them came from the Global Manifest, recording name for the
+// Refs that follow.
+//
+// Only a Global-involved collision is refused. Two Handles a project itself
+// declared into the same variable have always resolved last-write-wins, and
+// that stays exactly as it was: a project that never opted into the Global
+// Manifest must not start failing on a version bump. What is new is the
+// ambient case — a Global Handle the project's author never enumerated,
+// silently overwriting (or being overwritten by) one they did — which has no
+// right answer and so is named instead of guessed.
+func checkCollision(bound map[string]Ref, name string, r Ref) error {
+	prev, ok := bound[name]
+	if ok && (prev.FromGlobal || r.FromGlobal) {
+		return fmt.Errorf("handle collision: %s and %s both bind %s", prev.Handle, r.Handle, name)
+	}
+	if !ok {
+		bound[name] = r
+	}
+	return nil
 }
 
 // Resolved is a Secret ready to inject.
@@ -196,32 +241,42 @@ type Resolved struct {
 	Value   string
 	Binding vault.Binding
 	Exposed bool
+	// FromGlobal carries Ref.FromGlobal through to the injection step.
+	FromGlobal bool
 	// ExposedAt is when the Secret most recently became Exposed. Zero when
 	// Exposed is false or the Vault carries no exposure history for it (CI
 	// mode never sets this: there is no Vault to read it from).
 	ExposedAt time.Time
 }
 
-// Resolve turns Refs into Secrets. It fails on the first missing Handle,
-// naming it and nothing else. In CI mode each Handle resolves from the
-// environment variable named by its Binding; refs must then carry the
-// Binding (Override or Kind/Name via ResolveWithBindings).
-func Resolve(refs []Ref) ([]Resolved, error) {
+// Resolve turns Refs into Secrets. It fails on the first missing Handle a
+// project asked for, naming it and nothing else; a missing Handle that came
+// from the Global Manifest is returned in skipped instead, for the caller to
+// report, and the rest of the run proceeds. In CI mode each Handle resolves
+// from the environment variable named by its Binding; refs must then carry
+// the Binding (Override, or Kind/Name via Ref.Declared).
+func Resolve(refs []Ref) ([]Resolved, []string, error) {
 	if len(refs) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if CIMode() {
 		return resolveFromEnv(refs)
 	}
 	v, err := OpenVault()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out := make([]Resolved, 0, len(refs))
+	var skipped []string
+	bound := map[string]Ref{}
 	for _, r := range refs {
 		e, err := v.Get(r.Handle)
 		if err != nil {
-			return nil, fmt.Errorf("no such handle: %s", r.Handle)
+			if r.FromGlobal {
+				skipped = append(skipped, skipNotice(r.Handle, "it is missing from the Vault"))
+				continue
+			}
+			return nil, nil, fmt.Errorf("no such handle: %s", r.Handle)
 		}
 		b := e.Binding
 		if r.Declared.Name != "" {
@@ -233,11 +288,14 @@ func Resolve(refs []Ref) ([]Resolved, error) {
 		if r.Override != "" {
 			b.Name = r.Override
 		}
-		res := Resolved{Handle: e.Handle, Value: e.Value, Binding: b, Exposed: e.Exposed}
+		if err := checkCollision(bound, b.Name, r); err != nil {
+			return nil, nil, err
+		}
+		res := Resolved{Handle: e.Handle, Value: e.Value, Binding: b, Exposed: e.Exposed, FromGlobal: r.FromGlobal}
 		if e.Exposed && len(e.Exposures) > 0 {
 			res.ExposedAt = e.Exposures[len(e.Exposures)-1].At
 		}
 		out = append(out, res)
 	}
-	return out, nil
+	return out, skipped, nil
 }

@@ -23,21 +23,25 @@ type toolDef struct {
 var toolDefs = []toolDef{
 	{
 		Name:        "list_handles",
-		Description: "List Handle names in the Vault (never values), optionally filtered by a prefix.",
+		Description: "List Handle names in the Vault (never values), optionally filtered by a prefix or to those declared in the Global Manifest.",
 		InputSchema: schema(map[string]any{
 			"prefix": prop("string", "only Handles starting with this prefix"),
+			"global": prop("boolean", "only Handles declared in the Global Manifest (injected into every project that has its own Manifest)"),
 		}, nil),
 	},
 	{
 		Name: "run_with_secrets",
 		Description: "Run a command with Secrets injected by the Broker: the same execution path as `cpass run` " +
-			"(Redaction, Command Policy, file Bindings). Uses the project Manifest when handles is omitted. " +
+			"(Redaction, Command Policy, file Bindings). Uses the project Manifest and the Global Manifest when " +
+			"handles is omitted. Always pass cwd: this server is one long-lived process whose own working " +
+			"directory does not follow yours, and it is what decides which Manifest is found. " +
 			"Returns the command's redacted stdout and stderr and its exit code; the raw value of a Secret never " +
 			"appears in the result.",
 		InputSchema: schema(map[string]any{
-			"command": arrayOfStrings(`argv to run, e.g. ["psql", "-c", "select 1"]`, 1),
-			"handles": arrayOfStrings(`Handles to inject, each "handle" or "handle:BINDING"; omit to use the project Manifest`, 0),
-			"cwd":     prop("string", "working directory for the command and for locating the Manifest"),
+			"command":   arrayOfStrings(`argv to run, e.g. ["psql", "-c", "select 1"]`, 1),
+			"handles":   arrayOfStrings(`Handles to inject, each "handle" or "handle:BINDING"; omit to use the project Manifest plus the Global Manifest`, 0),
+			"cwd":       prop("string", "working directory for the command and for locating the Manifest; pass it on every call"),
+			"no_global": prop("boolean", "skip the Global Manifest's Handles for this call"),
 		}, []string{"command"}),
 	},
 	{
@@ -133,6 +137,7 @@ func jsonResult(v any) toolResult {
 
 type listHandlesArgs struct {
 	Prefix string `json:"prefix"`
+	Global bool   `json:"global"`
 }
 
 func (s *server) callListHandles(id json.RawMessage, raw json.RawMessage) {
@@ -148,8 +153,20 @@ func (s *server) callListHandles(id json.RawMessage, raw json.RawMessage) {
 		s.writeResult(id, textResult(true, err.Error()))
 		return
 	}
+	// Only read when the caller actually asked about the Global Manifest: an
+	// ordinary listing must not start depending on that file being readable.
+	gm := &manifest.Manifest{}
+	if a.Global {
+		if gm, err = manifest.LoadGlobal(); err != nil {
+			s.writeResult(id, textResult(true, err.Error()))
+			return
+		}
+	}
 	names := []string{}
 	for _, e := range v.List(a.Prefix) {
+		if a.Global && !gm.Has(e.Handle) {
+			continue
+		}
 		names = append(names, e.Handle)
 	}
 	s.writeResult(id, jsonResult(map[string]any{"handles": names}))
@@ -158,9 +175,10 @@ func (s *server) callListHandles(id json.RawMessage, raw json.RawMessage) {
 // --- run_with_secrets ---
 
 type runArgs struct {
-	Command []string  `json:"command"`
-	Handles *[]string `json:"handles"`
-	Cwd     string    `json:"cwd"`
+	Command  []string  `json:"command"`
+	Handles  *[]string `json:"handles"`
+	Cwd      string    `json:"cwd"`
+	NoGlobal bool      `json:"no_global"`
 }
 
 func (s *server) callRunWithSecrets(id json.RawMessage, raw json.RawMessage) {
@@ -173,12 +191,24 @@ func (s *server) callRunWithSecrets(id json.RawMessage, raw json.RawMessage) {
 		s.writeError(id, -32602, "command must be a non-empty array")
 		return
 	}
-	refs, err := resolveRefs(a.Handles, a.Cwd)
+	refs, notices, ambiguousCwd, err := resolveRefs(a.Handles, a.Cwd, a.NoGlobal)
 	if err != nil {
 		s.writeResult(id, textResult(true, err.Error()))
 		return
 	}
 	var stdout, stderr, warn bytes.Buffer
+	for _, n := range notices {
+		warn.WriteString(n + "\n")
+	}
+	if ambiguousCwd {
+		// This server is one process for the whole session and its own
+		// working directory never follows the Agent's. With no cwd to go on,
+		// the Manifest — and so every Global Handle — was looked up
+		// somewhere the caller did not name, which is silent and invisible
+		// unless it is said out loud. Written into the warn buffer so it
+		// rides the content block that already exists for notices.
+		warn.WriteString("cpass: no cwd given, so the Manifest was located from this MCP server's own working directory, not yours; pass cwd to be sure which project's Handles (and Global Handles) are injected\n")
+	}
 	code, err := run.Run(run.Spec{
 		Refs: refs, Argv: a.Command, Dir: a.Cwd,
 		Stdout: &stdout, Stderr: &stderr, Warn: &warn,
@@ -210,40 +240,32 @@ func (s *server) callRunWithSecrets(id json.RawMessage, raw json.RawMessage) {
 
 // resolveRefs builds the Refs for run_with_secrets: the explicit handles
 // list when given (even an empty one — "run with nothing injected" is a
-// legitimate request), or the project Manifest when omitted, exactly the
-// Handle source `cpass run` uses with no --with flags.
-func resolveRefs(handles *[]string, cwd string) ([]broker.Ref, error) {
+// legitimate request, and a Global Handle never sneaks into one), or
+// manifest.Refs when omitted, exactly the Handle source `cpass run` uses
+// with no --with flags.
+//
+// ambiguousCwd reports that the Manifest was located relative to this
+// server process's own working directory because the caller named none. It
+// does not depend on how many Refs came back: resolving against the wrong
+// project is as wrong when it finds Handles as when it finds none.
+func resolveRefs(handles *[]string, cwd string, noGlobal bool) (refs []broker.Ref, notices []string, ambiguousCwd bool, err error) {
 	if handles != nil {
 		refs := make([]broker.Ref, 0, len(*handles))
 		for _, h := range *handles {
 			r, err := broker.ParseRef(h)
 			if err != nil {
-				return nil, err
+				return nil, nil, false, err
 			}
 			refs = append(refs, r)
 		}
-		return refs, nil
+		return refs, nil, false, nil
 	}
 	dir := cwd
 	if dir == "" {
 		dir = "."
 	}
-	p, err := manifest.Find(dir)
-	if errors.Is(err, manifest.ErrNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	m, err := manifest.Load(p)
-	if err != nil {
-		return nil, err
-	}
-	refs := make([]broker.Ref, 0, len(m.Entries))
-	for _, en := range m.Entries {
-		refs = append(refs, broker.Ref{Handle: en.Handle, Declared: en.Binding})
-	}
-	return refs, nil
+	refs, notices, err = manifest.Refs(dir, !noGlobal)
+	return refs, notices, cwd == "", err
 }
 
 // --- capture ---

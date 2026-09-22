@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Elixion-ai/claudepass/internal/broker"
+	"github.com/Elixion-ai/claudepass/internal/manifest"
 	"github.com/Elixion-ai/claudepass/internal/vault"
 )
 
@@ -119,12 +120,13 @@ func cmdAdd(e *env) int {
 	binding := fs.String("binding", "", "environment variable name (default derived from the Handle)")
 	file := fs.Bool("file", false, "bind as a temp file whose path is placed in the variable")
 	exposed := fs.Bool("exposed", false, "the value has already been seen by an Agent; store it flagged for rotation")
+	global := globalFlag(fs, "also declare the Handle in the Global Manifest, so every project that has one receives it")
 	pos, err := parseInterspersed(fs, e.args)
 	if err != nil {
-		return e.usageErr(err, "cpass add <handle> [--binding NAME] [--file] [--exposed]")
+		return e.usageErr(err, "cpass add <handle> [--binding NAME] [--file] [--exposed] [-g]")
 	}
 	if len(pos) != 1 {
-		return e.fail(ExitUsage, "usage: cpass add <handle> [--binding NAME] [--file] [--exposed]")
+		return e.fail(ExitUsage, "usage: cpass add <handle> [--binding NAME] [--file] [--exposed] [-g]")
 	}
 	handle := pos[0]
 	if err := vault.ValidateHandle(handle); err != nil {
@@ -162,16 +164,23 @@ func cmdAdd(e *env) int {
 	fprintf(e.stdout, "stored %s %s\n",
 		e.paintOut(roleEmber, entry.Handle),
 		e.paintOut(roleDim, fmt.Sprintf("(%s %s)", entry.Binding.Kind, entry.Binding.Name)))
+	if *global {
+		// Declared only once the Secret is safely in the Vault, and printed
+		// as its own existing "declared ... in ..." line rather than
+		// crowding the frozen "stored" grammar: two facts, two rows.
+		return declareGlobal(e, manifest.Entry{Handle: entry.Handle, Binding: entry.Binding})
+	}
 	return ExitOK
 }
 
 func cmdLs(e *env) int {
 	fs := flag.NewFlagSet("ls", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	long := fs.Bool("l", false, "show Binding and Exposed state")
+	long := fs.Bool("l", false, "show Binding, Exposed state and Global declaration")
 	onlyExposed := fs.Bool("exposed", false, "only Exposed Secrets")
+	onlyGlobal := fs.Bool("global", false, "only Handles declared in the Global Manifest")
 	if err := fs.Parse(e.args); err != nil {
-		return e.usageErr(err, "cpass ls [prefix] [-l] [--exposed]")
+		return e.usageErr(err, "cpass ls [prefix] [-l] [--exposed] [--global]")
 	}
 	prefix := ""
 	if fs.NArg() > 0 {
@@ -181,16 +190,32 @@ func cmdLs(e *env) int {
 	if code != ExitOK {
 		return code
 	}
+	// Only read once, and only when the listing actually mentions the Global
+	// Manifest: a plain `cpass ls` never touched that file before this
+	// feature existed and must not start depending on it being readable.
+	gm := &manifest.Manifest{}
+	if *long || *onlyGlobal {
+		var err error
+		if gm, err = manifest.LoadGlobal(); err != nil {
+			return e.failErr(err)
+		}
+	}
 	for _, en := range v.List(prefix) {
 		if *onlyExposed && !en.Exposed {
 			continue
 		}
+		if *onlyGlobal && !gm.Has(en.Handle) {
+			continue
+		}
 		if *long {
-			flag := ""
+			flags := ""
 			if en.Exposed {
-				flag = "  EXPOSED"
+				flags += "  EXPOSED"
 			}
-			fprintf(e.stdout, "%-40s %s %s%s\n", en.Handle, en.Binding.Kind, en.Binding.Name, flag)
+			if gm.Has(en.Handle) {
+				flags += "  GLOBAL"
+			}
+			fprintf(e.stdout, "%-40s %s %s%s\n", en.Handle, en.Binding.Kind, en.Binding.Name, flags)
 		} else {
 			fprintln(e.stdout, en.Handle)
 		}

@@ -13,10 +13,16 @@ an Agent reads it, so it must be legible, quiet, and never leak a Secret.
 | Situation | Shape | Example |
 |---|---|---|
 | Stored a Secret (`cpass add`) | `stored <handle> (<binding kind> <binding name>)` | `stored stripe/live (env STRIPE_LIVE)` |
+| Declared a Handle in a Manifest (`cpass manifest add`, `cpass global`, `cpass add -g`) | `declared <handle> in <path>` | `declared stripe/live in .claudepass.toml` |
+| Removed a Handle from the Global Manifest (`cpass local`) | `removed <handle> from <path>` | `removed stripe/live from /Users/you/Library/Application Support/claudepass/global.toml` |
+| Toggled the Global Manifest opt-out (`cpass manifest global on\|off`) | `<enabled\|disabled> Global Manifest Handles for <path>` | `disabled Global Manifest Handles for .claudepass.toml` |
 | Secret caught in a prompt (`cpass intercept`) | `cpass: stored <kind> as <handle>[, <kind> as <handle>…]; resubmit using the Handle, or prefix with !! to send anyway` | `cpass: stored Stripe live key as stripe/live; resubmit using the Handle, or prefix with !! to send anyway` |
 | Refusal (Command Policy) | `cpass: refused: <what> — <do instead>` | ``cpass: refused: cat would read .env, a Secret-bearing file — use `cpass run` (or the Manifest) instead of reading the file directly`` |
 | Redaction marker (in child output) | `[REDACTED:<handle>]` | `STRIPE_SECRET_KEY=[REDACTED:stripe/live]` |
 | Redaction notice | `cpass: redacted <handle> from output (<n>×)` | |
+| Stale Global Handle skipped (`cpass run`, MCP `run_with_secrets`) | ``cpass: <handle> is declared in your Global Manifest but <reason>; skipping it — run `cpass local <handle>` to stop declaring it`` | ``cpass: stripe/live is declared in your Global Manifest but it is missing from the Vault; skipping it — run `cpass local stripe/live` to stop declaring it`` |
+| Handle collision involving a Global Handle (`cpass run`) — an ordinary error, exit 1, not a Command Policy refusal | `cpass: handle collision: <a> and <b> both bind <VAR>` | `cpass: handle collision: stripe/live and stripe/test both bind STRIPE_KEY` |
+| Handle collision involving a Global Handle (MCP `run_with_secrets`) — an `isError: true` tool result, not a process exit code; no `cpass: ` prefix, unlike the CLI | `handle collision: <a> and <b> both bind <VAR>` | `handle collision: stripe/live and stripe/test both bind STRIPE_KEY` |
 | Exposed reminder | `cpass: <handle> is Exposed since <date>, rotate it` | |
 | Locked Vault | `cpass: vault is locked, run cpass unlock` | |
 
@@ -26,6 +32,19 @@ colours its Handle ember and its Binding detail dim grey (see Colour below)
 but does not use the `<kind> as <handle>` grammar: `add` never detects a
 Secret's kind (that only happens during Intercept), so its own row and
 Intercept's are deliberately different shapes for different situations.
+
+`declareGlobal` (the "declared" line `cpass global` and `cpass add -g`
+both print) and `cmdLocal`'s "removed" line (`cpass local`) are the same
+kind of confirmation: no `cpass: ` prefix, Handle painted ember, path
+painted dim grey — the same two roles `add`'s line uses, via `outMode`
+since these are stdout confirmations too. `cpass manifest add`'s own
+`declared ... in ...` line (without `-g`) and `cpass manifest global
+on|off`'s toggle confirmation print plain, with no colour at all — an
+existing asymmetry against the coloured lines above, worth knowing rather
+than assuming every "declared" line looks the same. The stale-Global-Handle
+skip notice (written to `cpass run`'s stderr) and the Global-collision
+error carry no colour either: both are plain `cpass: ...` text, like the
+`notice` fallback below.
 
 ## Exit codes
 `0` ok · `1` error · `2` usage / hook-block · `3` refused — a Command Policy

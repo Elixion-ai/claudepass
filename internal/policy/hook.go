@@ -124,7 +124,7 @@ func hookWalk(command string, depth int) *Refusal {
 // addInlineValueRefusal reports whether args (the words after `cpass add`)
 // carry a second positional argument — an inline value — beyond the
 // Handle. cpass add's own usage is `cpass add <handle> [--binding NAME]
-// [--file] [--exposed]`, so a second positional can only be a value the
+// [--file] [--exposed] [-g]`, so a second positional can only be a value the
 // Agent already knows, which defeats the terminal gate cpass add enforces
 // on itself.
 func addInlineValueRefusal(args []word) *Refusal {
@@ -132,7 +132,8 @@ func addInlineValueRefusal(args []word) *Refusal {
 	for i := 0; i < len(args); i++ {
 		a := args[i].raw
 		switch {
-		case a == "--file" || a == "-file" || a == "--exposed" || a == "-exposed":
+		case a == "--file" || a == "-file" || a == "--exposed" || a == "-exposed",
+			a == "--global" || a == "-global" || a == "-g" || a == "--g":
 			// boolean flags, no value
 		case a == "--binding" || a == "-binding":
 			i++ // skip the flag's value too

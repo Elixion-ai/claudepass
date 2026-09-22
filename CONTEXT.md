@@ -41,8 +41,12 @@ How a Secret lands in a command's process: either as an environment variable hol
 _Avoid_: Mapping, alias, export, mount
 
 **Manifest**:
-A committed, per-project declaration of which Handles the project needs and their Bindings. Contains no Secret values and is safe to share.
+A committed, per-project declaration of which Handles the project needs and their Bindings. Contains no Secret values and is safe to share. Distinct from the Global Manifest, which declares Handles for every project on a machine rather than one.
 _Avoid_: Config, env file, profile, .env
+
+**Global Manifest**:
+A per-machine declaration, in the same format as a Manifest, of which Handles every onboarded project should receive without naming them itself. Reaches a directory only through that directory's own Manifest, and never crosses into a nested repository. Contains no Secret values.
+_Avoid_: Machine manifest, ambient config, default handles
 
 **Capture**:
 Storing the output of a command directly into the Vault as a new Secret, so that a value born in a tool result never reaches an Agent.

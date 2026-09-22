@@ -31,6 +31,33 @@ type Entry struct {
 type Manifest struct {
 	Path    string
 	Entries []Entry
+	// GlobalDisabled records this project's `[options] global = false`:
+	// the durable, committed opt-out from the Global Manifest. Only the
+	// project Manifest ever carries it; on the Global Manifest itself it is
+	// meaningless and never read.
+	GlobalDisabled bool
+
+	// extraOptions and extraSections keep, verbatim, every line of the file
+	// this version of cpass does not itself parse — other keys inside
+	// [options], and whole sections that are neither [options] nor
+	// [secrets]. Load captures them and Save re-emits them unchanged, so a
+	// `cpass manifest add` never silently drops a `[options] global = false`
+	// written by a newer binary, or a section this one has not heard of.
+	// Without this, Save — which regenerates the whole file from parsed
+	// struct fields — would erase anything Load did not understand.
+	extraOptions  []string
+	extraSections []rawSection
+
+	// global marks this as the machine-wide Manifest, so Save writes the
+	// header that describes what the file actually is. LoadGlobal and
+	// SaveGlobal set it; nothing else does.
+	global bool
+}
+
+// rawSection is one unparsed section kept verbatim for round-tripping.
+type rawSection struct {
+	name  string
+	lines []string
 }
 
 // Find walks up from dir looking for a Manifest.
@@ -80,7 +107,20 @@ func Load(path string) (*Manifest, error) {
 			section = strings.TrimSpace(t[1 : len(t)-1])
 			continue
 		}
+		if section == "options" {
+			// The one recognised option. Anything else in this section —
+			// another key, another value for this one — is kept verbatim
+			// rather than guessed at.
+			if k, v, ok := strings.Cut(t, "="); ok &&
+				strings.TrimSpace(k) == "global" && strings.TrimSpace(v) == "false" {
+				m.GlobalDisabled = true
+				continue
+			}
+			m.extraOptions = append(m.extraOptions, t)
+			continue
+		}
 		if section != "secrets" {
+			m.captureExtra(section, t)
 			continue
 		}
 		k, v, ok := strings.Cut(t, "=")
@@ -127,8 +167,24 @@ func Load(path string) (*Manifest, error) {
 func (m *Manifest) Save() error {
 	sort.Slice(m.Entries, func(i, j int) bool { return m.Entries[i].Handle < m.Entries[j].Handle })
 	var b strings.Builder
-	b.WriteString("# ClaudePass manifest: the Handles this project needs. No values live here.\n")
-	b.WriteString("# An Agent runs `cpass run -- <command>` and every Handle below is injected.\n\n[secrets]\n")
+	if m.global {
+		b.WriteString("# ClaudePass Global Manifest: the Handles every project on this machine gets.\n")
+		b.WriteString("# No values live here. A project opts out with `cpass manifest global off`.\n\n")
+	} else {
+		b.WriteString("# ClaudePass manifest: the Handles this project needs. No values live here.\n")
+		b.WriteString("# An Agent runs `cpass run -- <command>` and every Handle below is injected.\n\n")
+	}
+	if m.GlobalDisabled || len(m.extraOptions) > 0 {
+		b.WriteString("[options]\n")
+		if m.GlobalDisabled {
+			b.WriteString("global = false\n")
+		}
+		for _, l := range m.extraOptions {
+			b.WriteString(l + "\n")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("[secrets]\n")
 	for _, e := range m.Entries {
 		if e.Binding.Kind == vault.BindFile {
 			fmt.Fprintf(&b, "%q = { binding = %q, kind = \"file\" }\n", e.Handle, e.Binding.Name)
@@ -138,7 +194,26 @@ func (m *Manifest) Save() error {
 			fmt.Fprintf(&b, "%q = %q\n", e.Handle, e.Binding.Name)
 		}
 	}
+	for _, sec := range m.extraSections {
+		fmt.Fprintf(&b, "\n[%s]\n", sec.name)
+		for _, l := range sec.lines {
+			b.WriteString(l + "\n")
+		}
+	}
 	return os.WriteFile(m.Path, []byte(b.String()), 0o644)
+}
+
+// captureExtra records one verbatim line of an unparsed section, keeping
+// sections in the order they were first seen so Save reproduces the file's
+// own shape rather than a sorted approximation of it.
+func (m *Manifest) captureExtra(section, line string) {
+	for i := range m.extraSections {
+		if m.extraSections[i].name == section {
+			m.extraSections[i].lines = append(m.extraSections[i].lines, line)
+			return
+		}
+	}
+	m.extraSections = append(m.extraSections, rawSection{name: section, lines: []string{line}})
 }
 
 // Add declares a Handle, replacing any existing declaration for it.
@@ -156,6 +231,17 @@ func (m *Manifest) Add(e Entry) {
 		}
 	}
 	m.Entries = append(m.Entries, e)
+}
+
+// Remove undeclares a Handle, reporting whether it was there to remove.
+func (m *Manifest) Remove(handle string) bool {
+	for i := range m.Entries {
+		if m.Entries[i].Handle == handle {
+			m.Entries = append(m.Entries[:i], m.Entries[i+1:]...)
+			return true
+		}
+	}
+	return false
 }
 
 // Has reports whether the Handle is declared.
