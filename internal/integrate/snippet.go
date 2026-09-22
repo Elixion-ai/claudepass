@@ -84,3 +84,23 @@ func Apply(content string) (string, bool) {
 	}
 	return trimmed + "\n\n" + sec, true
 }
+
+// RemoveSection is Apply's inverse: it strips the delimited ClaudePass
+// section — whatever its current contents, so a stale section from an
+// older cpass still comes out clean — and reports whether one was found.
+// Everything else in content is preserved, with the blank line Apply joins
+// it to the section with trimmed back off; when nothing but the section
+// was there, the result is empty, telling the caller the whole file is
+// theirs to delete rather than leave behind as an empty shell.
+func RemoveSection(content string) (result string, found bool) {
+	start, end, ok := findSection(content)
+	if !ok {
+		return content, false
+	}
+	rest := content[:start] + content[end:]
+	trimmed := strings.TrimRight(rest, "\n")
+	if trimmed == "" {
+		return "", true
+	}
+	return trimmed + "\n", true
+}

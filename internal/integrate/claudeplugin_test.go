@@ -83,6 +83,73 @@ func TestWriteClaudePluginSkillMatchesSharedSnippet(t *testing.T) {
 	}
 }
 
+func TestRemoveClaudePluginOnAFreshInstall(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "claudepass")
+	if _, err := WriteClaudePlugin(dir); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := RemoveClaudePlugin(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("expected removed = true")
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("plugin directory still exists after RemoveClaudePlugin: %v", err)
+	}
+}
+
+func TestRemoveClaudePluginWhenNothingInstalledIsANoop(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "claudepass")
+	removed, err := RemoveClaudePlugin(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed {
+		t.Fatal("expected removed = false: dir was never created")
+	}
+}
+
+func TestRemoveClaudePluginIsIdempotent(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "claudepass")
+	if _, err := WriteClaudePlugin(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RemoveClaudePlugin(dir); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := RemoveClaudePlugin(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed {
+		t.Fatal("second RemoveClaudePlugin should report nothing left to remove")
+	}
+}
+
+// TestRemoveClaudePluginLeavesAnUnrelatedDirectoryAlone is the safety
+// regression: --remove must never blindly os.RemoveAll whatever --path
+// happens to point at. A directory with no .claude-plugin/plugin.json
+// naming this plugin is left untouched.
+func TestRemoveClaudePluginLeavesAnUnrelatedDirectoryAlone(t *testing.T) {
+	dir := t.TempDir()
+	sentinel := filepath.Join(dir, "not-ours.txt")
+	if err := os.WriteFile(sentinel, []byte("keep me"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := RemoveClaudePlugin(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed {
+		t.Fatal("expected removed = false: no ClaudePass plugin manifest here")
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("unrelated file was deleted: %v", err)
+	}
+}
+
 // indexAfterFrontmatter returns the offset of the first byte after a
 // leading "---\n...\n---\n" YAML frontmatter block, or -1 if it never
 // closes.

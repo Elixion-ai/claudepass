@@ -2,12 +2,20 @@ package integrate
 
 import (
 	"bytes"
+	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
 
 	pluginfiles "github.com/Elixion-ai/claudepass/plugins/claude-code"
 )
+
+// PluginName is the "name" field WriteClaudePlugin's embedded
+// .claude-plugin/plugin.json carries, and the marker RemoveClaudePlugin
+// checks for before deleting anything: the one fact that tells it a
+// directory is a plugin cpass itself installed, as opposed to some other
+// directory a stray --path happened to point at.
+const PluginName = "claudepass"
 
 // WriteClaudePlugin materialises the embedded Claude Code plugin
 // (.claude-plugin/plugin.json, hooks/hooks.json, skills/claudepass/SKILL.md)
@@ -47,4 +55,31 @@ func WriteClaudePlugin(dir string) (bool, error) {
 		return os.WriteFile(target, content, 0o644)
 	})
 	return changed, err
+}
+
+// RemoveClaudePlugin deletes the plugin directory at dir — but only when it
+// still looks like the plugin WriteClaudePlugin itself installed there (a
+// .claude-plugin/plugin.json naming PluginName). A missing dir, or one
+// whose manifest doesn't match, reports no change rather than deleting
+// anything: --remove must be a safe, idempotent no-op both when nothing
+// was ever installed and when --path was pointed at an unrelated
+// directory, never a blind os.RemoveAll of whatever's there.
+func RemoveClaudePlugin(dir string) (bool, error) {
+	raw, err := os.ReadFile(filepath.Join(dir, ".claude-plugin", "plugin.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	var manifest struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil || manifest.Name != PluginName {
+		return false, nil
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return false, err
+	}
+	return true, nil
 }
