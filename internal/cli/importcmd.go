@@ -65,6 +65,7 @@ func cmdImport(e *env) int {
 	if code != ExitOK {
 		return code
 	}
+	defer v.Close()
 	for _, it := range items {
 		if _, err := v.Get(it.handle); err == nil {
 			return e.fail(ExitError, "handle %s already exists in the Vault", it.handle)

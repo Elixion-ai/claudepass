@@ -191,7 +191,15 @@ func StartBroker(key []byte, timeout time.Duration) error {
 // memory, and answers RESOLVE/LOCK requests until told to stop (LOCK) or
 // idle for timeout with no requests. Started by StartBroker via
 // cpass broker-serve; not for direct use.
+//
+// key is zeroed on every return path (idle timeout, LOCK, or an error before
+// the accept loop even starts) — this process's only reason to exist is
+// holding it, and best-effort hygiene says not to leave it sitting in
+// memory once that reason is gone. As with Vault.Close, this is best-effort:
+// the Go runtime may already have copied these bytes elsewhere by the time
+// this runs. See docs/SECURITY.md.
 func Serve(socketPath string, key []byte, timeout time.Duration) error {
+	defer zero(key)
 	_ = os.Remove(socketPath) // best-effort: clear a stale socket left by a crashed Broker
 	if err := ensureSocketDir(filepath.Dir(socketPath)); err != nil {
 		return err
@@ -250,4 +258,12 @@ func serveConn(conn net.Conn, key []byte) (stop bool) {
 		_, _ = fmt.Fprintln(conn, "ERR unknown command")
 	}
 	return false
+}
+
+// zero overwrites every byte of b in place. Best-effort: see Serve's doc
+// comment.
+func zero(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }

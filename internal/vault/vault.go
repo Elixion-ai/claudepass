@@ -136,7 +136,11 @@ func Create(path string, key []byte) (*Vault, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := &Vault{path: path, key: key, dataKey: dataKey, entries: map[string]*Entry{}}
+	// A Vault's own copy of key, never the caller's slice: Close zeroes
+	// v.key in place, and a caller (cpass unlock hands the same key on to
+	// StartBroker right after opening the Vault with it, to name one) must
+	// keep using its own slice safely after that.
+	v := &Vault{path: path, key: append([]byte(nil), key...), dataKey: dataKey, entries: map[string]*Entry{}}
 	if err := v.Save(); err != nil {
 		return nil, err
 	}
@@ -181,7 +185,9 @@ func Open(path string, key []byte) (*Vault, error) {
 	if err := json.Unmarshal(plain, &b); err != nil {
 		return nil, ErrTampered
 	}
-	v := &Vault{path: path, key: key, dataKey: dataKey, entries: map[string]*Entry{}}
+	// A Vault's own copy of key, never the caller's slice — see the same
+	// note in Create.
+	v := &Vault{path: path, key: append([]byte(nil), key...), dataKey: dataKey, entries: map[string]*Entry{}}
 	for i := range b.Entries {
 		e := b.Entries[i]
 		v.entries[e.Handle] = &e
@@ -234,6 +240,32 @@ func (v *Vault) Save() error {
 
 // Path is the file the Vault lives in.
 func (v *Vault) Path() string { return v.path }
+
+// Close zeroes the unlock key and data key this Vault holds in memory.
+// Call it on every bounded use of an opened Vault — a CLI command, an MCP
+// tool call, one broker.Resolve — once it is done with the key material,
+// typically deferred right after Open/Create/OpenVault succeeds (Save, if
+// any, always runs first in program order; a deferred Close only ever runs
+// after it).
+//
+// This is best-effort hygiene, not a guarantee: by the time Close runs, Go's
+// garbage collector or the runtime may already have copied these bytes
+// elsewhere (a slice that grew and reallocated, a value that escaped to the
+// heap, a moved goroutine stack), and none of those copies are found or
+// wiped. It shortens how long the key sits at its one certain address, no
+// more — see docs/SECURITY.md. Idempotent: safe to call more than once, and
+// safe to call on a Vault whose key material is already zero.
+func (v *Vault) Close() {
+	zero(v.key)
+	zero(v.dataKey)
+}
+
+// zero overwrites every byte of b in place.
+func zero(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
 
 // Get returns a copy of the Entry for handle.
 func (v *Vault) Get(handle string) (Entry, error) {

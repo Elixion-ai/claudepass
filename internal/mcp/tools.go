@@ -153,6 +153,7 @@ func (s *server) callListHandles(id json.RawMessage, raw json.RawMessage) {
 		s.writeResult(id, textResult(true, err.Error()))
 		return
 	}
+	defer v.Close()
 	// Only read when the caller actually asked about the Global Manifest: an
 	// ordinary listing must not start depending on that file being readable.
 	gm := &manifest.Manifest{}
@@ -295,6 +296,7 @@ func (s *server) callCapture(id json.RawMessage, raw json.RawMessage) {
 		s.writeResult(id, textResult(true, err.Error()))
 		return
 	}
+	defer v.Close()
 	if _, err := v.Get(a.Handle); err == nil {
 		s.writeResult(id, textResult(true, fmt.Sprintf("handle %s already exists", a.Handle)))
 		return

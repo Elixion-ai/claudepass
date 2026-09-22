@@ -60,6 +60,7 @@ func cmdIntercept(e *env) int {
 	if code != ExitOK {
 		return code
 	}
+	defer v.Close()
 	used := map[string]bool{}
 	for _, en := range v.List("") {
 		used[en.Handle] = true

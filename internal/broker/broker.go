@@ -266,6 +266,7 @@ func Resolve(refs []Ref) ([]Resolved, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	defer v.Close()
 	out := make([]Resolved, 0, len(refs))
 	var skipped []string
 	bound := map[string]Ref{}

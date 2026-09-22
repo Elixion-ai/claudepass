@@ -45,6 +45,7 @@ func cmdCapture(e *env) int {
 	if code != ExitOK {
 		return code
 	}
+	defer v.Close()
 	if _, err := v.Get(handle); err == nil {
 		return e.fail(ExitError, "handle %s already exists", handle)
 	}

@@ -3,11 +3,14 @@
 package broker
 
 import (
+	"bytes"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // shortSocketDir returns a fresh directory short enough that a socket file
@@ -88,5 +91,54 @@ func TestBindSocketPrivatelyIgnoresLooseProcessUmask(t *testing.T) {
 	}
 	if st.Mode().Perm()&0o077 != 0 {
 		t.Fatalf("socket file mode %v is group/world-accessible right after bindSocketPrivately, under a 0022 process umask", st.Mode().Perm())
+	}
+}
+
+// TestServeZeroesKeyOnLockShutdown covers CLA-60's Broker half: the key
+// Serve holds in memory for the life of the process must be zeroed once
+// Serve exits, on every shutdown path — this drives the LOCK path, the one
+// a live Broker actually takes on `cpass lock`. Serve is handed the same
+// slice its caller holds (cmdBrokerServe decodes it fresh from stdin and
+// never reuses it for anything else), so zeroing that slice in place, as
+// Serve does, is directly observable here without any extra plumbing.
+func TestServeZeroesKeyOnLockShutdown(t *testing.T) {
+	dir := shortSocketDir(t)
+	sock := filepath.Join(dir, "serve-zero.sock")
+	key := bytes.Repeat([]byte{0xAB}, 32)
+
+	done := make(chan error, 1)
+	go func() { done <- Serve(sock, key, time.Minute) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	var conn net.Conn
+	var err error
+	for time.Now().Before(deadline) {
+		conn, err = net.DialTimeout("unix", sock, 100*time.Millisecond)
+		if err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("Serve never started listening: %v", err)
+	}
+	if _, err := conn.Write([]byte("LOCK\n")); err != nil {
+		t.Fatalf("write LOCK: %v", err)
+	}
+	_ = conn.Close()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Serve returned an error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not shut down after LOCK")
+	}
+
+	for i, b := range key {
+		if b != 0 {
+			t.Fatalf("key byte %d = %#x, want 0 after Serve shut down", i, b)
+		}
 	}
 }

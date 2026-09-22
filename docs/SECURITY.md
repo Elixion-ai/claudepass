@@ -206,6 +206,33 @@ Vault (`broker.UnlockKey`):
    implemented there yet (`broker.StartBroker` returns an explicit "not
    supported" error), so only `CPASS_KEY` works.
 
+### Zeroing key material in memory
+
+A `Vault`'s unlock key and data key are zeroed (`Vault.Close`) once the
+bounded operation holding them is done — every CLI command, MCP tool call,
+and `cpass run`/`run_with_secrets` resolution opens its own `*vault.Vault`
+and closes it before returning. The Broker process (point 3 above) zeroes
+the key it holds the same way, on every shutdown path: idle timeout,
+`cpass lock`, or an error before it ever starts serving. Each keeps its own
+copy of the key rather than sharing the caller's slice, so zeroing it can
+never corrupt a key a caller is still using (`cpass unlock` hands the same
+key it opened the Vault with on to the Broker right after).
+
+**Read this as best-effort hygiene, not a guarantee.** Go's garbage
+collector and runtime can have already copied these bytes elsewhere by the
+time `Close` or the Broker's shutdown ever runs — a slice that grew and
+reallocated, a value the compiler moved to the heap, a relocated goroutine
+stack — and none of those copies are found or wiped; Go has no
+`mlock`/`madvise(MADV_DONTDUMP)` equivalent in the standard library, and
+`cpass` adds no `unsafe` or cgo dependency to get one. What this buys is
+narrower: the one certain address a key sits at is cleared as soon as
+`cpass` is done with it, rather than left populated for the rest of the
+process's life (the Broker case is the sharpest version of this — without
+it, a killed-but-not-yet-restarted Broker could hold a live key in memory
+for up to its 4-hour default idle timeout). A core dump, a swapped memory
+page, or a forensic memory read taken *before* that point can still recover
+the key; this does not change that.
+
 ## Opting into Touch ID / user-presence Keychain protection (CLA-23)
 
 Everything in point 2 above is what `cpass` does by **default**, in every

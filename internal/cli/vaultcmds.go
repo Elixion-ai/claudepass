@@ -107,9 +107,11 @@ func cmdInit(e *env) int {
 	} else if err != nil {
 		return e.failErr(err)
 	}
-	if _, err := vault.Create(path, key); err != nil {
+	nv, err := vault.Create(path, key)
+	if err != nil {
 		return e.failErr(err)
 	}
+	nv.Close()
 	fprintf(e.stdout, "initialised vault at %s\n", path)
 	return ExitOK
 }
@@ -136,6 +138,7 @@ func cmdAdd(e *env) int {
 	if code != ExitOK {
 		return code
 	}
+	defer v.Close()
 	value, err := e.readSecret(fmt.Sprintf("value for %s: ", handle),
 		"add needs a terminal to type the value into; from an Agent, use `cpass capture <handle> -- <command>` so the value never enters its context")
 	if err != nil {
@@ -190,6 +193,7 @@ func cmdLs(e *env) int {
 	if code != ExitOK {
 		return code
 	}
+	defer v.Close()
 	// Only read once, and only when the listing actually mentions the Global
 	// Manifest: a plain `cpass ls` never touched that file before this
 	// feature existed and must not start depending on it being readable.
@@ -236,6 +240,7 @@ func cmdRm(e *env) int {
 	if code != ExitOK {
 		return code
 	}
+	defer v.Close()
 	for _, h := range fs.Args() {
 		if err := v.Remove(h); err != nil {
 			return e.failErr(err)
@@ -261,6 +266,7 @@ func cmdMv(e *env) int {
 	if code != ExitOK {
 		return code
 	}
+	defer v.Close()
 	if err := v.Rename(fs.Arg(0), fs.Arg(1)); err != nil {
 		return e.failErr(err)
 	}

@@ -123,6 +123,7 @@ func manifestCheck(e *env, args []string) int {
 	if code != ExitOK {
 		return code
 	}
+	defer v.Close()
 	var missing []string
 	for _, en := range m.Entries {
 		if _, err := v.Get(en.Handle); err != nil {

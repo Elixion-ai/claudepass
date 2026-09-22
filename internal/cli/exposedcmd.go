@@ -22,6 +22,7 @@ func cmdExposed(e *env) int {
 	if code != ExitOK {
 		return code
 	}
+	defer v.Close()
 	any := false
 	for _, en := range v.List("") {
 		if !en.Exposed {
@@ -55,6 +56,7 @@ func cmdRotateDone(e *env) int {
 	if code != ExitOK {
 		return code
 	}
+	defer v.Close()
 	handle := fs.Arg(0)
 	if err := v.ClearExposed(handle); err != nil {
 		return e.failErr(err)
@@ -81,6 +83,7 @@ func cmdMarkExposed(e *env) int {
 	if code != ExitOK {
 		return code
 	}
+	defer v.Close()
 	handle := pos[0]
 	if err := v.MarkExposed(handle, *reason); err != nil {
 		return e.failErr(err)

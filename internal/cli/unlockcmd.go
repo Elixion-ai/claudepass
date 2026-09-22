@@ -41,9 +41,11 @@ func cmdUnlock(e *env) int {
 	if err != nil {
 		return e.failErr(err)
 	}
-	if _, err := vault.Open(path, key); err != nil {
+	nv, err := vault.Open(path, key)
+	if err != nil {
 		return e.failErr(err)
 	}
+	nv.Close()
 	if err := broker.StartBroker(key, *timeout); err != nil {
 		return e.failErr(err)
 	}
