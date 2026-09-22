@@ -93,10 +93,10 @@ func wrapsCpassRun(command string) bool {
 
 // hookWalk recurses through command the same way splitCommands' consumers
 // elsewhere in this package do — into command substitutions and nested
-// `shell -c STRING` invocations — checking every simple command for a
-// Secret-file read or a `cpass add` given an inline value. It does not
-// touch the Bound/tainted evaluator: those hook-independent checks have no
-// Bound vars to work from at this point.
+// `shell -c STRING`/script-by-path/heredoc-body invocations — checking
+// every simple command for a Secret-file read or a `cpass add` given an
+// inline value. It does not touch the Bound/tainted evaluator: those
+// hook-independent checks have no Bound vars to work from at this point.
 func hookWalk(command string, depth int) *Refusal {
 	if depth > maxDepth {
 		return nil
@@ -119,12 +119,39 @@ func hookWalk(command string, depth int) *Refusal {
 					return r
 				}
 			}
-			if readers[prog] || sourceBuiltins[prog] {
+			// The `.`/`source` builtins only mean "execute this file's
+			// content" at an actual command position — elsewhere `.` is
+			// just an ordinary argument (find .'s current-directory
+			// argument, ls .'s target, ...), never a Secret-file read.
+			if sourceBuiltins[prog] && commandStart(words, i) {
 				for _, arg := range words[i+1:] {
 					if matchesSecretFile(arg.raw) {
 						return &Refusal{
 							Rule:   w.raw + " would read " + arg.raw + ", a Secret-bearing file",
 							Advice: "use `cpass run` (or the Manifest) instead of reading the file directly",
+						}
+					}
+				}
+			}
+			if readers[prog] {
+				// A pure-output program's own arguments are data it
+				// prints, not programs it runs: `echo cat .env` never
+				// executes cat. This exempts only an argument of
+				// echo/printf/print's own command line (word 0 of this
+				// simple command) — a reader named anywhere else is still
+				// caught, exactly as before, which is what keeps a reader
+				// behind a wrapper this list doesn't enumerate (`find .
+				// -exec cat .env \;`, `timeout 5 cat .env`, `nice cat
+				// .env`, `xargs cat < .env`, `sudo cat .env`) refused
+				// without narrowing detection to argv[0] plus an
+				// allowlist of wrappers.
+				if !(i > 0 && printers[base(words[0].raw)]) {
+					for _, arg := range words[i+1:] {
+						if matchesSecretFile(arg.raw) {
+							return &Refusal{
+								Rule:   w.raw + " would read " + arg.raw + ", a Secret-bearing file",
+								Advice: "use `cpass run` (or the Manifest) instead of reading the file directly",
+							}
 						}
 					}
 				}
@@ -158,6 +185,29 @@ func hookWalk(command string, depth int) *Refusal {
 		}
 	}
 	return nil
+}
+
+// commandStart reports whether word position i in words is where a shell
+// command name is expected: position 0, right after a leading run of
+// VAR=value assignments, or right after command/builtin/exec. Only there
+// does a bare "." mean the source builtin.
+func commandStart(words []word, i int) bool {
+	if i == 0 {
+		return true
+	}
+	prev := base(words[i-1].raw)
+	if prev == "command" || prev == "builtin" || prev == "exec" {
+		return true
+	}
+	if !assignment.MatchString(words[i-1].raw) {
+		return false
+	}
+	for j := 0; j < i; j++ {
+		if !assignment.MatchString(words[j].raw) {
+			return false
+		}
+	}
+	return true
 }
 
 // addInlineValueRefusal reports whether args (the words after `cpass add`)

@@ -31,6 +31,12 @@ func TestEvaluateHook(t *testing.T) {
 		{"echo plain text", "echo hello", false},
 		{"cpass run wrapping env is not pre-blocked by the hook", "cpass run -- env", false},
 		{"quoted heredoc body fed to a non-shell interpreter is data", "python3 - <<'EOF'\ncat .env\nEOF\n", false},
+		// CLA-64: a reader named as data (not as argv[0] of its own
+		// command) must not be mistaken for one actually running — the
+		// three false-positive classes this ticket fixes surgically.
+		{"echo mentioning cat as data", "echo cat .env", false},
+		{"printf mentioning cat as data", `printf 'cat .env'`, false},
+		{"find's own . argument is not the source builtin", `find . -name "*.key"`, false},
 
 		// refused: secret-bearing file reads
 		{"cat dotenv", "cat .env", true},
@@ -56,6 +62,14 @@ func TestEvaluateHook(t *testing.T) {
 		{"cat dotenv via input redirection", "cat < .env", true},
 		{"cat dotenv via literal-value variable", `f=.env; cat "$f"`, true},
 		{"cat dotenv via backslash-newline continuation", "ca\\\nt .env", true},
+		// CLA-64: the wrapper patterns the per-word scan must keep
+		// catching, unnarrowed by the false-positive fixes above.
+		{"find -exec cat .env still refused", `find . -exec cat .env \;`, true},
+		{"timeout wrapping cat .env still refused", "timeout 5 cat .env", true},
+		{"nice wrapping cat .env still refused", "nice cat .env", true},
+		{"xargs cat via redirect still refused", "xargs cat < .env", true},
+		{"sudo cat .env still refused", "sudo cat .env", true},
+		{"echo piped into a bare shell still refused", "echo cat .env | sh", true},
 		// CLA-62/64: a heredoc attached to a shell is evaluated as the
 		// script it is, whether or not its delimiter is quoted; one
 		// attached to any other program is not (TestEvaluateHook's
