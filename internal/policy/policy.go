@@ -60,7 +60,12 @@ func Evaluate(in Input) error {
 			}
 		}
 	}
-	ev := &evaluator{bound: map[string]vault.BindingKind{}, tainted: map[string]bool{}, protected: in.ProtectedDirs}
+	ev := &evaluator{
+		bound:     map[string]vault.BindingKind{},
+		tainted:   map[string]bool{},
+		literals:  map[string]string{},
+		protected: in.ProtectedDirs,
+	}
 	for _, v := range in.Bound {
 		ev.bound[v.Name] = v.Kind
 	}
@@ -68,8 +73,14 @@ func Evaluate(in Input) error {
 }
 
 type evaluator struct {
-	bound     map[string]vault.BindingKind
-	tainted   map[string]bool // shell variables assigned from a bound variable
+	bound   map[string]vault.BindingKind
+	tainted map[string]bool // shell variables assigned from a bound variable
+	// literals holds shell variables assigned a plain string with no
+	// variable reference of their own (f=.env, never f=$SOMETHING) — so a
+	// later bare $f/${f} can be resolved back to that literal filename
+	// (resolveLiteral), the way secretFileRefusal judges an argument
+	// written directly as .env.
+	literals  map[string]string
 	protected []string
 }
 
@@ -98,6 +109,10 @@ var (
 	procEnviron = regexp.MustCompile(`/proc/(self|\$\$|[0-9]+|[a-z]*\$[A-Za-z_{]*[}]?)/environ`)
 	varRef      = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)`)
 	assignment  = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)=(.*)$`)
+	// identRe matches a bare shell identifier, used by wholeVarRef to
+	// recognise a word that is exactly one variable reference and nothing
+	// else.
+	identRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
 // secretFileGlobs are basename patterns of files that hold Secret values on
@@ -253,7 +268,9 @@ func (ev *evaluator) simple(words []word, depth int) error {
 			}
 		}
 	}
-	// Leading assignments: VAR=$SECRET taints VAR.
+	// Leading assignments: VAR=$SECRET taints VAR; a plain string literal
+	// (VAR=.env, no $ of its own) is remembered so a later bare $VAR can be
+	// resolved back to it (resolveLiteral).
 	i := 0
 	for i < len(words) {
 		m := assignment.FindStringSubmatch(words[i].raw)
@@ -262,6 +279,8 @@ func (ev *evaluator) simple(words []word, depth int) error {
 		}
 		if ev.references(m[2]) != "" {
 			ev.tainted[m[1]] = true
+		} else if !strings.ContainsRune(m[2], '$') {
+			ev.literals[m[1]] = m[2]
 		}
 		i++
 	}
@@ -320,16 +339,17 @@ func (ev *evaluator) simple(words []word, depth int) error {
 			if v := ev.referencesFile(a.raw); v != "" {
 				return &Refusal{Rule: fmt.Sprintf("%s would print the file behind $%s", prog, v), Advice: "pass the path to the tool that needs the file instead"}
 			}
-			if ev.underProtected(a.raw) {
+			resolved := ev.resolveLiteral(a.raw)
+			if ev.underProtected(resolved) {
 				return &Refusal{Rule: prog + " would print a Secret file", Advice: "pass the path to the tool that needs the file instead"}
 			}
-			if r := secretFileRefusal(prog, a.raw); r != nil {
+			if r := secretFileRefusal(prog, resolved); r != nil {
 				return r
 			}
 		}
 	case sourceBuiltins[prog]:
 		for _, a := range args {
-			if r := secretFileRefusal(prog, a.raw); r != nil {
+			if r := secretFileRefusal(prog, ev.resolveLiteral(a.raw)); r != nil {
 				return r
 			}
 		}
@@ -363,4 +383,41 @@ func (ev *evaluator) referencesFile(s string) string {
 		}
 	}
 	return ""
+}
+
+// resolveLiteral returns the value a word resolves to when it is exactly
+// one reference ($f or ${f}) to a variable earlier assigned a plain string
+// literal in this same shell string (f=.env; cat "$f") — so
+// secretFileRefusal and underProtected can judge the real filename, not
+// the literal text "$f". Anything else (text around the reference, a
+// bound/tainted Secret reference, no reference at all, an unknown
+// variable) is returned unchanged.
+func (ev *evaluator) resolveLiteral(s string) string {
+	name, whole := wholeVarRef(s)
+	if !whole {
+		return s
+	}
+	if lit, ok := ev.literals[name]; ok {
+		return lit
+	}
+	return s
+}
+
+// wholeVarRef reports whether s is exactly one variable reference ($NAME or
+// ${NAME}) and nothing else, returning the variable's name.
+func wholeVarRef(s string) (name string, whole bool) {
+	if strings.HasPrefix(s, "${") && strings.HasSuffix(s, "}") && len(s) > 3 {
+		inner := s[2 : len(s)-1]
+		if identRe.MatchString(inner) {
+			return inner, true
+		}
+		return "", false
+	}
+	if strings.HasPrefix(s, "$") {
+		inner := s[1:]
+		if identRe.MatchString(inner) {
+			return inner, true
+		}
+	}
+	return "", false
 }

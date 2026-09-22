@@ -11,8 +11,9 @@ type word struct {
 
 // splitCommands breaks a shell string into simple commands (lists of
 // words), treating ; & | && || newlines ( ) { } and redirections as
-// separators. It understands quotes, backslashes, $(...) and backticks.
-// It is deliberately conservative: unknown syntax becomes ordinary words.
+// separators. It understands quotes, backslashes, $(...), backticks, and
+// line-continuations (backslash-newline, elided like a real shell). It is
+// deliberately conservative: unknown syntax becomes ordinary words.
 func splitCommands(s string) [][]word {
 	var cmds [][]word
 	var cur []word
@@ -41,6 +42,15 @@ func splitCommands(s string) [][]word {
 		c := s[i]
 		switch {
 		case c == '\\' && i+1 < len(s):
+			if s[i+1] == '\n' {
+				// Line continuation: elided entirely, exactly like a real
+				// shell — it is not a token character and not a word
+				// boundary, so `ca\<newline>t .env` still tokenizes as the
+				// single word "cat", not a mangled program name that
+				// matches no policy rule.
+				i += 2
+				continue
+			}
 			buf.WriteByte(s[i+1])
 			inWord = true
 			i += 2
@@ -59,6 +69,10 @@ func splitCommands(s string) [][]word {
 			inWord = true
 			for i < len(s) && s[i] != '"' {
 				if s[i] == '\\' && i+1 < len(s) {
+					if s[i+1] == '\n' {
+						i += 2
+						continue
+					}
 					buf.WriteByte(s[i+1])
 					i += 2
 					continue
@@ -108,7 +122,11 @@ func splitCommands(s string) [][]word {
 			flushCmd()
 			i++
 		case c == '<' || c == '>':
-			// Redirection: drop the operator, an fd prefix (2>&1), and the target.
+			// Redirection: drop the operator and an fd prefix (2>&1), but
+			// let the target itself flow through the ordinary word logic
+			// below — it becomes a checkable word exactly like a bare
+			// argument, so `cat < .env` refuses the same way `cat .env`
+			// does (CLA-61).
 			if isDigits(buf.String()) {
 				buf.Reset()
 				inWord = false
@@ -118,9 +136,6 @@ func splitCommands(s string) [][]word {
 				i++
 			}
 			for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
-				i++
-			}
-			for i < len(s) && !strings.ContainsRune(" \t;|&\n()", rune(s[i])) {
 				i++
 			}
 		default:

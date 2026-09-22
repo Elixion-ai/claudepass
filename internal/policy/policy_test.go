@@ -41,6 +41,13 @@ func TestEvaluate(t *testing.T) {
 		{"source dotenv in shell", []string{"sh", "-c", "source .env"}, true},
 		{"dot source dotenv in shell", []string{"sh", "-c", ". .env"}, true},
 		{"cat dotenv in nested shell", []string{"sh", "-c", `bash -c "cat .env"`}, true},
+		// CLA-61: input redirection, a literal-value variable, and a real
+		// backslash-newline continuation are all just as reachable a
+		// bypass as a direct `cat .env` and must be refused the same way.
+		{"cat dotenv via input redirection", []string{"sh", "-c", "cat < .env"}, true},
+		{"cat dotenv via literal-value variable", []string{"sh", "-c", `f=.env; cat "$f"`}, true},
+		{"cat dotenv via backslash-newline continuation", []string{"sh", "-c", "ca\\\nt .env"}, true},
+		{"source dotenv via literal-value variable", []string{"sh", "-c", `f=.env; source "$f"`}, true},
 		// refused: raw Secret-shaped literal (CLA-38 — reuses internal/detect)
 		{"raw secret literal in argv", []string{"curl", "-H", "Authorization: Bearer sk_live_51H8xJ2eZvKYlo2CTargvVALUEabcdefgh"}, true},
 		{"raw secret literal in shell string", []string{"sh", "-c", `curl -H "Authorization: Bearer sk_live_51H8xJ2eZvKYlo2CTshellVALUEabcdefgh"`}, true},
@@ -126,7 +133,9 @@ func TestProtectedDirs(t *testing.T) {
 
 func TestSplitCommands(t *testing.T) {
 	cmds := splitCommands(`a "b c" 'd e' f\ g; h | i && j > out 2>&1; k $(l m) n`)
-	want := [][]string{{"a", "b c", "d e", "f g"}, {"h"}, {"i"}, {"j"}, {"k", "$(l m)", "n"}}
+	// CLA-61: a redirection target (here "out") is now captured as a
+	// checkable word, same as a bare argument, instead of being dropped.
+	want := [][]string{{"a", "b c", "d e", "f g"}, {"h"}, {"i"}, {"j", "out"}, {"k", "$(l m)", "n"}}
 	if len(cmds) != len(want) {
 		t.Fatalf("got %d commands: %+v", len(cmds), cmds)
 	}

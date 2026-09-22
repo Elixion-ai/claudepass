@@ -45,6 +45,12 @@ func TestEvaluateHook(t *testing.T) {
 		{"reader inside nested shell", `sh -c "cat .env"`, true},
 		{"reader wrapped by cpass run", "cpass run -- cat .env", true},
 		{"reader in command substitution", "echo $(cat .env)", true},
+		// CLA-61: redirection target, literal-value variable, and a real
+		// backslash-newline continuation are all just as reachable a
+		// bypass as a direct `cat .env`.
+		{"cat dotenv via input redirection", "cat < .env", true},
+		{"cat dotenv via literal-value variable", `f=.env; cat "$f"`, true},
+		{"cat dotenv via backslash-newline continuation", "ca\\\nt .env", true},
 
 		// refused: raw Secret-shaped literal
 		{"stripe key literal in curl", `curl -H "Authorization: Bearer sk_live_51H8xJ2eZvKYlo2CTvalueabcdefgh"`, true},
