@@ -89,6 +89,18 @@ relies on, since those tests always capture through a pipe.
 ## Terminal demos (asciinema / GIF)
 - 80×24, one idea per demo, ~2s pauses. Never type a real Secret on camera —
   use `cpass add` off-screen and a fake `sk_live_…` for the Intercept demo.
-- Show the mechanism, not the value: the winning shot is `cpass run -- env`
-  printing `STRIPE_SECRET_KEY=[REDACTED:stripe/live]`.
+  Set up the Vault and a Manifest declaring `stripe/live` off-screen too
+  (`cpass manifest add stripe/live`, as in the README quickstart).
+- Show the mechanism, not the value: the winning shot is `cpass run
+  --unsafe-allow -- env` printing `STRIPE_LIVE=[REDACTED:stripe/live]`. Bare
+  `env` does nothing but reveal, so Command Policy refuses it outright
+  (exit 3) without `--unsafe-allow` — the human-only override that needs a
+  real terminal to grant, exactly what a person filming this demo is doing.
+  Redaction still catches the value regardless: this one shot proves both
+  halves of the design in order — a human can choose to see the raw
+  command, but never the raw Secret. Verified live against a built binary
+  in an isolated Vault (CLA-74): a bare `cpass run -- env` exits 3 with
+  `cpass: refused: env prints environment variables — …`; with
+  `--unsafe-allow` at a real terminal it exits 0 and prints exactly the
+  line above.
 - Amber prompt, `#0e0a06` background, Press Start 2P for any title card.
