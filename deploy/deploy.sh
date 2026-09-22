@@ -50,7 +50,7 @@ fi
 
 echo "==> installing config and reloading caddy"
 ssh "$host" '
-    set -uo pipefail
+    set -euo pipefail
     install -o root -g root -m 0644 /tmp/claudepass-Caddyfile /etc/caddy/Caddyfile
     rm -f /tmp/claudepass-Caddyfile
 
