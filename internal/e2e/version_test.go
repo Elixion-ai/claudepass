@@ -40,13 +40,25 @@ func TestVersionIsInjectedAtBuildTime(t *testing.T) {
 	}
 }
 
-func TestVersionDefaultsToDevWithoutLdflags(t *testing.T) {
+// TestVersionNeverPrintsBlankWithoutLdflags is CLA-81's e2e companion to
+// internal/cli's TestVersionFallsBackToBuildInfo (which exercises
+// effectiveVersion's fallback logic directly, with a faked build info, so
+// it doesn't depend on this process's own VCS state). An unflagged build
+// must never print a bare "cpass " with nothing after it — and, since Go
+// itself auto-embeds VCS info for a build run inside a git checkout like
+// this one, buildRelease's plain `go build` now typically reports a real
+// git-derived pseudo-version here rather than the old hardcoded "dev": this
+// only pins the one thing that holds regardless of the environment's VCS
+// info (a checkout with no tags, a shallow clone, -buildvcs=false, ...),
+// which is that the version is never silently empty.
+func TestVersionNeverPrintsBlankWithoutLdflags(t *testing.T) {
 	bin := buildRelease(t)
 	out, err := exec.Command(bin, "version").CombinedOutput()
 	if err != nil {
 		t.Fatalf("cpass version: %v: %s", err, out)
 	}
-	if got := strings.TrimSpace(string(out)); got != "cpass dev" {
-		t.Fatalf("cpass version = %q, want %q", got, "cpass dev")
+	got := strings.TrimSpace(string(out))
+	if !strings.HasPrefix(got, "cpass ") || got == "cpass " {
+		t.Fatalf("cpass version = %q, want \"cpass <something>\"", got)
 	}
 }
