@@ -1,6 +1,8 @@
 package policy
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -26,6 +28,7 @@ func TestEvaluateHook(t *testing.T) {
 		{"cpass manifest check", "cpass manifest check", false},
 		{"echo plain text", "echo hello", false},
 		{"cpass run wrapping env is not pre-blocked by the hook", "cpass run -- env", false},
+		{"quoted heredoc body fed to a non-shell interpreter is data", "python3 - <<'EOF'\ncat .env\nEOF\n", false},
 
 		// refused: secret-bearing file reads
 		{"cat dotenv", "cat .env", true},
@@ -51,6 +54,12 @@ func TestEvaluateHook(t *testing.T) {
 		{"cat dotenv via input redirection", "cat < .env", true},
 		{"cat dotenv via literal-value variable", `f=.env; cat "$f"`, true},
 		{"cat dotenv via backslash-newline continuation", "ca\\\nt .env", true},
+		// CLA-62/64: a heredoc attached to a shell is evaluated as the
+		// script it is, whether or not its delimiter is quoted; one
+		// attached to any other program is not (TestEvaluateHook's
+		// allowed list covers that half).
+		{"quoted heredoc body fed to a shell", "sh <<'EOF'\ncat .env\nEOF\n", true},
+		{"unquoted heredoc body fed to a shell", "bash <<EOF\ncat .env\nEOF\n", true},
 
 		// refused: raw Secret-shaped literal
 		{"stripe key literal in curl", `curl -H "Authorization: Bearer sk_live_51H8xJ2eZvKYlo2CTvalueabcdefgh"`, true},
@@ -99,5 +108,39 @@ func TestEvaluateHookDoesNotLeakDetectedValueInRefusal(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), secret) {
 		t.Fatalf("refusal message must not repeat the Secret value: %v", err)
+	}
+}
+
+// TestEvaluateHookShellInvocationShapes is CLA-62's acceptance at the hook
+// layer: a shell option before -c, and a script-by-path invocation, must
+// both still have their content evaluated instead of passing through
+// unchecked, and an unresolvable shape must refuse (fail closed).
+func TestEvaluateHookShellInvocationShapes(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "script.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ncat .env\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	safe := filepath.Join(dir, "safe.sh")
+	if err := os.WriteFile(safe, []byte("#!/bin/sh\necho hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		command string
+		refused bool
+	}{
+		{"flag before -c still evaluates -c's content", `bash -o pipefail -c 'cat .env'`, true},
+		{"script-by-path reading .env is refused", "bash " + script, true},
+		{"script-by-path doing nothing dangerous still runs", "bash " + safe, false},
+		{"unrecognised shell-invocation shape fails closed", "bash --rcfile x -c true", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := EvaluateHook(c.command)
+			if (err != nil) != c.refused {
+				t.Fatalf("command %q: refused=%v want %v (err=%v)", c.command, err != nil, c.refused, err)
+			}
+		})
 	}
 }

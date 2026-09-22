@@ -106,14 +106,29 @@ func hookWalk(command string, depth int) *Refusal {
 				}
 			}
 			if shells[prog] {
+				if hd, ok := heredocArg(words[i+1:]); ok {
+					// The attached program is itself a shell reading its
+					// script from a heredoc — that body runs as shell
+					// commands regardless of whether its delimiter was
+					// quoted (see policy.go's own shells[prog] case).
+					if r := hookWalk(hd.body, depth+1); r != nil {
+						return r
+					}
+					continue
+				}
 				raw := make([]string, len(words[i+1:]))
 				for j, ww := range words[i+1:] {
 					raw[j] = ww.raw
 				}
-				if s, ok := shellCommandString(raw); ok {
-					if r := hookWalk(s, depth+1); r != nil {
-						return r
+				content, refuse := shellCommandString(raw)
+				if refuse {
+					return &Refusal{
+						Rule:   w.raw + "'s invocation shape can't be checked statically",
+						Advice: `use -c "..." or a readable script file under 1 MiB (cpass reads and checks it) instead`,
 					}
+				}
+				if r := hookWalk(content, depth+1); r != nil {
+					return r
 				}
 			}
 		}

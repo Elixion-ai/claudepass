@@ -1,6 +1,8 @@
 package e2e
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -83,6 +85,42 @@ func TestPolicyRunRefusesSecretFileReadsAndRawLiterals(t *testing.T) {
 				t.Fatalf("leaked: %s", r)
 			}
 		})
+	}
+}
+
+// TestPolicyRunShellInvocationShapes is CLA-62's e2e acceptance: a shell
+// option before -c, and a script-by-path invocation, must both still have
+// their content evaluated instead of passing through unchecked — this is
+// what keeps `cpass run -- bash script.sh` working for a script that does
+// nothing dangerous, the core use case, rather than refusing every
+// script-by-path invocation outright.
+func TestPolicyRunShellInvocationShapes(t *testing.T) {
+	ve := leakVault(t)
+	dir := t.TempDir()
+	dangerous := filepath.Join(dir, "dangerous.sh")
+	if err := os.WriteFile(dangerous, []byte("#!/bin/sh\ncat .env\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	safe := filepath.Join(dir, "safe.sh")
+	if err := os.WriteFile(safe, []byte("#!/bin/sh\necho hello\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := ve.run(nil, "run", "--with", "stripe/live", "--", "bash", dangerous)
+	if r.code != 3 || !strings.Contains(r.stderr, "Secret-bearing file") {
+		t.Fatalf("a script reading .env must be refused: %s", r)
+	}
+	r = ve.run(nil, "run", "--with", "stripe/live", "--", "bash", safe)
+	if r.code != 0 {
+		t.Fatalf("a script that does nothing dangerous must still run: %s", r)
+	}
+	// Docker's own SHELL directive shape: a flag before -c must not skip
+	// checking -c's content.
+	r = ve.run(nil, "run", "--with", "stripe/live", "--", "bash", "-o", "pipefail", "-c", "cat .env")
+	if r.code != 3 || !strings.Contains(r.stderr, "Secret-bearing file") {
+		t.Fatalf("a flag before -c must not skip checking -c's content: %s", r)
+	}
+	if strings.Contains(r.stdout+r.stderr, leakVal) {
+		t.Fatalf("leaked: %s", r)
 	}
 }
 

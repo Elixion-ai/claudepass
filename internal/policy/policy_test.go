@@ -1,6 +1,8 @@
 package policy
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Elixion-ai/claudepass/internal/vault"
@@ -151,5 +153,112 @@ func TestSplitCommands(t *testing.T) {
 	}
 	if len(cmds[4][1].subs) != 1 || cmds[4][1].subs[0] != "l m" {
 		t.Fatalf("substitution: %+v", cmds[4][1])
+	}
+}
+
+// TestShellInvocationFlagsBeforeC is CLA-62's acceptance case #2: Docker's
+// own SHELL directive shape, a shell option before -c, must still have its
+// -c string evaluated rather than allowed unchecked.
+func TestShellInvocationFlagsBeforeC(t *testing.T) {
+	cases := []struct {
+		name string
+		argv []string
+	}{
+		{"single flag before -c", []string{"bash", "-o", "pipefail", "-c", "cat .env"}},
+		{"combined short flags before -c", []string{"bash", "-euo", "pipefail", "-c", "cat .env"}},
+		{"plus form before -c", []string{"bash", "+o", "pipefail", "-c", "cat .env"}},
+		{"long options before -c", []string{"bash", "--noprofile", "--norc", "-c", "cat .env"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if err := Evaluate(Input{Argv: c.argv}); err == nil {
+				t.Fatalf("argv %q: -c's content must still be checked", c.argv)
+			}
+		})
+	}
+}
+
+// TestShellInvocationUnrecognizedShapeRefuses is CLA-62's fail-closed
+// default: a shell-invocation shape shellCommandString cannot resolve to
+// concrete content must be refused, never silently allowed.
+func TestShellInvocationUnrecognizedShapeRefuses(t *testing.T) {
+	cases := []struct {
+		name string
+		argv []string
+	}{
+		{"bare shell, nothing to check", []string{"sh"}},
+		{"-s, reading real stdin, not statically visible", []string{"sh", "-s"}},
+		{"unrecognised long option", []string{"bash", "--rcfile", "x", "-c", "true"}},
+		{"-c with no value", []string{"sh", "-c"}},
+		{"-o with no value", []string{"bash", "-o"}},
+		{"nonexistent script path", []string{"bash", "/does/not/exist/script.sh"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if err := Evaluate(Input{Argv: c.argv}); err == nil {
+				t.Fatalf("argv %q: an unresolvable shell-invocation shape must refuse (fail closed)", c.argv)
+			}
+		})
+	}
+}
+
+// TestShellInvocationScriptByPath is CLA-62's acceptance case #1: a bare
+// `<shell> script.sh` must have the script's own content statically
+// evaluated exactly like an inline -c string — this is what keeps `cpass
+// run -- bash script.sh` working for a legitimate script, not just refusing
+// every script-by-path invocation outright.
+func TestShellInvocationScriptByPath(t *testing.T) {
+	dir := t.TempDir()
+	dangerous := filepath.Join(dir, "script.sh")
+	if err := os.WriteFile(dangerous, []byte("#!/bin/sh\ncat .env\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	safe := filepath.Join(dir, "safe.sh")
+	if err := os.WriteFile(safe, []byte("#!/bin/sh\necho hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Evaluate(Input{Argv: []string{"bash", dangerous}}); err == nil {
+		t.Fatalf("a script reading .env must be refused: %s", dangerous)
+	}
+	if err := Evaluate(Input{Argv: []string{"bash", safe}}); err != nil {
+		t.Fatalf("a script that does nothing dangerous must still run: %v", err)
+	}
+	// A script larger than maxStaticScriptSize can't be statically
+	// checked, so it must refuse rather than run unchecked.
+	big := filepath.Join(dir, "big.sh")
+	huge := make([]byte, maxStaticScriptSize+1)
+	for i := range huge {
+		huge[i] = 'x'
+	}
+	if err := os.WriteFile(big, huge, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Evaluate(Input{Argv: []string{"bash", big}}); err == nil {
+		t.Fatalf("an oversized script must refuse rather than run unchecked")
+	}
+}
+
+// TestShellInvocationHeredoc covers CLA-64's third false-positive class
+// from the shell-invocation side: a heredoc body attached to a shell must
+// still be evaluated (regardless of whether its delimiter is quoted),
+// while one attached to any other program is never scanned as commands —
+// it is data streamed to that program's stdin.
+func TestShellInvocationHeredoc(t *testing.T) {
+	cases := []struct {
+		name    string
+		argv    []string
+		refused bool
+	}{
+		{"quoted delimiter to a shell", []string{"sh", "-c", "sh <<'EOF'\ncat .env\nEOF\n"}, true},
+		{"unquoted delimiter to a shell", []string{"sh", "-c", "bash <<EOF\ncat .env\nEOF\n"}, true},
+		{"quoted delimiter to a non-shell interpreter", []string{"sh", "-c", "python3 - <<'EOF'\ncat .env\nEOF\n"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: c.argv})
+			if (err != nil) != c.refused {
+				t.Fatalf("argv %v: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
+			}
+		})
 	}
 }

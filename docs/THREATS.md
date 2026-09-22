@@ -201,6 +201,40 @@ value can still end up somewhere it shouldn't, today:
    honest, disclosed limitation as 1-8 above, not a defect the gate was
    supposed to close and missed: it is, precisely, a `.git`-presence check,
    stated here as exactly that and nothing stronger.
+10. **A shell invocation's argument shape decides whether Command Policy
+    can statically inspect what it runs, and the default for anything it
+    cannot is refuse, not allow** (`shellCommandString`, CLA-62). What it
+    inspects, precisely:
+    - `<shell> -c STRING`, with any combination of `-e -u -x -l -i -n -v
+      -p -s -a -b -f -h -k -m -t`, `-o`/`-O`/`+o`/`+O <arg>`, or
+      `--noprofile --norc --login --posix` before it — the STRING is
+      evaluated exactly like the shell string this package already parses
+      everywhere else, including at any nesting depth.
+    - `<shell> script-path [args...]` (script-by-path) — when script-path
+      names a readable regular file no larger than 1 MiB, its own content
+      is read and statically evaluated the same way, so `cpass run --
+      bash script.sh` keeps working for a legitimate script. This is why
+      `#comment` lines (including a shebang) are recognised and skipped:
+      without that, a script's own `#!/bin/sh` line would misparse as a
+      bare invocation of `sh` and refuse the whole script.
+    - A heredoc (`<<[-]DELIM ... DELIM`) attached to a shell — `sh
+      <<'EOF'` or `bash <<EOF`, quoted delimiter or not — has its body
+      evaluated as the script it is, since the target shell runs it as
+      commands either way; a heredoc attached to anything else (`python3
+      - <<'EOF'`) is left alone as the data it is, never scanned for
+      commands.
+    - What it does **not** inspect, and so refuses rather than guesses at:
+      an unrecognised option; `-o`/`-c` with no value following it; a
+      script path that is not a readable regular file under 1 MiB (an
+      executable run directly by path, a missing file, a directory, a
+      symlink to something else, an oversized file); a bare shell
+      invocation with nothing statically visible (`sh` alone, `sh -s`,
+      or one reading real, non-heredoc piped stdin); and a here-string's
+      own `$(...)`/backtick command substitutions once it becomes an
+      ordinary checkable word (CLA-61) are evaluated, but its surrounding
+      plain text is not scanned for reader programs — it is inline data,
+      not a script. None of this is a leak path: every one of these
+      shapes is a refusal, not a silent allow.
 
 ## Intercept precision (v0.1.4)
 

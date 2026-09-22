@@ -12,6 +12,7 @@ package policy
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -201,30 +202,137 @@ func (ev *evaluator) argv(argv []string, depth int) error {
 	case wrappers[prog]:
 		return ev.argv(argv[1:], depth+1)
 	case shells[prog]:
-		if s, ok := shellCommandString(argv[1:]); ok {
-			if hasTraceFlag(argv[1:]) {
-				return &Refusal{Rule: "shell tracing (-x) echoes expanded variables", Advice: "drop -x"}
+		content, refuse := shellCommandString(argv[1:])
+		if refuse {
+			return &Refusal{
+				Rule:   prog + "'s invocation shape can't be checked statically",
+				Advice: `use -c "..." or a readable script file under 1 MiB (cpass reads and checks it) instead`,
 			}
-			return ev.shell(s, depth+1)
 		}
-		return nil
+		if hasTraceFlag(argv[1:]) {
+			return &Refusal{Rule: "shell tracing (-x) echoes expanded variables", Advice: "drop -x"}
+		}
+		return ev.shell(content, depth+1)
 	}
 	return nil
 }
 
-// shellCommandString finds the STRING in `sh [-flags] -c STRING`.
-func shellCommandString(args []string) (string, bool) {
-	for i, a := range args {
-		if strings.HasPrefix(a, "-") && strings.Contains(a, "c") && !strings.HasPrefix(a, "--") {
-			if i+1 < len(args) {
-				return args[i+1], true
+// maxStaticScriptSize bounds how large a script-by-path file
+// shellCommandString will read and statically evaluate. A larger file
+// makes the shape unresolvable and the invocation is refused rather than
+// silently allowed unchecked (see docs/THREATS.md).
+const maxStaticScriptSize = 1 << 20 // 1 MiB
+
+// shellCommandString resolves what a `<shell> [options...] [-c STRING |
+// script-path [args...]]` invocation statically evaluates to: the -c
+// string, or a script file's own contents (script-by-path — read only when
+// it names a readable regular file no larger than maxStaticScriptSize; this
+// is what keeps `cpass run -- bash script.sh` working, the core use case,
+// instead of being refused just because it isn't an inline -c string).
+// refuse is true, with content=="", when the shape cannot be resolved that
+// way at all: an unrecognised option, an -o/-c with no value following it,
+// an oversized or unreadable script path, or a bare invocation with
+// nothing statically visible to check (an interactive shell, or one
+// genuinely reading from piped stdin). This is Command Policy's
+// shell-invocation gate: the default for anything it cannot statically
+// resolve is refuse, not allow (see docs/THREATS.md's "what is and is not
+// statically inspected").
+//
+// Recognised options, matching real shells' own getopt-style parsing: -e
+// -u -x -l -i -n -v -p -s -a -b -f -h -k -m -t (any combination, e.g. -euo
+// pipefail), -o/-O/+o/+O <arg> (the arg is consumed as a separate word,
+// whether given alone or as the last letter of a combined group), and the
+// long forms --noprofile --norc --login --posix. -c may appear anywhere in
+// a combined short-flag group (-xc, -euc) and always takes the next word
+// as its string, matching shellCommandString's pre-CLA-62 behaviour for
+// that shape.
+func shellCommandString(args []string) (content string, refuse bool) {
+	i := 0
+	for i < len(args) {
+		a := args[i]
+		if a == "--" {
+			i++
+			break
+		}
+		if !strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "+") {
+			break
+		}
+		switch {
+		case a == "-o" || a == "+o" || a == "-O" || a == "+O":
+			if i+1 >= len(args) {
+				return "", true
+			}
+			i += 2
+		case a == "--noprofile" || a == "--norc" || a == "--login" || a == "--posix":
+			i++
+		case strings.HasPrefix(a, "--"):
+			// An unrecognised long option: fail closed rather than guess.
+			return "", true
+		default:
+			letters := strings.TrimPrefix(strings.TrimPrefix(a, "-"), "+")
+			if letters == "" {
+				return "", true
+			}
+			if strings.ContainsRune(letters, 'c') {
+				if i+1 >= len(args) {
+					return "", true
+				}
+				return args[i+1], false
+			}
+			if !isKnownShortOpts(letters) {
+				return "", true
+			}
+			last := letters[len(letters)-1]
+			i++
+			if last == 'o' || last == 'O' {
+				if i >= len(args) {
+					return "", true
+				}
+				i++
 			}
 		}
-		if !strings.HasPrefix(a, "-") {
-			return "", false
+	}
+	if i >= len(args) {
+		// No -c, no script path: nothing statically visible to check (an
+		// interactive shell, or one truly reading piped stdin).
+		return "", true
+	}
+	return scriptFileContent(args[i])
+}
+
+// isKnownShortOpts reports whether every letter in a combined short-flag
+// group (the "euo" of "-euo", the "x" of "-x") is one shellCommandString
+// recognises as taking no argument of its own. "o"/"O" must be the last
+// letter in the group, since its argument is the next argv word —
+// matching a real shell's own getopt behaviour.
+func isKnownShortOpts(letters string) bool {
+	for j, r := range letters {
+		switch r {
+		case 'e', 'u', 'x', 'l', 'i', 'n', 'v', 'p', 's', 'a', 'b', 'f', 'h', 'k', 'm', 't':
+			continue
+		case 'o', 'O':
+			return j == len(letters)-1
+		default:
+			return false
 		}
 	}
-	return "", false
+	return true
+}
+
+// scriptFileContent reads path as the shell script a bare `<shell>
+// path...` invocation would run: refusing, rather than silently allowing
+// unchecked, when path is not a readable regular file no larger than
+// maxStaticScriptSize.
+func scriptFileContent(path string) (content string, refuse bool) {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxStaticScriptSize {
+		return "", true
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", true
+	}
+	return string(raw), false
 }
 
 func hasTraceFlag(args []string) bool {
@@ -353,6 +461,20 @@ func (ev *evaluator) simple(words []word, depth int) error {
 				return r
 			}
 		}
+	case shells[prog]:
+		if hd, ok := heredocArg(args); ok {
+			// The attached program is itself a shell reading its script
+			// from a heredoc: that body runs as shell commands whether or
+			// not its delimiter was quoted (quoting only changes whether
+			// $(...)/backticks inside it were pre-expanded by the shell
+			// that wrote this command, not whether the target shell then
+			// executes the resulting text) — so it is evaluated exactly
+			// like an inline -c string, always.
+			return ev.shell(hd.body, depth+1)
+		}
+		// No heredoc: fall through to the generic argv handling below,
+		// which resolves -c / script-by-path the same way Evaluate's own
+		// top-level shell case does.
 	}
 	// Anything else: judge as an argv, so nested shells, env, printenv apply.
 	argv := make([]string, len(rest))
@@ -420,4 +542,21 @@ func wholeVarRef(s string) (name string, whole bool) {
 		}
 	}
 	return "", false
+}
+
+// heredocInfo is the resolved body of a <<[-]DELIM redirection attached to
+// a simple command.
+type heredocInfo struct {
+	body   string
+	quoted bool
+}
+
+// heredocArg reports the first heredoc word among words, if any.
+func heredocArg(words []word) (heredocInfo, bool) {
+	for _, w := range words {
+		if w.hasHeredoc {
+			return heredocInfo{body: w.heredoc, quoted: w.heredocQuoted}, true
+		}
+	}
+	return heredocInfo{}, false
 }

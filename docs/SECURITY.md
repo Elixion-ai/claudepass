@@ -394,7 +394,11 @@ non-Bash `tool_name` or an empty command is a silent pass-through) and, for
 everything else, evaluates `policy.EvaluateHook` against the raw command
 string. It refuses (exit `2`, one stderr line naming the rule and a
 suggested alternative) a command that, at any nesting depth (pipelines,
-`$(...)`, backticks, or a `shell -c '...'` inside it, up to 8 levels):
+`$(...)`, backticks, a `shell -c '...'` inside it, a shell's own
+script-by-path or heredoc body, up to 8 levels — see `docs/THREATS.md`
+for exactly what a shell invocation's argument shape does and does not
+make statically inspectable, and why an unresolvable shape refuses
+rather than runs unchecked):
 
 - would read a Secret-bearing file directly — matched by basename against
   `.env*`, `*.pem`, `id_rsa*`, `*.key`, `credentials*.json`, `.netrc`,
