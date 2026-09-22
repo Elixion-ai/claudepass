@@ -283,6 +283,44 @@ func TestManifestAddAndCheckTargetTheGlobalManifest(t *testing.T) {
 	}
 }
 
+// TestManifestCheckEffectiveShowsTheUnion is the binary-boundary regression
+// test for CLA-95: `cpass manifest check --effective` must report the same
+// union manifest.Refs computes for `cpass run` — a Global-only Handle
+// tagged GLOBAL, the project's own override of a reachable Global default
+// tagged OVERRIDES-GLOBAL, an ordinary project-only Handle with neither
+// tag, and exit 0 once every effective Handle is available.
+func TestManifestCheckEffectiveShowsTheUnion(t *testing.T) {
+	ve := newVault(t)
+	ve.add("openai/key", "openai-key-value-xyz", "-g")
+	ve.add("stripe/live", "stripe-live-value-xyz", "-g", "--binding", "FROM_GLOBAL")
+	ve.add("db/url", "postgres-value-xyz")
+	repo := ve.project(t)
+	ve.runIn(repo, nil, "manifest", "add", "db/url")
+	ve.runIn(repo, nil, "manifest", "add", "stripe/live", "--binding", "FROM_PROJECT")
+
+	r := ve.runIn(repo, nil, "manifest", "check", "--effective")
+	if r.code != 0 {
+		t.Fatalf("manifest check --effective: %s", r)
+	}
+	for _, want := range []string{"openai/key", "GLOBAL", "stripe/live", "OVERRIDES-GLOBAL", "FROM_PROJECT", "db/url"} {
+		if !strings.Contains(r.stdout, want) {
+			t.Fatalf("stdout missing %q: %s", want, r)
+		}
+	}
+	if strings.Contains(r.stdout, "FROM_GLOBAL") {
+		t.Fatalf("the project's own Binding must be shown, not the Global one: %s", r)
+	}
+
+	// A Handle the project declares itself but never stored is MISSING and
+	// costs the command a non-zero exit, matching `manifest check`'s own
+	// exit-code contract.
+	ve.runIn(repo, nil, "manifest", "add", "sendgrid/key")
+	r = ve.runIn(repo, nil, "manifest", "check", "--effective")
+	if r.code != 1 || !strings.Contains(r.stdout, "sendgrid/key") || !strings.Contains(r.stdout, "MISSING") {
+		t.Fatalf("manifest check --effective with a missing handle: %s", r)
+	}
+}
+
 func TestGlobalHandleInCIModeDegradesToASkip(t *testing.T) {
 	ve := newVault(t)
 	ve.add("openai/key", "openai-key-value-xyz", "-g")

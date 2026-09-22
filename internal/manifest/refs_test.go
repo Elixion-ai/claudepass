@@ -255,3 +255,44 @@ func TestUnreadableGlobalManifestCostsOnlyItsOwnHandles(t *testing.T) {
 		t.Fatal("a corrupt project Manifest must still be fatal")
 	}
 }
+
+// TestGlobalReachableMatchesRefs is the regression seam for cpass manifest
+// check --effective: GlobalReachable must agree with what Refs itself would
+// have done — true for an onboarded project's own root and subdirectories,
+// false outside any project, across a nested repository, and once the
+// project opts out (per-Handle presence in the merged Refs list already
+// covers the Global-Manifest-missing-entirely case).
+func TestGlobalReachableMatchesRefs(t *testing.T) {
+	root := fixture(t, []Entry{{Handle: "openai/key"}}, []Entry{{Handle: "db/url"}})
+
+	if reachable, err := GlobalReachable(root); err != nil || !reachable {
+		t.Fatalf("the project's own root must be reachable: %v %v", reachable, err)
+	}
+	sub := mkdir(t, root, "internal", "cli")
+	if reachable, err := GlobalReachable(sub); err != nil || !reachable {
+		t.Fatalf("a subdirectory of the project must be reachable: %v %v", reachable, err)
+	}
+
+	outside := t.TempDir()
+	if reachable, err := GlobalReachable(outside); err != nil || reachable {
+		t.Fatalf("a directory outside any project must not be reachable: %v %v", reachable, err)
+	}
+
+	nested := mkdir(t, root, "tmp", "untrusted")
+	mkdir(t, nested, ".git")
+	if reachable, err := GlobalReachable(nested); err != nil || reachable {
+		t.Fatalf("a nested repository must not be reachable: %v %v", reachable, err)
+	}
+
+	m, err := Load(filepath.Join(root, FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.GlobalDisabled = true
+	if err := m.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if reachable, err := GlobalReachable(root); err != nil || reachable {
+		t.Fatalf("an opted-out project must not be reachable: %v %v", reachable, err)
+	}
+}

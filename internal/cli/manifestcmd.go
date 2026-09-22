@@ -18,7 +18,7 @@ func init() {
 
 func cmdManifest(e *env) int {
 	if len(e.args) == 0 {
-		return e.fail(ExitUsage, "usage: cpass manifest init | add <handle> [--binding NAME] [--file] [-g] | check [-g] | global <on|off>")
+		return e.fail(ExitUsage, "usage: cpass manifest init | add <handle> [--binding NAME] [--file] [-g] | check [-g|--effective] | global <on|off>")
 	}
 	sub, rest := e.args[0], e.args[1:]
 	switch sub {
@@ -95,8 +95,16 @@ func manifestCheck(e *env, args []string) int {
 	fs := flag.NewFlagSet("manifest check", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	global := globalFlag(fs, "check the Global Manifest instead of this project's")
+	effective := fs.Bool("effective", false,
+		"report every Handle this project actually receives — its own Entries plus any reachable Global Handles")
 	if err := fs.Parse(args); err != nil {
-		return e.usageErr(err, "cpass manifest check [-g]")
+		return e.usageErr(err, "cpass manifest check [-g|--effective]")
+	}
+	if *effective {
+		if *global {
+			return e.fail(ExitUsage, "-g and --effective are mutually exclusive; --effective already includes reachable Global Handles")
+		}
+		return manifestCheckEffective(e)
 	}
 	var m *manifest.Manifest
 	if *global {
@@ -142,6 +150,89 @@ func reportMissing(e *env, m *manifest.Manifest, missing []string) int {
 		fprintf(e.stderr, "  %s\n", h)
 	}
 	return ExitError
+}
+
+// manifestCheckEffective reports on the union manifest.Refs actually
+// computes for this directory at run time — the project's own Entries
+// layered over any reachable Global Handles — rather than auditing one
+// file's Entries in isolation the way a plain `cpass manifest check` (with
+// or without -g) does. It is the single command that answers "what does
+// this project actually receive?", including Handles it never declared
+// itself.
+func manifestCheckEffective(e *env) int {
+	m, code := loadManifest(e)
+	if code != ExitOK {
+		return code
+	}
+	refs, notices, err := manifest.Refs(".", true)
+	if err != nil {
+		return e.failErr(err)
+	}
+	for _, n := range notices {
+		fprintln(e.stderr, n)
+	}
+	// A project Entry that shares a Handle with the Global Manifest is only
+	// an override when the Global Manifest was actually going to reach this
+	// directory at all — GlobalReachable applies the same gate Refs uses
+	// internally, so a Handle name that merely coincides with an unreachable
+	// Global Manifest (opted out, or across a nested-repository boundary)
+	// is reported as an ordinary project Entry, not a false "OVERRIDES".
+	globalHandles := map[string]bool{}
+	if reachable, err := manifest.GlobalReachable("."); err != nil {
+		return e.failErr(err)
+	} else if reachable {
+		if gm, err := manifest.LoadGlobal(); err == nil {
+			for _, en := range gm.Entries {
+				globalHandles[en.Handle] = true
+			}
+		}
+	}
+
+	ciMode := broker.CIMode()
+	var v *vault.Vault
+	if !ciMode {
+		var vcode int
+		if v, vcode = openVault(e); vcode != ExitOK {
+			return vcode
+		}
+	}
+
+	var missing []string
+	for _, r := range refs {
+		name := r.Declared.Name
+		if name == "" {
+			name = vault.DefaultBindingName(r.Handle)
+		}
+		kind := r.Declared.Kind
+		if kind == "" {
+			kind = vault.BindEnv
+		}
+		var available bool
+		if ciMode {
+			_, available = os.LookupEnv(name)
+		} else {
+			_, getErr := v.Get(r.Handle)
+			available = getErr == nil
+		}
+		flags := ""
+		switch {
+		case r.FromGlobal:
+			flags += "  GLOBAL"
+		case globalHandles[r.Handle]:
+			flags += "  OVERRIDES-GLOBAL"
+		}
+		if !available {
+			flags += "  MISSING"
+			missing = append(missing, r.Handle)
+		}
+		fprintf(e.stdout, "%-40s %s %s%s\n", r.Handle, kind, name, flags)
+	}
+	if len(missing) > 0 {
+		e.notice("%d of %d effective handle(s) missing in %s", len(missing), len(refs), m.Path)
+		return ExitError
+	}
+	fprintf(e.stdout, "ok: all %d effective handle(s) for %s are available\n", len(refs), m.Path)
+	return ExitOK
 }
 
 // manifestGlobalToggle writes the project's durable opt-out of the Global
