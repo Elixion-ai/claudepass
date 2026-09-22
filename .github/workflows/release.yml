@@ -3,17 +3,27 @@ name: release
 # Runs GoReleaser on every vX.Y.Z tag push and publishes a GitHub Release on
 # this repo. Build/test-on-every-commit CI lives in a separate
 # workflow (see CLA-18) — this one only cuts releases.
+#
+# Signing and provenance (CLA-79): GoReleaser's checksums.txt is signed
+# keylessly by cosign (Sigstore OIDC — see the `signs:` block in
+# .goreleaser.yaml) and the release archives get a GitHub build-provenance
+# attestation. Neither needs a signing key provisioned or stored anywhere;
+# both mint their proof from this job's own OIDC identity, which is what
+# id-token: write below is for. install.sh verifies both, opportunistically,
+# when cosign/gh are present on the installing machine — see its own
+# header comment and docs/SECURITY.md "Verifying a release".
 on:
   push:
     tags:
       - "v*.*.*"
 
-permissions:
-  contents: write
-
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,6 +34,9 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4
 
       - name: Run tests
         run: go test -race -count=1 ./...
@@ -39,3 +52,19 @@ jobs:
           # release target (release.github.owner/name in .goreleaser.yaml)
           # is this same repository.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Turns on cosign's keyless signing flow for the `signs:` block
+          # in .goreleaser.yaml: sign with the short-lived certificate this
+          # job's own OIDC token gets it, rather than expecting a local
+          # key pair that would have to live somewhere as a new secret.
+          COSIGN_EXPERIMENTAL: "1"
+
+      - name: Attest build provenance
+        # Records, against this repo, that each release archive was built
+        # by this exact workflow run — the fourth verification level
+        # install.sh checks for with `gh attestation verify` when `gh` is
+        # on the installing machine's PATH. Runs after GoReleaser so it
+        # attests the exact bytes that were just uploaded to the Release,
+        # not a separate rebuild of them.
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: "dist/cpass_*.tar.gz"

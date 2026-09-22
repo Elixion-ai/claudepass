@@ -58,3 +58,11 @@ ssh claudepass 'rm -rf /srv/claudepass/site/dl/latest && cp -r /srv/claudepass/s
 This is what `install.sh`'s `https://claudepass.com/dl/latest/...` and the
 Homebrew formula's `https://claudepass.com/dl/v<version>/...` URLs read
 from.
+
+`checksums.txt` published here must stay byte-identical to the one
+GoReleaser already uploaded to the GitHub Release for the same tag —
+`install.sh` cross-checks the two and refuses to install on a mismatch
+(CLA-79, `docs/SECURITY.md` "Verifying a release"). Copying `dist/`
+straight from GoReleaser's own output, as the snippet above does, keeps
+that true automatically; hand-editing anything under `/dl/` after the fact
+would not.

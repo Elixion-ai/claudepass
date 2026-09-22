@@ -1,12 +1,18 @@
 # GoReleaser config for cpass. See docs/adr/0007-go-single-binary.md (Go,
 # single static binary, cross-compiled for macOS/Linux) and CLA-16.
 #
-# Local verification: `goreleaser release --snapshot --clean` builds all
-# four binaries without needing a GitHub token or a real tag.
+# Local verification: `goreleaser release --snapshot --clean --skip=sign`
+# builds all four binaries without needing a GitHub token, a real tag, or
+# cosign on PATH (`--skip=sign` skips the block below — omit it if cosign
+# is installed locally and you want to exercise signing too, though a
+# fully keyless verify-blob round trip still needs the OIDC identity a
+# real GitHub Actions run provides, not a local invocation).
 #
 # Real releases: pushing a `vX.Y.Z` tag runs .github/workflows/release.yml,
 # which needs GITHUB_TOKEN (the workflow's default token, scoped to this
-# repo, is sufficient since the release target is this same repo).
+# repo, is sufficient since the release target is this same repo) and
+# cosign on PATH with COSIGN_EXPERIMENTAL=1 for the keyless `signs:` block
+# below (CLA-79) — release.yml installs both.
 #
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 version: 2
@@ -46,6 +52,27 @@ archives:
 
 checksum:
   name_template: "checksums.txt"
+
+# Keyless (Sigstore/OIDC) cosign signature over checksums.txt — no signing
+# key is provisioned or stored anywhere; cosign mints a short-lived
+# certificate from release.yml's own GitHub Actions OIDC token and records
+# the signature in the public Rekor transparency log. Needs no new secret
+# (CLA-79): release.yml grants `id-token: write` and installs cosign via
+# sigstore/cosign-installer before this runs; COSIGN_EXPERIMENTAL=1 there
+# is what turns on the keyless flow instead of expecting a local key pair.
+# install.sh verifies this with `cosign verify-blob` when cosign is on the
+# installing machine's PATH — see docs/SECURITY.md "Verifying a release".
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - --yes
+    artifacts: checksum
+    output: true
 
 changelog:
   sort: asc

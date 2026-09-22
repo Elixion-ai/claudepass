@@ -573,6 +573,86 @@ either: `install.sh` fetches a release archive and its `checksums.txt` over
 HTTPS from `claudepass.com` (verifying the archive's sha256 before
 installing it) to install `cpass` in the first place.
 
+## Verifying a release (CLA-79)
+
+A release archive and its `checksums.txt` reach you from two places:
+`claudepass.com/dl/` (what `install.sh` and the Homebrew formula fetch
+from) and the GitHub Release itself (what `.goreleaser.yaml`'s
+`release.github` publishes to, uploaded by `.github/workflows/release.yml`
+— both are the same GoReleaser output, mirrored to two independent
+origins). `install.sh` checks four progressively stronger things, in
+order, and prints which ones it actually achieved on the line right before
+it finishes:
+
+1. **Same-origin sha256.** The downloaded archive's checksum matches its
+   entry in `claudepass.com`'s own `checksums.txt`. Always done — this is
+   the check `install.sh` has always had.
+2. **Cross-origin checksum match.** That same `checksums.txt` is
+   byte-identical to the copy GoReleaser uploaded straight to the GitHub
+   Release — an origin `claudepass.com`'s own deploy pipeline
+   (`deploy/deploy.sh`) cannot touch. Always attempted; a genuine
+   *mismatch* refuses the install outright (a compromised or stale mirror
+   serving a consistent trojaned `(archive, checksums.txt)` pair, which
+   would pass check 1 on its own, cannot also forge GitHub's copy).
+   GitHub being unreachable — offline, a firewalled network — is reported
+   and skipped rather than treated as tampering, since those are different
+   conditions.
+3. **Cosign signature.** `checksums.txt` is signed keylessly by cosign
+   during `release.yml` (Sigstore OIDC — see the `signs:` block in
+   `.goreleaser.yaml`; no signing key is provisioned or stored anywhere,
+   the certificate is minted from that job's own short-lived GitHub
+   Actions identity and recorded in the public Rekor transparency log).
+   `install.sh` verifies this with `cosign verify-blob` when `cosign` is
+   on the installing machine's PATH.
+4. **Build-provenance attestation.** `release.yml` also runs
+   `actions/attest-build-provenance` over the release archives, recording
+   against this repo that each one was built by that exact workflow run.
+   `install.sh` verifies this with `gh attestation verify` when `gh` is on
+   the installing machine's PATH.
+
+Checks 3 and 4 are opportunistic, the same honest "best-effort, not a
+guarantee" shape as Redaction above: their tool being absent, or a release
+predating this feature having no signature/attestation to check, is
+reported and does not block install. Only an actual, found-and-checked
+disagreement at check 2 is refused outright — see `install.sh`'s own
+header comment for the full reasoning. `CPASS_SKIP_SIGNATURE_VERIFY` (any
+non-empty value) skips checks 3 and 4 entirely, for an air-gapped install
+or anywhere reaching Sigstore/GitHub's APIs isn't wanted; it has no effect
+on check 2.
+
+**Manual verification recipe**, for checking a downloaded archive by hand
+without running `install.sh` at all (`$TAG` e.g. `v0.2.1`, `$ASSET` e.g.
+`cpass_darwin_arm64.tar.gz`):
+
+```bash
+# Same-origin (claudepass.com) and cross-origin (GitHub) checksums.txt
+# must agree — and the archive's own sha256 must appear in both:
+curl -fsSL "https://claudepass.com/dl/$TAG/checksums.txt" -o checksums-dl.txt
+curl -fsSL "https://github.com/Elixion-ai/claudepass/releases/download/$TAG/checksums.txt" -o checksums-gh.txt
+diff checksums-dl.txt checksums-gh.txt && echo "origins agree"
+shasum -a 256 "$ASSET" | grep -Ff - checksums-gh.txt
+
+# Cosign keyless signature over checksums.txt:
+curl -fsSL "https://github.com/Elixion-ai/claudepass/releases/download/$TAG/checksums.txt.sig" -o checksums.txt.sig
+curl -fsSL "https://github.com/Elixion-ai/claudepass/releases/download/$TAG/checksums.txt.pem" -o checksums.txt.pem
+cosign verify-blob \
+  --certificate-identity-regexp '^https://github\.com/Elixion-ai/claudepass/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate checksums.txt.pem --signature checksums.txt.sig \
+  checksums-gh.txt
+
+# Build-provenance attestation over the archive itself:
+gh attestation verify "$ASSET" --owner Elixion-ai --repo claudepass
+```
+
+**What still needs a real tag cut by the owner**: everything above was
+validated statically (`goreleaser check`, a local `goreleaser release
+--snapshot --clean --skip=sign`, `install.sh` driven against fixture HTTP
+servers standing in for both origins — see `internal/e2e/install_test.go`)
+since a real cosign signature and a real GitHub attestation only exist
+once `release.yml` actually runs on a pushed `vX.Y.Z` tag. The manual
+recipe above is how to confirm the live end-to-end chain once one is cut.
+
 ## Every `CPASS_*` environment variable
 
 | Variable | Read by | Purpose |
@@ -588,6 +668,8 @@ installing it) to install `cpass` in the first place.
 | `CPASS_VERSION` | `install.sh` only | Not read by the compiled `cpass` binary. `latest` (default) or an explicit release tag (e.g. `v0.1.2`) for the installer to fetch from `claudepass.com/dl/<version>/`. |
 | `CPASS_INSTALL_DIR` | `install.sh` only | Not read by the compiled `cpass` binary. Where the installer places the downloaded `cpass` binary. |
 | `CPASS_BASE_URL` | `install.sh` only | Not read by the compiled `cpass` binary. Overrides the download origin the installer fetches the release archive and `checksums.txt` from (default `https://claudepass.com`) — for a mirror or a test fixture server. |
+| `CPASS_GITHUB_URL` | `install.sh` only | Not read by the compiled `cpass` binary. Overrides the origin the installer cross-checks `checksums.txt` against, and fetches its cosign signature from (default `https://github.com/Elixion-ai/claudepass`) — for a test fixture server; see "Verifying a release" above. |
+| `CPASS_SKIP_SIGNATURE_VERIFY` | `install.sh` only | Not read by the compiled `cpass` binary. Any non-empty value skips the cosign/`gh attestation` checks (they reach Sigstore/GitHub's APIs); the cross-origin checksum check is unaffected. See "Verifying a release" above. |
 
 ## Every path `cpass` touches on disk
 
