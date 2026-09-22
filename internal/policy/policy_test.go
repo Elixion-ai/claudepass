@@ -56,6 +56,9 @@ func TestEvaluate(t *testing.T) {
 		{"cat id_rsa pub is not a secret", []string{"cat", "id_rsa.pub"}, false},
 		{"cat dotenv example is not a secret", []string{"cat", ".env.example"}, false},
 		{"cat dotenv sample is not a secret", []string{"cat", ".env.sample"}, false},
+		// CLA-66: indirect expansion must be caught up front by Evaluate,
+		// the same as the direct $STRIPE_LIVE form.
+		{"indirect expansion of a bound variable", []string{"sh", "-c", `x=STRIPE_LIVE; echo "${!x}"`}, true},
 		// refused: raw Secret-shaped literal (CLA-38 — reuses internal/detect)
 		{"raw secret literal in argv", []string{"curl", "-H", "Authorization: Bearer sk_live_51H8xJ2eZvKYlo2CTargvVALUEabcdefgh"}, true},
 		{"raw secret literal in shell string", []string{"sh", "-c", `curl -H "Authorization: Bearer sk_live_51H8xJ2eZvKYlo2CTshellVALUEabcdefgh"`}, true},

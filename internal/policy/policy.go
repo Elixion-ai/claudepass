@@ -109,7 +109,12 @@ var (
 	}
 	procEnviron = regexp.MustCompile(`/proc/(self|\$\$|[0-9]+|[a-z]*\$[A-Za-z_{]*[}]?)/environ`)
 	varRef      = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)`)
-	assignment  = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)=(.*)$`)
+	// indirectVarRef matches Bash indirect expansion, ${!NAME} — NAME's
+	// own value (resolved through literals) names the variable actually
+	// being read, e.g. `x=STRIPE_LIVE; echo ${!x}` reads $STRIPE_LIVE.
+	// Unlike varRef this form always requires both braces.
+	indirectVarRef = regexp.MustCompile(`\$\{!([A-Za-z_][A-Za-z0-9_]*)\}`)
+	assignment     = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)=(.*)$`)
 	// identRe matches a bare shell identifier, used by wholeVarRef to
 	// recognise a word that is exactly one variable reference and nothing
 	// else.
@@ -500,7 +505,9 @@ func (ev *evaluator) simple(words []word, depth int) error {
 	return ev.argv(argv, depth+1)
 }
 
-// references returns the first bound or tainted variable referenced in s.
+// references returns the first bound or tainted variable referenced in s,
+// direct ($VAR/${VAR}) or indirect (${!x}, where x's own value — resolved
+// through literals — names the variable actually being read).
 func (ev *evaluator) references(s string) string {
 	for _, m := range varRef.FindAllStringSubmatch(s, -1) {
 		if _, ok := ev.bound[m[1]]; ok {
@@ -508,6 +515,18 @@ func (ev *evaluator) references(s string) string {
 		}
 		if ev.tainted[m[1]] {
 			return m[1]
+		}
+	}
+	for _, m := range indirectVarRef.FindAllStringSubmatch(s, -1) {
+		name, ok := ev.literals[m[1]]
+		if !ok {
+			continue
+		}
+		if _, ok := ev.bound[name]; ok {
+			return name
+		}
+		if ev.tainted[name] {
+			return name
 		}
 	}
 	return ""
