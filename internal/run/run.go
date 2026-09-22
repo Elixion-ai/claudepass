@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"path/filepath"
@@ -88,8 +89,40 @@ func Run(spec Spec) (int, error) {
 			return 3, err
 		}
 	}
-	env := os.Environ()
+	env := stripSecretEnv(os.Environ())
 	var patterns []redact.Pattern
+	// CPASS_KEY (the Vault's unlock key, base64) never reaches a child's
+	// environment (stripSecretEnv above), however it reached cpass's own —
+	// but whenever it *could have been* the source this invocation (or a
+	// caller wrapping it) unlocked the Vault with, register it as a redact
+	// Pattern too, as defense in depth against some *other* route a child
+	// might still echo it back through.
+	//
+	// This used to be gated on len(spec.Refs) > 0, as a proxy for "this
+	// call's own broker.Resolve opened the Vault with CPASS_KEY" — correct
+	// for `cpass run` (Resolve never opens the Vault when Refs is empty),
+	// but wrong for `cpass capture` and the MCP `capture` tool: both open
+	// the Vault themselves via their own broker.OpenVault() call, before
+	// Run is ever invoked, to check the target Handle doesn't already
+	// exist, independent of Refs — and the MCP capture tool has no
+	// Refs-equivalent at all, so it could never satisfy that guard. CPASS_KEY
+	// genuinely was the unlock source there too whenever it is set, since
+	// broker.UnlockKey always tries it first, ahead of the Keychain and the
+	// Broker socket.
+	//
+	// So the guard is now simply "CPASS_KEY is set and this isn't CI mode"
+	// (CI mode never opens the Vault, from any caller): resolveFromEnv
+	// never touches the Vault, and OpenVault is the only remaining caller
+	// of UnlockKey, so whenever CPASS_KEY is set outside CI mode, either
+	// this call's own Resolve or a caller's own pre-existing OpenVault call
+	// used it to unlock. A run that touches the Vault via neither (e.g.
+	// `cpass run` with no --with at all) still passes this check and
+	// registers the pattern for nothing — harmless: an unused pattern only
+	// matches if the child happens to print that exact literal, the same
+	// preexisting risk any registered pattern already carries.
+	if key := os.Getenv(broker.EnvKey); key != "" && !broker.CIMode() {
+		patterns = append(patterns, redact.Variants(cpassKeyPseudoHandle, key)...)
+	}
 	var dir *runDir
 	defer func() { dir.destroy() }()
 	for _, s := range secrets {
@@ -150,10 +183,26 @@ func Run(spec Spec) (int, error) {
 	cmd.Env = env
 	cmd.Dir = spec.Dir
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = spec.Stdin, stdout, stderr
+	// Registered before Start(), not after: signal.Notify changes cpass's
+	// own SIGINT/SIGTERM/SIGHUP disposition immediately, and it is cpass's
+	// disposition *at fork time* that the child inherits. A `cpass run --
+	// cmd &` launched by an async shell job (no job control — any plain
+	// `&`, a CI step, a Makefile target, nohup) starts with SIGINT already
+	// SIG_IGN; forked before this call, the child would inherit SIG_IGN too
+	// and, since an ignored signal survives exec(), stay permanently deaf
+	// to every SIGINT cpass forwards to it afterward, however promptly.
+	// Registering first flips cpass's own disposition to "caught" before
+	// the fork, so the child inherits that instead and gets it reset to
+	// SIG_DFL across its own exec() — normal, killable-by-default. sigCh is
+	// buffered so a signal landing in the narrow window between here and
+	// forwardSignals' goroutine starting (which needs cmd.Process, so it
+	// can only start once Start() returns) is queued, not lost.
+	sigCh := notifySignals()
 	if err := cmd.Start(); err != nil {
+		signal.Stop(sigCh)
 		return 127, fmt.Errorf("cannot start %s: %w", spec.Argv[0], err)
 	}
-	stop := forwardSignals(cmd.Process)
+	stop := forwardSignals(sigCh, cmd.Process)
 	err = cmd.Wait()
 	stop()
 	dir.destroy()
@@ -194,11 +243,50 @@ func setEnv(env []string, name, value string) []string {
 	return append(env, prefix+value)
 }
 
-// forwardSignals relays SIGINT and SIGTERM to the child so Ctrl-C behaves
-// as if cpass were not in the way.
-func forwardSignals(p *os.Process) func() {
+// cpassKeyPseudoHandle labels the redact Pattern registered for CPASS_KEY
+// itself (see env := stripSecretEnv... above) — not a real Vault Handle, a
+// reserved name (the "cpass/" segment no project Handle collides with in
+// practice) so [REDACTED:cpass/vault-key] and the redaction log both read
+// unambiguously as "the unlock key", not "some Handle named this".
+const cpassKeyPseudoHandle = "cpass/vault-key"
+
+// stripSecretEnv removes cpass's own Secret-bearing control variable from a
+// copy of os.Environ() before it becomes a child's environment. Only
+// CPASS_KEY carries Secret material — the Vault's unlock key, base64 — so
+// it alone is stripped, unconditionally, regardless of --with/Refs. Every
+// other CPASS_* variable cpass itself reads (CPASS_HOME, CPASS_UNLOCK,
+// CPASS_CI, CPASS_KEYCHAIN_SERVICE) is a mode selector carrying no Secret
+// value, and is passed through unchanged on purpose: a nested `cpass run`
+// inside a wrapped script (a Makefile target, a CI step that itself shells
+// out to `cpass`) still resolves CPASS_HOME and still finds the Vault — it
+// just cannot use the CPASS_KEY env-unlock path (the one thing that got
+// stripped) and instead needs the macOS Keychain or the Linux/CI Broker
+// socket, neither of which needs an env key (see docs/SECURITY.md).
+func stripSecretEnv(env []string) []string {
+	out := env[:0:0] // fresh backing array: os.Environ() is never aliased elsewhere
+	for _, kv := range env {
+		if strings.HasPrefix(kv, broker.EnvKey+"=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+// notifySignals registers cpass's own SIGINT/SIGTERM/SIGHUP disposition.
+// Callers must invoke this before cmd.Start() — see the ordering comment at
+// the call site — and pass the returned channel to forwardSignals once
+// cmd.Process exists.
+func notifySignals() chan os.Signal {
 	ch := make(chan os.Signal, 4)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	return ch
+}
+
+// forwardSignals relays every signal arriving on ch (already registered by
+// notifySignals, before the child was forked) to the child so Ctrl-C
+// behaves as if cpass were not in the way.
+func forwardSignals(ch chan os.Signal, p *os.Process) func() {
 	done := make(chan struct{})
 	go func() {
 		for {

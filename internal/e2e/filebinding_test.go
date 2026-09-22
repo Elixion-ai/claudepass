@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const saJSON = `{"type":"service_account","private_key":"-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----\n"}`
@@ -114,6 +115,42 @@ func TestStaleRunDirSwept(t *testing.T) {
 	}
 	if _, err := os.Stat(stale); err == nil {
 		t.Fatal("stale run dir should have been swept")
+	}
+}
+
+// TestStaleRunDirSweptOnPIDReuse is the regression test for CLA-75:
+// sweepStale used to trust syscall.Kill(pid, 0) with no bound, so a run
+// directory left behind by a SIGKILLed cpass process (holding a plaintext
+// file-Binding Secret) survived forever once the OS recycled that pid for
+// an unrelated, genuinely alive process -- processAlive would read true
+// indefinitely, and the only existing test (TestStaleRunDirSwept, above)
+// plants a certainly-unused pid, so it could never exercise this case.
+// This plants a real, alive pid (this test process's own -- guaranteed
+// alive for the whole test, standing in for the reused, unrelated process)
+// with an old mtime, and asserts the bounded time-based fallback still
+// sweeps it despite PID liveness saying otherwise.
+func TestStaleRunDirSweptOnPIDReuse(t *testing.T) {
+	ve := fileVault(t)
+	stale := filepath.Join(ve.home, "run", "deadc0dedeadc0de")
+	if err := os.MkdirAll(stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, ".pid"), []byte(itoa(os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "gcp-sa"), []byte("leftover"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-13 * time.Hour) // past staleRunDirMaxAge (3x the 4h default idle timeout)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+	r := ve.run(nil, "run", "--with", "gcp/sa", "--", "true")
+	if r.code != 0 {
+		t.Fatalf("run: %s", r)
+	}
+	if _, err := os.Stat(stale); err == nil {
+		t.Fatal("a stale run dir naming a live (but reused) pid should still be swept once old enough")
 	}
 }
 

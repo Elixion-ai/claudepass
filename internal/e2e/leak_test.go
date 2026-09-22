@@ -111,6 +111,30 @@ func TestLeakValueInsideLongerToken(t *testing.T) {
 	assertRedacted(t, shUnsafe(leakVault(t), `echo "Bearer ${STRIPE_LIVE}xyz"`))
 }
 
+// TestLeakCpassKeyItself is the defense-in-depth half of CLA-54: CPASS_KEY
+// (this invocation's own Vault unlock source) never reaches the child's
+// environment at all any more (see TestRunStripsCpassKeyFromChild in
+// run_test.go), so the value here is baked straight into the script rather
+// than read back out of the child's env -- proving Redaction's own,
+// independent coverage of the raw key, under the reserved pseudo-Handle
+// cpass/vault-key, for whatever *other* route a child might still echo it
+// through (a crash trace embedding a copy taken before the strip, a
+// compromised dependency that read it earlier in the same process tree).
+func TestLeakCpassKeyItself(t *testing.T) {
+	ve := leakVault(t)
+	script := `printf '%s' '` + ve.key + `'`
+	r := ve.runEnv([]string{"CPASS_TEST_TTY=1"}, nil, "run", "--unsafe-allow", "--with", "stripe/live", "--", "sh", "-c", script)
+	if r.code != 0 {
+		t.Fatalf("run: %s", r)
+	}
+	if strings.Contains(r.stdout+r.stderr, ve.key) {
+		t.Fatalf("CPASS_KEY value leaked: %s", r)
+	}
+	if !strings.Contains(r.stdout, "[REDACTED:cpass/vault-key]") {
+		t.Fatalf("CPASS_KEY marker missing: %s", r)
+	}
+}
+
 func TestRedactionLogAndNotice(t *testing.T) {
 	ve := leakVault(t)
 	r := shUnsafe(ve, `echo "$STRIPE_LIVE"; echo "$STRIPE_LIVE" >&2`)

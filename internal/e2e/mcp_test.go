@@ -391,6 +391,40 @@ func TestMCPCaptureRejectsExistingHandle(t *testing.T) {
 	}
 }
 
+// TestMCPCaptureRedactsCpassKeyFromStderr is CLA-54's MCP-side regression
+// test: callCapture (internal/mcp/tools.go) opens the Vault itself via its
+// own broker.OpenVault() call before run.Run ever runs, and the capture
+// tool has no --with-equivalent field at all, so Refs is always empty here
+// -- the shape the old guard (len(spec.Refs) > 0) could never satisfy on
+// this surface, on every single invocation, not just the common case.
+//
+// callCapture does not currently forward the wrapped command's stderr into
+// the tool's JSON-RPC result at all (unlike run_with_secrets, which does
+// via its warn content block) — so this raw value has nowhere to leak to
+// *today* regardless of this guard, and this assertion holds even
+// unfixed. It is still asserted here, alongside
+// TestRunRegistersCpassKeyPatternWithEmptyRefs (run_test.go), which pins
+// the actual guard fix directly against Run's Spec (the exact shape this
+// call site produces) and does fail on the unfixed guard — so that this
+// test keeps catching a real leak if callCapture is ever changed to
+// surface stderr the way run_with_secrets already does.
+func TestMCPCaptureRedactsCpassKeyFromStderr(t *testing.T) {
+	ve := newVault(t)
+	s := startMCP(t, ve)
+	s.initialize()
+	script := `printf 'RAWKEY=[%s]\n' '` + ve.key + `' 1>&2; echo capture-body-value-1`
+	text, isError := s.callToolText("capture", map[string]any{
+		"handle":  "demo/token",
+		"command": []string{"sh", "-c", script},
+	})
+	if isError {
+		t.Fatalf("capture reported an error: %s", text)
+	}
+	if strings.Contains(s.rawOut.String(), ve.key) {
+		t.Fatal("CPASS_KEY value leaked in the JSON-RPC stream")
+	}
+}
+
 func TestMCPRunWithSecretsUsesManifestWhenHandlesOmitted(t *testing.T) {
 	ve := newVault(t)
 	ve.add("a/one", "value-number-one")

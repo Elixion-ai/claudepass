@@ -77,7 +77,13 @@ that.
 - **Minimum Secret length**: 8 characters (`vault.MinSecretLength`),
   enforced wherever a value is stored (`add`, `capture`, `import`,
   `intercept`) — so Redaction is never asked to scrub a string so short it
-  would also match large stretches of ordinary output.
+  would also match large stretches of ordinary output. CI mode
+  (`broker.resolveFromEnv`) resolves straight from the environment instead
+  of the Vault, bypassing `vault.Add` entirely, so it enforces the same
+  floor itself: a CI-resolved value shorter than `vault.MinSecretLength` is
+  refused (a project-declared Handle hard-fails; a Global Handle degrades
+  to the usual skip-with-notice), naming the Handle and the minimum, never
+  the value.
 
 ## The Global Manifest
 
@@ -539,19 +545,28 @@ detail.
    program itself, since a Secret value is never the thing being executed
    and a real executable path can otherwise read as high-entropy without
    being one.
-3. Builds the child's environment: `os.Environ()` plus one variable per
-   env-bound Handle, set to its value. A file-bound Handle instead gets a
-   fresh Secret file, mode `0600`, inside a per-invocation directory, mode
-   `0700`, at `$CPASS_HOME/run/<16-hex-char id>/` — the variable holds that
-   file's *path*, never the value. That directory also carries a `.pid`
-   file naming the `cpass` process that created it, so a directory
-   orphaned by a `cpass` process that was itself killed gets swept and
-   shredded by the next `cpass run` invocation, not left behind.
+3. Builds the child's environment: `os.Environ()` with `CPASS_KEY` itself
+   stripped out first (see below), plus one variable per env-bound Handle,
+   set to its value. A file-bound Handle instead gets a fresh Secret file,
+   mode `0600`, inside a per-invocation directory, mode `0700`, at
+   `$CPASS_HOME/run/<16-hex-char id>/` — the variable holds that file's
+   *path*, never the value. That directory also carries a `.pid` file
+   naming the `cpass` process that created it, so a directory orphaned by a
+   `cpass` process that was itself killed gets swept and shredded by the
+   next `cpass run` invocation, not left behind — bounded, in case that
+   `.pid`'s process ID gets reused by something else entirely before the
+   next sweep runs, by a time-based fallback (see the run-dir table entry
+   below).
 4. Spawns the command with `stdin` passed through unmodified, `stdout` and
    `stderr` piped through the Redactor (unless the caller is `cpass
    capture`, which bypasses redaction on stdout only — see below), and
    `SIGINT`/`SIGTERM`/`SIGHUP` forwarded to the child so interactive
-   Ctrl-C behaves normally.
+   Ctrl-C behaves normally, including when `cpass run` itself was launched
+   as a backgrounded, non-interactive job (`cpass run -- cmd &`, a CI step,
+   a Makefile target, nohup): `signal.Notify` is registered before the
+   child is forked, not after, specifically so a disposition `cpass`
+   inherited at rest (`SIG_IGN` for `SIGINT`, the POSIX default for such a
+   job) is never what the child in turn inherits.
 5. On every exit path — the child exits normally, is killed by a signal,
    or `cpass` itself is killed before it can clean up (swept on the next
    run instead) — every file in the per-invocation temp directory is
@@ -565,6 +580,31 @@ detail.
    its output (`cpass: redacted <handle> from output (<n>×); the Agent must
    use the value, not print it`). Both are stderr notices for the human,
    never anything that blocks or changes the child's own output.
+
+**`CPASS_KEY` never reaches a wrapped command's environment, however it got
+into `cpass`'s own.** Only it is stripped: it alone carries Secret material
+(the Vault's unlock key), while the other `CPASS_*` variables `cpass` itself
+reads (`CPASS_HOME`, `CPASS_UNLOCK`, `CPASS_CI`, `CPASS_KEYCHAIN_SERVICE`)
+are mode selectors with no Secret value and pass through unchanged on
+purpose — so a nested `cpass` inside a wrapped script (a Makefile target, a
+CI step that itself shells out to `cpass run`) still resolves `CPASS_HOME`
+and still finds the Vault; it just **cannot use the `CPASS_KEY` env-unlock
+path any more to open it** (that value is exactly what got stripped) and
+instead needs the macOS Keychain or the Linux/CI Broker socket, whichever
+this machine already uses for unattended unlock — neither needs an
+environment key. Separately, whenever `CPASS_KEY` is set and this isn't CI
+mode (CI mode never opens the Vault, from any surface), its value is also
+registered as a redact Pattern, under the reserved pseudo-Handle
+`cpass/vault-key`, before the child ever starts: defense in depth, so a
+child that still echoes it back through some *other* route than the one
+just closed off gets it caught and marked `[REDACTED:cpass/vault-key]`
+rather than shown raw. This covers `cpass run` (whose own Broker-resolve
+step is what opens the Vault with it) and `cpass capture` / the MCP
+`capture` tool alike (which open the Vault themselves, before this step
+runs at all, to check the target Handle doesn't already exist) — `cpass
+run` is the only one of the three whose Handles (`--with`) say whether the
+Vault was touched at all, so the guard is CPASS_KEY's own presence, not
+that.
 
 `cpass capture <handle> -- <command>` and the MCP server's
 `run_with_secrets` and `capture` tools call this exact same function
@@ -676,7 +716,7 @@ installing it) to install `cpass` in the first place.
 | Variable | Read by | Purpose |
 |---|---|---|
 | `CPASS_HOME` | `broker.Home` | Overrides the ClaudePass home directory (default `os.UserConfigDir()/claudepass`); everything below is relative to it. |
-| `CPASS_KEY` | `broker.UnlockKey` | Base64 of a 32-byte unlock key; the first key source tried, ahead of the Keychain and the Broker socket. The supported way to run unattended (CI). |
+| `CPASS_KEY` | `broker.UnlockKey` | Base64 of a 32-byte unlock key; the first key source tried, ahead of the Keychain and the Broker socket. The supported way to run unattended (CI). Stripped from every `cpass run`/`capture`/MCP child's environment regardless of what it wraps (see "What `cpass run` does" above) — a nested `cpass` inside a wrapped script must use the Keychain or Broker socket instead, not this variable. |
 | `CPASS_UNLOCK` | `broker.UseKeychain` | Set to `socket` to force the Linux/CI Broker-process unlock path even on macOS. |
 | `CPASS_KEYCHAIN_SERVICE` | `broker.KeychainService` | Overrides the macOS Keychain service name (production always uses `cpass`; tests point this at a throwaway name so they never touch a real login Keychain). |
 | `CPASS_CI` | `broker.CIMode` | `1` forces CI mode (Handles resolve from the environment CI already provides, not the Vault); `0` forces it off. |
@@ -701,7 +741,7 @@ All paths below are relative to `$CPASS_HOME` unless stated otherwise.
 | `$CPASS_HOME/broker.kdf` | The scrypt `N`/`r`/`p` cost the salt above was derived with (Linux/CI unlock path only); absent next to a `broker.salt` from before this file existed, which means the legacy `N=2^15` cost. | `0600` |
 | `$CPASS_HOME/cpass.sock` (or `$XDG_RUNTIME_DIR/cpass.sock` if set) | The Broker process's Unix domain socket (Linux/CI unlock path only). | `0600` |
 | `$CPASS_HOME/redactions.log` | The append-only redaction event log described above. | `0600` |
-| `$CPASS_HOME/run/<16-hex-char id>/` | One per-invocation temp directory for `cpass run`'s file Bindings; holds a `.pid` file and one file per file-bound Secret, all shredded on exit. | `0700` (files `0600`; shared `run/` parent also tightened to `0700` on every use, the same reused-directory fix as `$CPASS_HOME` itself) |
+| `$CPASS_HOME/run/<16-hex-char id>/` | One per-invocation temp directory for `cpass run`'s file Bindings; holds a `.pid` file and one file per file-bound Secret, all shredded on exit, or swept by the next invocation's `sweepStale` if `cpass` itself was killed before it could clean up (PID-liveness, bounded by a time-based fallback — see `docs/THREATS.md`). | `0700` (files `0600`; shared `run/` parent also tightened to `0700` on every use, the same reused-directory fix as `$CPASS_HOME` itself) |
 | `.claudepass.toml` (repo root, found by walking up from the current directory) | The Manifest: which Handles this project needs and their Bindings. Contains no values; meant to be committed. | `0644` |
 | `$CPASS_HOME/global.toml` | The Global Manifest: the same TOML subset as a project Manifest (`.claudepass.toml`), declaring the Handles this machine gets in every project it reaches. Contains no values. | `0644` (dir `0700`, created like the Vault's own directory if missing) |
 | `$CPASS_HOME/global.toml.lock` | The sidecar `flock` every Global Manifest writer holds for its whole LoadGlobal-mutate-SaveGlobal cycle (`manifest.UpdateGlobal`); never removed, never itself holds any data. macOS/Linux only. | `0600` |

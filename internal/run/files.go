@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Elixion-ai/claudepass/internal/broker"
 )
@@ -108,7 +109,41 @@ func shredDir(dir string) {
 	_ = os.Remove(dir)
 }
 
-// sweepStale removes run directories whose owning cpass process is gone.
+// staleRunDirMaxAge bounds how long a run directory may survive even when
+// its .pid names a live process, as insurance against PID reuse: if a
+// cpass process holding a file-Binding Secret was SIGKILLed and the OS
+// later recycles its pid for an unrelated process before the next sweep,
+// processAlive(pid) reads true forever and PID liveness alone never
+// catches it (docs/THREATS.md). Three times broker.DefaultIdleTimeout — the
+// same "how long is an unattended session still plausibly active" duration
+// the Broker itself uses before it forgets an unlock key — comfortably
+// outlives any ordinary `cpass run` invocation, including a long-running
+// dev server or watcher (PRD story #18's no-buffering-delay guarantee
+// exists precisely so those stay wrapped for a long time), while still
+// eventually reclaiming a directory PID liveness alone would hold onto
+// forever. It is a bound, not a guarantee either way: see docs/THREATS.md
+// for the disclosed limitation this trades in.
+const staleRunDirMaxAge = 3 * broker.DefaultIdleTimeout
+
+// tooOldToTrustPID reports whether dir was created longer ago than
+// staleRunDirMaxAge, using its own modification time — set once, when
+// newRunDir creates it and writes its .pid and Secret files, and never
+// touched again until shredDir removes them — as the bound-of-last-resort
+// against PID reuse described above. A Stat failure (already gone, or a
+// permissions oddity) is reported as "not too old" so the caller falls
+// through to its ordinary PID-liveness handling rather than acting on an
+// error here.
+func tooOldToTrustPID(dir string) bool {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
+	return time.Since(info.ModTime()) > staleRunDirMaxAge
+}
+
+// sweepStale removes run directories whose owning cpass process is gone,
+// or that have simply sat there too long to trust their .pid's liveness
+// reading any further regardless (see staleRunDirMaxAge).
 func sweepStale(root string) {
 	entries, _ := os.ReadDir(root)
 	for _, e := range entries {
@@ -116,6 +151,10 @@ func sweepStale(root string) {
 			continue
 		}
 		dir := filepath.Join(root, e.Name())
+		if tooOldToTrustPID(dir) {
+			shredDir(dir)
+			continue
+		}
 		raw, err := os.ReadFile(filepath.Join(dir, ".pid"))
 		if err != nil {
 			shredDir(dir)

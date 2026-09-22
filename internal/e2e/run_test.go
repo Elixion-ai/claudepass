@@ -1,10 +1,16 @@
 package e2e
 
 import (
+	"bufio"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // childEnv runs the helper under cpass run and returns what it saw in its
@@ -138,4 +144,119 @@ func TestRunUnknownProgram(t *testing.T) {
 	if r.code != 127 {
 		t.Fatalf("want 127: %s", r)
 	}
+}
+
+// TestRunStripsCpassKeyFromChild is the regression test for CLA-54:
+// os.Environ() (which carries CPASS_KEY whenever it's how this cpass
+// process itself unlocked the Vault, the documented unattended-CI way to
+// run it) used to be copied into the child unfiltered. Any child that
+// echoes its own environment -- a crash trace, a debug flag, a compromised
+// dependency -- handed over the raw Vault master key, not just one Handle.
+// Runs with zero --with flags too: the strip must not depend on any Handle
+// actually being resolved. The other CPASS_* mode selectors (CPASS_HOME
+// above all -- see the CPASS_HOME assertion) must still reach the child, or
+// a nested `cpass run` inside a wrapped script would break.
+func TestRunStripsCpassKeyFromChild(t *testing.T) {
+	ve := newVault(t)
+	ve.add("a/one", "value-number-one")
+	for _, args := range [][]string{nil, {"--with", "a/one"}} {
+		env, r := childEnv(t, ve, nil, args...)
+		if r.code != 0 {
+			t.Fatalf("run %v: %s", args, r)
+		}
+		if v, ok := env["CPASS_KEY"]; ok && v != "" {
+			t.Fatalf("child saw CPASS_KEY=%q with args %v: %v", v, args, env)
+		}
+		if env["CPASS_HOME"] != ve.home {
+			t.Fatalf("CPASS_HOME is a mode selector, not a Secret, and must still reach the child (args %v): %v", args, env)
+		}
+		if env["PATH"] == "" {
+			t.Fatalf("ordinary variables like PATH must still be inherited (args %v): %v", args, env)
+		}
+	}
+}
+
+// TestRunStreamsWithoutBufferingDelay is the e2e regression for PRD story
+// #18 (docs/PRD.md): a long-running command's first line must reach the
+// Agent well before the command itself exits, not only once the pipe
+// closes and the internal Redactor-writer unit tests (idleFlush, Close)
+// happen to agree. It reads the live pipe with a short per-read deadline,
+// not a fixed sleep, as the actual assertion.
+func TestRunStreamsWithoutBufferingDelay(t *testing.T) {
+	ve := newVault(t)
+	cmd := exec.Command(cpassBin, "run", "--", helperBin)
+	cmd.Env = append(append(baseEnv(), "CPASS_HOME="+ve.home, "CPASS_KEY="+ve.key), "HELPER_STREAM_SLEEP_MS=2000")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	lines := make(chan string, 2)
+	go func() {
+		sc := bufio.NewScanner(stdout)
+		for sc.Scan() {
+			lines <- sc.Text()
+		}
+		close(lines)
+	}()
+	deadline := time.Second
+	if raceEnabled {
+		deadline = 1500 * time.Millisecond
+	}
+	select {
+	case line, ok := <-lines:
+		if !ok || line != "stream-line-1" {
+			t.Fatalf("first line: got %q ok=%v", line, ok)
+		}
+	case <-time.After(deadline):
+		_ = cmd.Process.Kill()
+		t.Fatalf("first line did not arrive within %v; output is being buffered until the child exits", deadline)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("cpass run: %v", err)
+	}
+}
+
+// TestRunBackgroundedForwardsSIGINT is the regression test for CLA-71:
+// forwardSignals used to call signal.Notify only after cmd.Start(), so a
+// `cpass run -- cmd &` launched as an async shell job with no job control
+// (any plain `&`, a CI step, a Makefile target, nohup) forked its child
+// while cpass's own SIGINT disposition was still SIG_IGN, the POSIX
+// default such a job inherits. The forked child inherited SIG_IGN too and,
+// because an ignored signal survives exec(), stayed permanently deaf to
+// SIGINT no matter how promptly cpass forwarded it afterward. Launched via
+// a raw `sh -c '... &'`, not the test harness's own spawner (exec.Command
+// never reproduces this inherited disposition), this is the actual repro.
+func TestRunBackgroundedForwardsSIGINT(t *testing.T) {
+	ve := newVault(t)
+	// The backgrounded job's own stdout/stderr are redirected to /dev/null,
+	// not left pointing at the pipe launch.Output() reads: fork inherits
+	// file descriptors across `&`, so if cpass (and the sleep it wraps) kept
+	// holding that pipe's write end open, Output() would block waiting for
+	// EOF until the background job itself exited -- up to the full 30s --
+	// and never return the pid in time to test anything.
+	script := fmt.Sprintf("%s run -- sleep 30 >/dev/null 2>&1 & echo $!", cpassBin)
+	launch := exec.Command("sh", "-c", script)
+	launch.Env = append(baseEnv(), "CPASS_HOME="+ve.home, "CPASS_KEY="+ve.key)
+	out, err := launch.Output()
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || pid <= 0 {
+		t.Fatalf("parse backgrounded cpass pid from %q: %v", out, err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) }) // best-effort if the assertion below fails first
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		_ = syscall.Kill(pid, syscall.SIGINT)
+		if syscall.Kill(pid, 0) != nil {
+			return // the backgrounded cpass (and the `sleep` it wraps) is gone
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("cpass pid %d (wrapping `sleep 30` in the background) still alive after repeated SIGINT for ~2s", pid)
 }

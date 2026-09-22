@@ -36,6 +36,18 @@ func main() {
 		}
 		_ = w.Flush() // best-effort, see above
 	}
+	if s := os.Getenv("HELPER_STREAM_SLEEP_MS"); s != "" {
+		// Writes one line, sleeps, writes a second: the streaming-delay e2e
+		// probe (TestRunStreamsWithoutBufferingDelay). fmt.Println on
+		// os.Stdout is unbuffered (one Write syscall, straight through the
+		// pipe cpass owns), so the first line's arrival timing reflects
+		// cpass's own redirection/redaction path, not this process's own
+		// buffering.
+		ms, _ := strconv.Atoi(s)
+		fmt.Println("stream-line-1")
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+		fmt.Println("stream-line-2")
+	}
 	if s := os.Getenv("HELPER_ECHO"); s != "" {
 		fmt.Println(os.ExpandEnv(s))
 	}

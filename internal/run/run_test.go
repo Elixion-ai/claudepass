@@ -105,3 +105,46 @@ func TestNewRunDirTightensExistingRunParentPermissions(t *testing.T) {
 		t.Fatalf("run/ parent mode = %v, want 0700", st.Mode().Perm())
 	}
 }
+
+// TestRunRegistersCpassKeyPatternWithEmptyRefs is CLA-54's regression test
+// for the capture-surface gap: `cpass capture` (internal/cli/capturecmd.go)
+// and the MCP `capture` tool (internal/mcp/tools.go callCapture) both open
+// the Vault themselves, via their own separate broker.OpenVault() call,
+// before Run ever runs, and Refs stays empty in the common case (capture
+// only ever populates Refs from --with, and the MCP tool has no
+// --with-equivalent field at all). The old guard, len(spec.Refs) > 0, used
+// Refs as a proxy for "this call's own broker.Resolve opened the Vault with
+// CPASS_KEY" -- a proxy that's always false on this path, so CPASS_KEY
+// never got registered as a redact Pattern even though it genuinely was the
+// unlock source. This pins the fix directly against Run's own Spec,
+// independent of how either caller surfaces (or, for MCP capture today,
+// discards) stderr -- see TestCaptureRedactsCpassKeyFromStderr (e2e, CLI)
+// and TestMCPCaptureRedactsCpassKeyFromStderr (e2e, MCP) for the two real
+// callers.
+func TestRunRegistersCpassKeyPatternWithEmptyRefs(t *testing.T) {
+	t.Setenv(broker.EnvHome, t.TempDir())
+	// Deterministic regardless of the host's own CI env var: irrelevant
+	// here since Refs is empty either way, but this guard is also gated on
+	// !CIMode(), and the point of this test is that gate, not CI mode.
+	t.Setenv(broker.EnvCI, "0")
+	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x24}, vault.KeySize))
+	t.Setenv(broker.EnvKey, key)
+
+	var stdout, stderr bytes.Buffer
+	script := `printf 'RAWKEY=[%s]\n' '` + key + `' 1>&2`
+	code, err := Run(Spec{
+		// Refs deliberately nil/empty -- see the doc comment above.
+		Argv:        []string{"sh", "-c", script},
+		UnsafeAllow: true,
+		Stdout:      &stdout, Stderr: &stderr,
+	})
+	if err != nil || code != 0 {
+		t.Fatalf("Run: code=%d err=%v stderr=%s", code, err, stderr.String())
+	}
+	if strings.Contains(stdout.String()+stderr.String(), key) {
+		t.Fatalf("CPASS_KEY value leaked with Refs empty: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "[REDACTED:cpass/vault-key]") {
+		t.Fatalf("CPASS_KEY marker missing with Refs empty: stderr=%q", stderr.String())
+	}
+}
