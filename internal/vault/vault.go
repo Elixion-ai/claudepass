@@ -336,6 +336,27 @@ func zero(b []byte) {
 	}
 }
 
+// Rewrap replaces the key wrapping the Vault's data key with newKey,
+// without touching the data key or any Entry — a cheaper, in-place
+// counterpart to re-adding every Handle to a freshly created Vault. It only
+// changes v's in-memory state; the caller Saves (directly, or by running
+// this inside Update, which Saves automatically) for the new wrapping to
+// become durable. CLA-97 is the one caller today: upgrading a passphrase
+// Vault onto stronger KDF parameters re-derives the unlock key and re-wraps
+// the existing data key under it, rather than re-encrypting every Secret.
+//
+// The unlock key Rewrap replaces is zeroed in place first (CLA-60) — the
+// same hygiene Close gives the key material a Vault is done with.
+func (v *Vault) Rewrap(newKey []byte) error {
+	if len(newKey) != KeySize {
+		return fmt.Errorf("vault: unlock key must be %d bytes", KeySize)
+	}
+	old := v.key
+	v.key = append([]byte(nil), newKey...)
+	zero(old)
+	return nil
+}
+
 // Get returns a copy of the Entry for handle.
 func (v *Vault) Get(handle string) (Entry, error) {
 	e, ok := v.entries[handle]

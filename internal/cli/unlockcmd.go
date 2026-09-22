@@ -33,19 +33,21 @@ func cmdUnlock(e *env) int {
 	if err != nil {
 		return e.failErr(err)
 	}
-	key, err := broker.DeriveKey(passphrase)
-	if err != nil {
-		return e.failErr(err)
-	}
 	path, err := broker.VaultPath()
 	if err != nil {
 		return e.failErr(err)
 	}
-	nv, err := vault.Open(path, key)
+	// UnlockPassphrase both confirms the passphrase (by actually opening
+	// the Vault) and, transparently, upgrades a Vault whose KDF parameters
+	// are below the current target (CLA-97) — re-deriving, re-wrapping the
+	// data key, and persisting the new parameters — before ever returning.
+	key, upgraded, err := broker.UnlockPassphrase(path, passphrase)
 	if err != nil {
 		return e.failErr(err)
 	}
-	nv.Close()
+	if upgraded {
+		e.notice("upgraded this Vault's passphrase key to stronger parameters")
+	}
 	if err := broker.StartBroker(key, *timeout); err != nil {
 		return e.failErr(err)
 	}

@@ -177,6 +177,86 @@ func TestSocketUnlockEmptyPassphraseRefused(t *testing.T) {
 	}
 }
 
+// TestUnlockUpgradesStaleKDFParams is CLA-97's binary-boundary proof: a
+// Vault whose broker.kdf record is below the current target still unlocks
+// with the same passphrase, prints the upgrade notice exactly once, and
+// leaves broker.kdf holding the current parameters afterward — with `ls`
+// and `add` both still working, proving the Vault itself was never lost
+// along the way.
+//
+// It never derives a key by hand (no internal/vault or
+// golang.org/x/crypto/scrypt import — internal/e2e only ever drives the
+// built binary, per this project's own testing philosophy): `cpass init`
+// already writes a real Vault wrapped under today's current parameters, so
+// overwriting broker.kdf's *record* of those parameters with a smaller,
+// still-valid one (as if an older cpass version, or a hand rollback, had
+// left it there) reproduces exactly the "persisted params disagree with
+// what actually unlocks the Vault" state a real upgrade leaves behind
+// after CLA-97's own crash-safety retry kicks in — the same code path
+// internal/broker/passphrase_test.go's
+// TestUnlockPassphraseSurvivesCrashBetweenRewrapAndKDFPersist exercises
+// directly, exercised here through the real CLI end to end.
+func TestUnlockUpgradesStaleKDFParams(t *testing.T) {
+	ve := lockedVault(t)
+	env := socketEnv(t)
+	passphrase := "correct horse battery staple\n"
+
+	if r := ve.runEnv(env, []byte(passphrase), "init"); r.code != 0 {
+		t.Fatalf("init: %s", r)
+	}
+
+	kdfPath := filepath.Join(ve.home, "broker.kdf")
+	original, err := os.ReadFile(kdfPath)
+	if err != nil {
+		t.Fatalf("read broker.kdf after init: %v", err)
+	}
+	// A smaller, still power-of-two-and-in-bounds N than whatever init just
+	// wrote: any real cpass version has always used N >= 2^15, so this is a
+	// plausible "wrote by an older cpass" record, not a malformed one.
+	stale := []byte(`{"n":32768,"r":8,"p":1}`)
+	if string(stale) == string(original) {
+		t.Fatalf("test fixture's stale record must actually differ from what init wrote: %s", original)
+	}
+	if err := os.WriteFile(kdfPath, stale, 0o600); err != nil {
+		t.Fatalf("write stale broker.kdf fixture: %v", err)
+	}
+
+	r := ve.runEnv(env, []byte(passphrase), "unlock")
+	if r.code != 0 {
+		t.Fatalf("unlock against a stale broker.kdf: %s", r)
+	}
+	if !strings.Contains(r.stderr, "upgraded") {
+		t.Fatalf("unlock should have noticed the upgrade on stderr: %s", r)
+	}
+
+	upgraded, err := os.ReadFile(kdfPath)
+	if err != nil {
+		t.Fatalf("read broker.kdf after unlock: %v", err)
+	}
+	if string(upgraded) != string(original) {
+		t.Fatalf("broker.kdf after upgrade = %s, want it restored to init's own current-parameters record %s", upgraded, original)
+	}
+
+	r = ve.runEnv(env, []byte("value-after-upgrade\n"), "add", "u/one")
+	if r.code != 0 {
+		t.Fatalf("add after upgrade: %s", r)
+	}
+	r = ve.runEnv(env, nil, "ls")
+	if r.code != 0 || !strings.Contains(r.stdout, "u/one") {
+		t.Fatalf("ls after upgrade: %s", r)
+	}
+
+	// A second unlock, now that broker.kdf is already current, must not
+	// print the notice again.
+	r = ve.runEnv(env, []byte(passphrase), "unlock")
+	if r.code != 0 {
+		t.Fatalf("second unlock: %s", r)
+	}
+	if strings.Contains(r.stderr, "upgraded") {
+		t.Fatalf("an already-current unlock must not report an upgrade again: %s", r)
+	}
+}
+
 // TestUnlockLockRefusedInKeychainMode checks the macOS-default guard: unlock
 // and lock (Broker-process commands) refuse when the Keychain is this
 // Vault's unlock source, rather than pretending to start or stop something.
