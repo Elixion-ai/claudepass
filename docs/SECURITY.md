@@ -43,6 +43,19 @@ that.
   than fail every write outright. A read (`ls`, `exposed`, `cpass run`,
   `cpass capture`'s own pre-check) never takes this lock: the atomic rename
   above already keeps a concurrent reader consistent on its own.
+- **Backup and recovery**: Save keeps the *previous* generation as
+  `vault.cpv.bak` — written the same atomic, durable way as `vault.cpv`
+  itself — before every overwrite, so a corrupted or lost `vault.cpv`
+  (`ErrTampered` fails loudly, it never opens partially or silently drops
+  entries) has one generation of built-in recovery: `cp vault.cpv.bak
+  vault.cpv` and unlock as usual. A Handle removed with `cpass rm` (or
+  renamed, or edited) still exists, encrypted, in `vault.cpv.bak` until the
+  *next* write — `cpass rm` of an Exposed Secret says so. `vault.cpv.bak`
+  is itself an encrypted envelope in the same format as `vault.cpv`, so an
+  ordinary file-level backup of either (a nightly copy to another disk, a
+  dotfile sync tool, a snapshotting filesystem) is safe to make and store
+  anywhere: both are ciphertext at rest, and neither is cpass's job to ship
+  a dedicated export/backup command for beyond this.
 - **Format**: a JSON envelope (`internal/vault/vault.go`) holding a format
   version, a random 32-byte data key wrapped by the unlock key, and the
   entry list encrypted under that data key. Both layers use
@@ -624,7 +637,8 @@ All paths below are relative to `$CPASS_HOME` unless stated otherwise.
 | Path | What it is | Mode |
 |---|---|---|
 | `$CPASS_HOME/vault.cpv` | The Vault: the encrypted envelope described above. | `0600` (dir `0700`) |
-| `$CPASS_HOME/vault.cpv.tmp-*` | Transient — the Vault's atomic-write staging file, one uniquely-named instance per Save (`os.CreateTemp`, never a fixed name two writers could race); renamed over `vault.cpv` on save, never left behind on success. | `0600` |
+| `$CPASS_HOME/vault.cpv.bak` | The previous generation of `vault.cpv`, kept as a one-generation backup before every overwrite (Save). Decrypts with the same unlock key; a Handle a later write removed still exists here, encrypted, until the *next* write. | `0600` |
+| `$CPASS_HOME/vault.cpv.tmp-*` | Transient — the Vault's atomic-write staging file, one uniquely-named instance per Save (`os.CreateTemp`, never a fixed name two writers could race); renamed over `vault.cpv` (or `vault.cpv.bak`) on save, never left behind on success. | `0600` |
 | `$CPASS_HOME/vault.cpv.lock` | The sidecar `flock` every Vault writer holds for its whole Open-mutate-Save cycle (`vault.Update`); never removed, never itself holds any Vault data. macOS/Linux only. | `0600` |
 | `$CPASS_HOME/broker.salt` | The scrypt salt for deriving the unlock key from a passphrase (Linux/CI unlock path only). | `0600` |
 | `$CPASS_HOME/cpass.sock` (or `$XDG_RUNTIME_DIR/cpass.sock` if set) | The Broker process's Unix domain socket (Linux/CI unlock path only). | `0600` |

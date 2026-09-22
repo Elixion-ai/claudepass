@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"testing"
 )
@@ -52,8 +53,9 @@ func TestRoundTrip(t *testing.T) {
 // calls themselves in internal/atomicfile) rather than a bare os.WriteFile,
 // for every one of several successive Saves — no unique per-invocation temp
 // file (CLA-55's own requirement) is ever left behind if that sequence
-// completed, so a leftover "v.cpv.tmp-*" after several Saves would mean the
-// durable-write path was bypassed or aborted partway through.
+// completed for both v.cpv and its CLA-59 backup v.cpv.bak, so a leftover
+// "*.tmp-*" after several Saves would mean the durable-write path was
+// bypassed or aborted partway through.
 func TestSaveDurablyReplacesTheFileWithNoTempDebris(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "v.cpv")
@@ -73,15 +75,91 @@ func TestSaveDurablyReplacesTheFileWithNoTempDebris(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "v.cpv" {
-		names := make([]string, len(entries))
-		for i, e := range entries {
-			names[i] = e.Name()
-		}
-		t.Fatalf("directory should hold only v.cpv after 3 Saves, got %v", names)
+	// v.cpv and its CLA-59 backup v.cpv.bak are the only two files any
+	// number of successive Saves should leave behind — never a leftover
+	// "v.cpv.tmp-*" staging file from an aborted or bypassed atomicfile
+	// sequence.
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name()
+	}
+	sort.Strings(names)
+	if len(names) != 2 || names[0] != "v.cpv" || names[1] != "v.cpv.bak" {
+		t.Fatalf("directory should hold only v.cpv and v.cpv.bak after 3 Saves, got %v", names)
 	}
 	if _, err := Open(p, key(6)); err != nil {
 		t.Fatalf("vault does not reopen after repeated Save: %v", err)
+	}
+}
+
+// TestSaveKeepsThePreviousGenerationAsBak is CLA-59's regression test.
+// Create itself Saves once (the first generation, empty, with nothing yet
+// to back up); after a second Save, vault.cpv.bak must exist and decrypt on
+// its own, holding that first generation — the acceptance criterion in so
+// many words. A third Save then demonstrates the fuller claim
+// docs/SECURITY.md makes: a Handle removed by one Save still exists,
+// encrypted, in .bak until the *next* write, because .bak always trails the
+// live file by exactly one generation.
+func TestSaveKeepsThePreviousGenerationAsBak(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "v.cpv")
+	k := key(4)
+	v, err := Create(p, k) // Save #1: the first generation, empty.
+	if err != nil {
+		t.Fatal(err)
+	}
+	bak := p + ".bak"
+	if _, err := os.Stat(bak); err == nil {
+		t.Fatal("a brand-new vault has no prior generation to back up yet")
+	}
+
+	if _, err := v.Add("first/handle", "first-generation-value", AddOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Save(); err != nil { // Save #2: backs up Save #1's (empty) generation.
+		t.Fatal(err)
+	}
+	empty, err := Open(bak, k)
+	if err != nil {
+		t.Fatalf("vault.cpv.bak does not decrypt after two Saves: %v", err)
+	}
+	if empty.Count() != 0 {
+		t.Fatalf(".bak after two Saves should hold the empty first generation, got %d entries", empty.Count())
+	}
+
+	if err := v.Remove("first/handle"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Add("second/handle", "second-generation-value", AddOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Save(); err != nil { // Save #3: backs up Save #2's generation.
+		t.Fatal(err)
+	}
+
+	// The live file reflects Save #3.
+	live, err := Open(p, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := live.Get("first/handle"); err == nil {
+		t.Fatal("first/handle should be gone from the live vault")
+	}
+	if _, err := live.Get("second/handle"); err != nil {
+		t.Fatalf("second/handle missing from the live vault: %v", err)
+	}
+
+	// .bak now reflects Save #2's generation: still holding the
+	// since-removed first/handle, predating second/handle entirely.
+	prior, err := Open(bak, k)
+	if err != nil {
+		t.Fatalf("vault.cpv.bak does not decrypt: %v", err)
+	}
+	e, err := prior.Get("first/handle")
+	if err != nil || e.Value != "first-generation-value" {
+		t.Fatalf(".bak should still hold the removed Handle: %+v, %v", e, err)
+	}
+	if _, err := prior.Get("second/handle"); err == nil {
+		t.Fatal(".bak should predate second/handle")
 	}
 }
 

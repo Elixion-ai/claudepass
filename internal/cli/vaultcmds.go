@@ -254,8 +254,12 @@ func cmdRm(e *env) int {
 	if fs.NArg() < 1 {
 		return e.fail(ExitUsage, "usage: cpass rm <handle>...")
 	}
+	var wasExposed []string
 	_, code := updateVault(e, func(v *vault.Vault) error {
 		for _, h := range fs.Args() {
+			if en, err := v.Get(h); err == nil && en.Exposed {
+				wasExposed = append(wasExposed, h)
+			}
 			if err := v.Remove(h); err != nil {
 				return err
 			}
@@ -266,6 +270,13 @@ func cmdRm(e *env) int {
 		return code
 	}
 	fprintf(e.stdout, "removed %s\n", strings.Join(fs.Args(), " "))
+	// CLA-59: Save keeps the generation being replaced as vault.cpv.bak, so
+	// an Exposed Secret's value survives there, encrypted, until the next
+	// write — worth saying at the moment it's removed, not just in
+	// docs/SECURITY.md.
+	for _, h := range wasExposed {
+		e.notice("%s was Exposed; it still exists, encrypted, in vault.cpv.bak until the next write", h)
+	}
 	return ExitOK
 }
 

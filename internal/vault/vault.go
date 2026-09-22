@@ -208,6 +208,14 @@ func aadFor(env envelope) []byte {
 // reports success can no longer revert vault.cpv to its pre-write state
 // with no indication anything was lost (CLA-56).
 //
+// Before that overwrite, Save preserves the generation it is about to
+// replace as vault.cpv.bak — also via atomicfile, so the backup itself
+// never lands half-written — best effort: a brand-new Vault has no prior
+// generation yet, which is not an error. This is the Vault's only backup
+// or recovery mechanism (CLA-59); docs/SECURITY.md documents the
+// consequence that a Handle removed by this Save still exists, encrypted,
+// in vault.cpv.bak until the next write.
+//
 // Save on its own does not make two concurrent writers safe: it guarantees
 // only that the write it was given lands whole or not at all, atomically
 // with respect to a concurrent reader. See Update for the actual
@@ -233,6 +241,13 @@ func (v *Vault) Save() error {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(v.path), 0o700); err != nil {
+		return err
+	}
+	if old, err := os.ReadFile(v.path); err == nil {
+		if err := atomicfile.Write(v.path+".bak", old, 0o600); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return atomicfile.Write(v.path, out, 0o600)
