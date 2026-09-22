@@ -430,6 +430,48 @@ func TestMCPCaptureRedactsCpassKeyFromStderr(t *testing.T) {
 	}
 }
 
+// TestMCPRunWithSecretsStripsCpassKeyFromChild is CLA-98 item 2's
+// regression test for the MCP-side half of CLA-54's acceptance criterion,
+// which named both `cpass run` and MCP `run_with_secrets` but only ever
+// got a test for the CLI path (TestRunStripsCpassKeyFromChild, e2e). It
+// drives run_with_secrets the same way: startMCP sets CPASS_KEY on the
+// `cpass mcp` process's own environment (its unlock source, exactly like a
+// CI/unattended `cpass run`), and the child — launched via run_with_secrets
+// rather than `cpass run` — dumps its own environment to a file with the
+// helper binary's existing HELPER_OUT pattern, never to stdout, so a
+// leaked value could never round-trip through the JSON-RPC stream even if
+// this assertion missed it. Runs with zero handles, matching the CLI
+// test's zero-`--with` case: the strip must not depend on any Handle
+// actually being resolved.
+func TestMCPRunWithSecretsStripsCpassKeyFromChild(t *testing.T) {
+	ve := newVault(t)
+	out := filepath.Join(t.TempDir(), "env.txt")
+	s := startMCP(t, ve, "HELPER_OUT="+out)
+	s.initialize()
+	parts, isError := s.callTool("run_with_secrets", map[string]any{
+		"command": []string{helperBin},
+	})
+	if isError {
+		t.Fatalf("run_with_secrets reported an error: %v", parts)
+	}
+	b, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read helper env dump: %v", err)
+	}
+	env := map[string]string{}
+	for _, line := range strings.Split(string(b), "\n") {
+		if k, v, ok := strings.Cut(line, "="); ok {
+			env[k] = v
+		}
+	}
+	if v, ok := env["CPASS_KEY"]; ok && v != "" {
+		t.Fatalf("child saw CPASS_KEY=%q via run_with_secrets: %v", v, env)
+	}
+	if env["CPASS_HOME"] != ve.home {
+		t.Fatalf("CPASS_HOME is a mode selector, not a Secret, and must still reach the child: %v", env)
+	}
+}
+
 func TestMCPRunWithSecretsUsesManifestWhenHandlesOmitted(t *testing.T) {
 	ve := newVault(t)
 	ve.add("a/one", "value-number-one")
