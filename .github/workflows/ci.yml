@@ -172,6 +172,62 @@ jobs:
           fi
           echo "ok: cpass run resolved the Manifest from the environment with no Vault"
 
+  coverage:
+    # Reports *real* coverage for internal/broker, internal/run,
+    # internal/cli and internal/mcp (CLA-88) — this project's own testing
+    # philosophy (CONTRIBUTING.md) exercises almost all of those four
+    # through the internal/e2e subprocess, which `go test -coverprofile`'s
+    # self-instrumentation cannot see at all: self-coverage reads 17.7%,
+    # 48.0%, 35.4% and 30.9% respectively purely as a tooling artifact,
+    # not because that code goes untested. A separate job from
+    # build-and-test above, not an extra step in it, so an ordinary
+    # `go test ./...` — there, in build-and-test, and for anyone running
+    # it locally — stays exactly as fast as before: the -cover build and
+    # GOCOVERDIR housekeeping only happen when E2E_COVERDIR is set, and
+    # only this job sets it (see internal/e2e/harness_test.go's
+    # e2eCoverDir doc comment, and CONTRIBUTING.md's "Real coverage,
+    # including the e2e subprocess" for the identical recipe run locally).
+    # continue-on-error: a coverage number is information, not a merge
+    # gate — build-and-test above is what actually fails on a broken test.
+    name: coverage (real, incl. e2e subprocess)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Combined coverage (unit tests + e2e subprocess binaries)
+        shell: bash
+        run: |
+          set -euo pipefail
+          covdir="$PWD/coverdata"
+          mkdir -p "$covdir"
+
+          # -test.gocoverdir makes `go test -cover` write every package's
+          # own unit-test coverage in the new binary format instead of a
+          # classic -coverprofile file; E2E_COVERDIR makes
+          # internal/e2e's TestMain build cpass/helper with -cover and
+          # point their GOCOVERDIR at the same directory, so the
+          # subprocess coverage internal/e2e's own suite drives lands
+          # right alongside it. One directory, one `covdata` read below —
+          # no separate merge step needed.
+          E2E_COVERDIR="$covdir" go test -cover ./... -args -test.gocoverdir="$covdir"
+
+          {
+            echo "### Real coverage (unit tests + e2e subprocess)"
+            echo '```'
+            go tool covdata percent -i="$covdir" \
+              -pkg=github.com/Elixion-ai/claudepass/internal/broker,github.com/Elixion-ai/claudepass/internal/run,github.com/Elixion-ai/claudepass/internal/cli,github.com/Elixion-ai/claudepass/internal/mcp
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
 # Branch protection (a repo setting, not expressible in this file): once
 # this workflow has run on main at least once, require both
 # "build-and-test (macos-latest)" and "build-and-test (ubuntu-latest)" as
