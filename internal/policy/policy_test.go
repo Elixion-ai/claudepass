@@ -65,6 +65,14 @@ func TestEvaluate(t *testing.T) {
 		// CLA-66: indirect expansion must be caught up front by Evaluate,
 		// the same as the direct $STRIPE_LIVE form.
 		{"indirect expansion of a bound variable", []string{"sh", "-c", `x=STRIPE_LIVE; echo "${!x}"`}, true},
+		// Reopened CLA-66 gap, same root cause CLA-61 fixed in split.go:
+		// the ticket's own literal reproduction is unquoted, and hit the
+		// same {/} mis-tokenization bug — only the quoted variant was
+		// ever covered, which masked it (Redaction still caught the
+		// bound value downstream in the live cpass run path, but this
+		// ticket's own acceptance criterion — refused up front by
+		// Evaluate — was unmet for the exact command it describes).
+		{"indirect expansion of a bound variable, unquoted braces", []string{"sh", "-c", `x=STRIPE_LIVE; echo ${!x}`}, true},
 		// refused: raw Secret-shaped literal (CLA-38 — reuses internal/detect)
 		{"raw secret literal in argv", []string{"curl", "-H", "Authorization: Bearer sk_live_51H8xJ2eZvKYlo2CTargvVALUEabcdefgh"}, true},
 		{"raw secret literal in shell string", []string{"sh", "-c", `curl -H "Authorization: Bearer sk_live_51H8xJ2eZvKYlo2CTshellVALUEabcdefgh"`}, true},
