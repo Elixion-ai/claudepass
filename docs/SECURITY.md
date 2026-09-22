@@ -159,6 +159,20 @@ that.
   disappearing. See `docs/THREATS.md` item 10 for what this warning does
   not catch (a merely-large ancestor, a symlinked or bind-mounted
   equivalent).
+- **`manifest check --effective`'s `MISSING` is deliberately stricter than
+  `cpass run`'s own graceful handling of a Global Handle.** The command
+  (`manifestCheckEffective`, `internal/cli/manifestcmd.go`) tags every
+  unresolvable Ref `MISSING` and exits `1` if any exist, regardless of
+  whether that Ref is `FromGlobal` — it does not distinguish a Global
+  Handle, which `cpass run` and `run_with_secrets` merely skip with a
+  notice and continue past, from a project-declared one, which they
+  hard-fail on. A project whose only unresolvable Handle is a drifted
+  ambient Global one therefore sees `manifest check --effective` exit `1`
+  even though the real `cpass run` for that same project would succeed. This
+  is intentional for a pre-flight/audit command — it answers "is everything
+  this project could receive actually available", not "would `cpass run`
+  succeed" — but a CI job using `--effective` to gate on the latter question
+  should know the two can disagree.
 - **The opt-out's round-trip guarantee, and its one real limit.** `Load` and
   `Save` (`internal/manifest/manifest.go`) keep, verbatim, any `[options]`
   key this binary doesn't itself parse and any whole section that is
