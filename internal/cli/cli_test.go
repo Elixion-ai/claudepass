@@ -392,6 +392,78 @@ func TestSubcommandHelpMatchesGrammar(t *testing.T) {
 	}
 }
 
+// TestLsFlagAfterPositional is the regression test for the bug where
+// cmdLs called fs.Parse directly instead of parseInterspersed: Go's flag
+// package stops parsing at the first positional, so `cpass ls demo -l`
+// silently dropped -l instead of erroring or honouring it. Each case
+// asserts the flag-after-positional spelling produces byte-identical
+// output to the flag-before-positional spelling every other test in this
+// file already exercises.
+func TestLsFlagAfterPositional(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(broker.EnvHome, home)
+	key := bytes.Repeat([]byte{0x11}, vault.KeySize)
+	t.Setenv(broker.EnvKey, base64.StdEncoding.EncodeToString(key))
+	vp, err := broker.VaultPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Create(vp, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Add("demo/one", "value-one", vault.AddOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Add("demo/two", "value-two", vault.AddOptions{Exposed: "added-exposed"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Add("other/three", "value-three", vault.AddOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(args ...string) (string, string, int) {
+		var out, errb bytes.Buffer
+		code := Main(args, strings.NewReader(""), &out, &errb)
+		return out.String(), errb.String(), code
+	}
+
+	cases := []struct {
+		name   string
+		before []string
+		after  []string
+	}{
+		{"exposed", []string{"ls", "--exposed", "demo"}, []string{"ls", "demo", "--exposed"}},
+		{"long", []string{"ls", "-l", "demo"}, []string{"ls", "demo", "-l"}},
+		{"global", []string{"ls", "--global", "demo"}, []string{"ls", "demo", "--global"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			wantOut, wantErr, wantCode := run(c.before...)
+			gotOut, gotErr, gotCode := run(c.after...)
+			if gotCode != wantCode || gotOut != wantOut || gotErr != wantErr {
+				t.Fatalf("%v = (%d, %q, %q), want %v = (%d, %q, %q)",
+					c.after, gotCode, gotOut, gotErr, c.before, wantCode, wantOut, wantErr)
+			}
+			if wantCode != ExitOK {
+				t.Fatalf("%v: exit = %d, want ExitOK (%d): %s", c.before, wantCode, ExitOK, wantErr)
+			}
+		})
+	}
+
+	// A second positional beyond the prefix is a usage error, not a
+	// silently ignored argument.
+	t.Run("extra positional", func(t *testing.T) {
+		_, errb, code := run("ls", "demo", "other")
+		if code != ExitUsage {
+			t.Fatalf("cpass ls demo other: exit = %d, want ExitUsage (%d): %s", code, ExitUsage, errb)
+		}
+	})
+}
+
 func TestUnknownCommandUsesNotice(t *testing.T) {
 	var out, errb bytes.Buffer
 	code := Main([]string{"not-a-real-command"}, strings.NewReader(""), &out, &errb)
