@@ -274,6 +274,140 @@ func TestInstallShContinuesWhenGitHubUnreachable(t *testing.T) {
 	}
 }
 
+// fakeGhOnPath writes a fake "gh" executable (script) into its own
+// directory and returns that directory, for prepending to $PATH — the
+// same trick used to exercise install.sh's "have gh" branch (CLA-79
+// level 4) deterministically, without a real `gh` binary or a live call
+// to GitHub's attestation API.
+func fakeGhOnPath(t *testing.T, script string) string {
+	t.Helper()
+	dir := t.TempDir()
+	ghPath := filepath.Join(dir, "gh")
+	if err := os.WriteFile(ghPath, []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// runInstallShWithFakeGh drives install.sh, with CPASS_SKIP_SIGNATURE_VERIFY
+// left unset (unlike every other test in this file) so the "have gh"
+// branch actually runs, against a fake gh put first on $PATH. cosign is
+// not stubbed: it either isn't on the test machine's PATH at all, or its
+// curl fetches for checksums.txt.sig/.pem 404 against the fixture GitHub
+// server below (which only serves checksums.txt), so signature_status
+// resolves to "unavailable" without ever invoking a real cosign binary,
+// on any machine.
+func runInstallShWithFakeGh(t *testing.T, ghScript string) (stdout, stderr string, err error) {
+	t.Helper()
+	scriptPath := installShPath(t)
+
+	const tag = "v9.9.9"
+	asset := fmt.Sprintf("cpass_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	archive := fixtureArchive(t, "cpass v9.9.9-test\n")
+	checksums := fixtureChecksums(asset, archive)
+
+	dlSrv := dlFixtureServer(t, tag, asset, archive, checksums)
+	ghSrv := ghFixtureServer(t, tag, checksums) // matches: cross-origin check passes cleanly
+
+	fakeGhDir := fakeGhOnPath(t, ghScript)
+
+	installDir := t.TempDir()
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Env = append(os.Environ(),
+		"CPASS_BASE_URL="+dlSrv.URL,
+		"CPASS_GITHUB_URL="+ghSrv.URL,
+		"CPASS_VERSION="+tag,
+		"CPASS_INSTALL_DIR="+installDir,
+		"PATH="+fakeGhDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	err = cmd.Run()
+	return out.String(), errb.String(), err
+}
+
+// TestInstallShAttestationUnavailableOnNoAttestation is CLA-79's
+// regression for the "have gh" branch of verify_signature: when gh
+// verify fails because no attestation exists yet for this subject (an
+// older release cut before this feature, reported by the real gh CLI as
+// an HTTP 404 from the attestations API), install.sh must report
+// "unavailable" — not "FAILED" — and must not print a tamper warning.
+func TestInstallShAttestationUnavailableOnNoAttestation(t *testing.T) {
+	out, errb, err := runInstallShWithFakeGh(t, `
+echo "Error: HTTP 404: Not Found (https://api.github.com/repos/Elixion-ai/claudepass/attestations/sha256:deadbeef)" >&2
+exit 1
+`)
+	if err != nil {
+		t.Fatalf("install.sh should still succeed when gh finds no attestation: %v\nstdout: %s\nstderr: %s", err, out, errb)
+	}
+	if !strings.Contains(out, "attestation: unavailable (no matching attestation found for v9.9.9)") {
+		t.Errorf("expected attestation to be reported unavailable, got stdout: %s", out)
+	}
+	if strings.Contains(errb, "the download may be tampered") {
+		t.Errorf("a missing attestation is not evidence of tampering; unexpected warning in stderr: %s", errb)
+	}
+}
+
+// TestInstallShAttestationFailedOnGenuineMismatch is the bug this ticket
+// fixes: gh attestation verify failing for any reason OTHER than "no
+// attestation found" (an attestation exists but doesn't match this
+// archive — a tampered download, or a mismatched build) must be reported
+// as FAILED, with a stderr warning, exactly like the cosign branch does
+// on a bad signature — never folded into the same "unavailable" wording
+// used for "this release predates the feature".
+func TestInstallShAttestationFailedOnGenuineMismatch(t *testing.T) {
+	out, errb, err := runInstallShWithFakeGh(t, `
+echo 'Error: verifying with issuer "https://token.actions.githubusercontent.com"' >&2
+echo 'Error: expected SAN value not found in signing certificate' >&2
+exit 1
+`)
+	if err != nil {
+		t.Fatalf("a failed opportunistic attestation check must not abort install: %v\nstdout: %s\nstderr: %s", err, out, errb)
+	}
+	if !strings.Contains(out, "attestation: FAILED (gh attestation could not verify build provenance)") {
+		t.Errorf("expected attestation to be reported FAILED, got stdout: %s", out)
+	}
+	if !strings.Contains(errb, "gh attestation could not verify") || !strings.Contains(errb, "the download may be tampered") {
+		t.Errorf("expected a tamper warning on stderr, got: %s", errb)
+	}
+}
+
+// TestInstallShAttestationVerified is the success path of the same
+// branch: gh attestation verify exiting 0 is reported as verified.
+func TestInstallShAttestationVerified(t *testing.T) {
+	out, errb, err := runInstallShWithFakeGh(t, `exit 0`)
+	if err != nil {
+		t.Fatalf("install.sh failed: %v\nstdout: %s\nstderr: %s", err, out, errb)
+	}
+	if !strings.Contains(out, "attestation: verified (gh attestation, build provenance)") {
+		t.Errorf("expected attestation to be reported verified, got stdout: %s", out)
+	}
+}
+
+// TestInstallShGhAttestationInvocationUsesCombinedRepoFlag is a static
+// regression guard for a bug this ticket also fixes: `gh attestation
+// verify` rejects --owner and --repo used together, and --repo requires
+// "<owner>/<repo>", not a bare repo name — `gh attestation verify FILE
+// --owner Elixion-ai --repo claudepass` (what this line used to read)
+// fails every single time with "invalid value provided for repo:
+// claudepass", regardless of whether a real attestation exists, which
+// silently made level 4 verification a no-op even when gh was present
+// and working. Asserted statically because reproducing the real failure
+// needs the actual `gh` binary and a live call to its argument parser —
+// the fake-gh tests above intentionally bypass gh's own CLI parsing.
+func TestInstallShGhAttestationInvocationUsesCombinedRepoFlag(t *testing.T) {
+	src, err := os.ReadFile(installShPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(src), `--owner "$gh_owner" --repo "$gh_repo"`) {
+		t.Fatalf(`install.sh must not pass --owner and --repo together to gh attestation verify (mutually exclusive, and --repo needs "<owner>/<repo>"); got the broken combined-flag form back`)
+	}
+	if !strings.Contains(string(src), `--repo "$gh_owner/$gh_repo"`) {
+		t.Fatalf(`expected gh attestation verify to be called with --repo "$gh_owner/$gh_repo", the combined <owner>/<repo> form gh requires`)
+	}
+}
+
 // fixtureArchive builds a tar.gz containing one executable file, "cpass",
 // a shell script that prints wantOutput — standing in for the real
 // cross-compiled binary an actual release ships.

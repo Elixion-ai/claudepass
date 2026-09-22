@@ -209,10 +209,25 @@ verify_signature() {
     fi
 
     if have gh; then
-        if gh attestation verify "$archive" --owner "$gh_owner" --repo "$gh_repo" >/dev/null 2>&1; then
+        gh_err="$workdir/gh-attestation.stderr"
+        # --owner and --repo are mutually exclusive to gh, and --repo takes
+        # "<owner>/<repo>", not a bare repo name — pass only the combined
+        # form, the same identity the cosign branch above pins with
+        # --certificate-identity-regexp.
+        if gh attestation verify "$archive" --repo "$gh_owner/$gh_repo" >/dev/null 2>"$gh_err"; then
             attestation_status="verified (gh attestation, build provenance)"
-        else
+        elif grep -qi "no attestations found\|HTTP 404" "$gh_err"; then
+            # gh's own wording for "nothing to check yet" — an older
+            # release cut before CLA-79, or a repo/artifact gh has never
+            # seen an attestation for. Not evidence of tampering.
             attestation_status="unavailable (no matching attestation found for $version)"
+        else
+            # Any other failure — including "found an attestation but it
+            # didn't verify against this archive" — is a real problem, not
+            # "this release predates the feature". Report it as such,
+            # mirroring signature_status's FAILED case above.
+            attestation_status="FAILED (gh attestation could not verify build provenance)"
+            echo "warning: gh attestation could not verify $archive's build provenance — the download may be tampered; see docs/SECURITY.md" >&2
         fi
     fi
 }

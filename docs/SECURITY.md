@@ -651,7 +651,7 @@ cosign verify-blob \
   checksums-gh.txt
 
 # Build-provenance attestation over the archive itself:
-gh attestation verify "$ASSET" --owner Elixion-ai --repo claudepass
+gh attestation verify "$ASSET" --repo Elixion-ai/claudepass
 ```
 
 **What still needs a real tag cut by the owner**: everything above was
