@@ -64,6 +64,11 @@ func TestEvaluateHook(t *testing.T) {
 		{"cat dotenv via input redirection", "cat < .env", true},
 		{"cat dotenv via literal-value variable", `f=.env; cat "$f"`, true},
 		{"cat dotenv via backslash-newline continuation", "ca\\\nt .env", true},
+		// Reopened CLA-61 gap: the unquoted ${f} spelling was tokenized as
+		// brace-grouping separators, so it silently bypassed the same
+		// literal-variable check the quoted "$f" case above already
+		// covered.
+		{"cat dotenv via unquoted-braces literal variable", `f=.env; cat ${f}`, true},
 		// CLA-64: the wrapper patterns the per-word scan must keep
 		// catching, unnarrowed by the false-positive fixes above.
 		{"find -exec cat .env still refused", `find . -exec cat .env \;`, true},
@@ -141,6 +146,12 @@ func TestEvaluateHookProtectedDirs(t *testing.T) {
 	}
 	if err := EvaluateHook(`sh -c "head -c 10 ` + target + `"`); err == nil {
 		t.Fatalf("the same path inside a nested shell should be refused: %s", target)
+	}
+	// Reopened CLA-61 gap: the same path assigned to a plain variable and
+	// referenced with unquoted ${...} braces must resolve back to the
+	// literal path too, not just a bare literal argument.
+	if err := EvaluateHook("RUNDIR_VAR=" + target + "; cat ${RUNDIR_VAR}"); err == nil {
+		t.Fatalf("the same path via an unquoted-braces variable should be refused: %s", target)
 	}
 	// An unrelated path outside the run dir root is unaffected.
 	if err := EvaluateHook("cat " + filepath.Join(home, "vault.cpv")); err != nil {

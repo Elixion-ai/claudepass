@@ -131,6 +131,22 @@ func splitCommands(s string) [][]word {
 			buf.WriteString("$(" + inner + ")")
 			inWord = true
 			i += 2 + n
+		case c == '$' && i+1 < len(s) && s[i+1] == '{':
+			// ${...} parameter expansion (${f}, ${!x} indirect expansion,
+			// ${VAR:-default}, ...): its closing brace belongs to the
+			// expansion, not to `{`/`}` command-grouping below, so the
+			// whole span is kept as one token — the interior is never
+			// scanned for separators. Without this case, an unquoted
+			// `cat ${f}` mis-tokenized into two commands ("cat $" and
+			// "f"), silently defeating the literal-variable and indirect-
+			// expansion checks below for this extremely common spelling
+			// (the quoted form "${f}" already worked, since quotes have
+			// their own self-contained loop above that never reaches this
+			// switch at all).
+			inner, n := matchBrace(s[i+2:])
+			buf.WriteString("${" + inner + "}")
+			inWord = true
+			i += 2 + n
 		case c == '`':
 			j := strings.IndexByte(s[i+1:], '`')
 			if j < 0 {
@@ -333,6 +349,27 @@ func matchParen(s string) (string, int) {
 		case '(':
 			depth++
 		case ')':
+			depth--
+			if depth == 0 {
+				return s[:i], i + 1
+			}
+		}
+	}
+	return s, len(s)
+}
+
+// matchBrace returns the text up to the curly brace matching an already
+// consumed "{" (from a "${" parameter expansion), and the number of bytes
+// consumed including the closer. Nested braces (${x:-${y}}) are balanced
+// by depth exactly like matchParen balances nested parens; an unterminated
+// expansion reads to end of string.
+func matchBrace(s string) (string, int) {
+	depth := 1
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '{':
+			depth++
+		case '}':
 			depth--
 			if depth == 0 {
 				return s[:i], i + 1

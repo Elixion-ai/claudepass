@@ -50,6 +50,12 @@ func TestEvaluate(t *testing.T) {
 		{"cat dotenv via literal-value variable", []string{"sh", "-c", `f=.env; cat "$f"`}, true},
 		{"cat dotenv via backslash-newline continuation", []string{"sh", "-c", "ca\\\nt .env"}, true},
 		{"source dotenv via literal-value variable", []string{"sh", "-c", `f=.env; source "$f"`}, true},
+		// Reopened CLA-61 gap: an unquoted ${f} was tokenized as
+		// brace-grouping separators ("cat $" / "f"), so the literal
+		// variable was never resolved back to .env for this idiomatic,
+		// extremely common spelling — only the quoted "$f" form above was
+		// covered.
+		{"cat dotenv via unquoted-braces literal variable", []string{"sh", "-c", `f=.env; cat ${f}`}, true},
 		// CLA-65: a public key or a template dotenv was never meant to be
 		// Vaulted, so these must not be refused with a dead-end "use
 		// cpass run instead".
@@ -136,6 +142,13 @@ func TestProtectedDirs(t *testing.T) {
 	if Evaluate(in) == nil {
 		t.Fatal("literal path in shell should be refused")
 	}
+	// Reopened CLA-61 gap: a run-dir path assigned to a plain variable and
+	// referenced with unquoted ${...} braces must resolve back to the
+	// literal path the same way the quoted "$VAR" form already does.
+	in.Argv = []string{"sh", "-c", "RUNDIR_VAR=/home/u/.config/claudepass/run/abc/gcp-sa; cat ${RUNDIR_VAR}"}
+	if Evaluate(in) == nil {
+		t.Fatal("literal path via unquoted-braces variable should be refused")
+	}
 	in.Argv = []string{"gcloud", "--key-file", "/home/u/.config/claudepass/run/abc/gcp-sa"}
 	if Evaluate(in) != nil {
 		t.Fatal("non-reader may use the path")
@@ -162,6 +175,46 @@ func TestSplitCommands(t *testing.T) {
 	}
 	if len(cmds[4][1].subs) != 1 || cmds[4][1].subs[0] != "l m" {
 		t.Fatalf("substitution: %+v", cmds[4][1])
+	}
+}
+
+// TestSplitCommandsUnquotedBraceExpansion is the reopened-CLA-61/CLA-66
+// regression: an unquoted ${...} parameter expansion (including ${!x}
+// indirect expansion) must tokenize as a single word, not as brace-
+// grouping separators around its interior. Before the fix, `cat ${f}`
+// mis-split into two simple commands ("cat $" and "f"), so cat never saw
+// ${f} as an argument at all and the literal-variable/indirect-expansion
+// checks downstream never ran.
+func TestSplitCommandsUnquotedBraceExpansion(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want [][]string
+	}{
+		{"plain parameter expansion", `cat ${f}`, [][]string{{"cat", "${f}"}}},
+		{"indirect expansion", `echo ${!x}`, [][]string{{"echo", "${!x}"}}},
+		{"quoted form still works (regression guard)", `cat "${f}"`, [][]string{{"cat", "${f}"}}},
+		// A bare, unrelated `{`/`}` (not immediately after `$`) is still
+		// treated as a command-grouping separator, unchanged.
+		{"unrelated bare braces still separate", `{ echo hi; }`, [][]string{{"echo", "hi"}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cmds := splitCommands(c.in)
+			if len(cmds) != len(c.want) {
+				t.Fatalf("got %d commands: %+v", len(cmds), cmds)
+			}
+			for i := range c.want {
+				if len(cmds[i]) != len(c.want[i]) {
+					t.Fatalf("cmd %d: got %+v want %v", i, cmds[i], c.want[i])
+				}
+				for j := range c.want[i] {
+					if cmds[i][j].raw != c.want[i][j] {
+						t.Fatalf("cmd %d word %d: got %q want %q", i, j, cmds[i][j].raw, c.want[i][j])
+					}
+				}
+			}
+		})
 	}
 }
 
