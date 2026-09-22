@@ -140,7 +140,8 @@ The Broker is the one place that ever holds a Secret's raw value: it
 resolves a Handle at the moment `cpass run` spawns your command and injects
 it into that one child process, nowhere else. Everything the command writes
 to stdout and stderr passes through Redaction on the way back, which
-replaces the value — and its base64, hex, percent- and JSON-escaped forms —
+replaces the value — and its base64, base32, hex, percent- and JSON-escaped
+forms —
 with `[REDACTED:<handle>]` before an Agent can read it; this is honest
 best-effort, not a guarantee, and `docs/SECURITY.md` says exactly what it
 does and doesn't catch. Command Policy refuses, before the command even

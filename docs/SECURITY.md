@@ -509,8 +509,10 @@ What it does cover, for every value injected into the current `cpass
 run`/`capture` invocation: the raw value; base64 in both the standard and
 URL-safe alphabets, at all three byte-alignments a value can start on
 inside a longer base64 stream (so a value embedded anywhere inside, say,
-`echo "token=$X" | base64` is still caught); hex; percent-encoding
-(`url.QueryEscape` and `url.PathEscape` forms); and JSON string-escaping.
+`echo "token=$X" | base64` is still caught); base32 (standard alphabet,
+padded and unpadded), at all five byte-alignments; hex, in both lower- and
+upper-case; percent-encoding (`url.QueryEscape` and `url.PathEscape`
+forms); and JSON string-escaping.
 Matching is streaming, over a sliding window at least as long as the
 longest such encoded form, so a match split across two separate writes
 (e.g. by a pipe buffer, or a command that flushes mid-value) is still
