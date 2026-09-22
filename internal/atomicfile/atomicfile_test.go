@@ -75,6 +75,28 @@ func TestWriteUsesAUniqueTempNameEachCall(t *testing.T) {
 	}
 }
 
+// TestWriteSyncsTheFileThenTheDirectory is CLA-56's regression test: Write
+// must fsync the temp file (durable before the rename that makes it live)
+// and then fsync the directory (durable that the rename itself happened),
+// in that order. A plain call-count or "no error" assertion would pass even
+// with both Sync calls deleted, so this wraps the calls themselves via
+// syncObserver, the one seam that can actually tell the two apart.
+func TestWriteSyncsTheFileThenTheDirectory(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "out.txt")
+	var calls []string
+	prev := syncObserver
+	syncObserver = func(what string) { calls = append(calls, what) }
+	defer func() { syncObserver = prev }()
+
+	if err := Write(p, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 || calls[0] != "file" || calls[1] != "dir" {
+		t.Fatalf("sync calls = %v, want [file dir] in that order", calls)
+	}
+}
+
 func TestWriteFailsCleanlyOnAMissingDirectory(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "does", "not", "exist", "out.txt")
 	if err := Write(p, []byte("x"), 0o600); err == nil {

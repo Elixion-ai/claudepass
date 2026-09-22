@@ -46,6 +46,7 @@ func Write(path string, data []byte, perm os.FileMode) (err error) {
 		_ = tmp.Close()
 		return fmt.Errorf("atomicfile: %w", serr)
 	}
+	notifySync("file")
 	if cerr := tmp.Close(); cerr != nil {
 		return fmt.Errorf("atomicfile: %w", cerr)
 	}
@@ -73,5 +74,20 @@ func syncDir(dir string) error {
 	if err := d.Sync(); err != nil {
 		return fmt.Errorf("atomicfile: %w", err)
 	}
+	notifySync("dir")
 	return nil
+}
+
+// syncObserver, when non-nil, is called once for each fsync Write performs
+// (the temp file's, then — after the rename — the directory's), in that
+// order. It exists only for this package's own tests (CLA-56): Go has no
+// portable way to observe fsync's actual effect, durability across a crash,
+// any other way, so the regression test for "Save calls Sync" wraps the
+// call itself instead.
+var syncObserver func(what string)
+
+func notifySync(what string) {
+	if syncObserver != nil {
+		syncObserver(what)
+	}
 }

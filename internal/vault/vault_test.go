@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -40,6 +41,47 @@ func TestRoundTrip(t *testing.T) {
 	}
 	if _, err := Open(p, key(2)); !errors.Is(err, ErrWrongKey) {
 		t.Fatalf("want ErrWrongKey, got %v", err)
+	}
+}
+
+// TestSaveDurablyReplacesTheFileWithNoTempDebris is CLA-56's regression
+// test. A Go test cannot observe fsync's actual effect — that only shows up
+// across a real crash — so this instead pins down the integration point
+// that CLA-56 changed: Vault.Save must go through internal/atomicfile's
+// write-fsync-rename-fsync sequence (already unit-tested for the fsync
+// calls themselves in internal/atomicfile) rather than a bare os.WriteFile,
+// for every one of several successive Saves — no unique per-invocation temp
+// file (CLA-55's own requirement) is ever left behind if that sequence
+// completed, so a leftover "v.cpv.tmp-*" after several Saves would mean the
+// durable-write path was bypassed or aborted partway through.
+func TestSaveDurablyReplacesTheFileWithNoTempDebris(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "v.cpv")
+	v, err := Create(p, key(6))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := v.Add(fmt.Sprintf("h/%d", i), fmt.Sprintf("value-number-%d-ok", i), AddOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := v.Save(); err != nil {
+			t.Fatalf("save %d: %v", i, err)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "v.cpv" {
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		t.Fatalf("directory should hold only v.cpv after 3 Saves, got %v", names)
+	}
+	if _, err := Open(p, key(6)); err != nil {
+		t.Fatalf("vault does not reopen after repeated Save: %v", err)
 	}
 }
 

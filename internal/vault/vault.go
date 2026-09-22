@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Elixion-ai/claudepass/internal/atomicfile"
 	"github.com/Elixion-ai/claudepass/internal/lockfile"
 )
 
@@ -199,10 +200,13 @@ func aadFor(env envelope) []byte {
 	return []byte(fmt.Sprintf("cpass-vault-v%d:%s:%s", env.Version, env.KeyNonce, env.WrappedKey))
 }
 
-// Save encrypts and atomically writes the Vault to disk with mode 0600, via
-// a per-invocation-unique temp file in the same directory (os.CreateTemp,
-// never the fixed v.path+".tmp" two Saves could otherwise race each other's
-// rename on) renamed into place.
+// Save encrypts and writes the Vault to disk with mode 0600, via
+// internal/atomicfile: staged in a per-invocation-unique temp file in the
+// same directory (never the fixed v.path+".tmp" two Saves could otherwise
+// race each other's rename on), fsynced, renamed into place, and the
+// directory fsynced after — so a crash or power loss right after cpass
+// reports success can no longer revert vault.cpv to its pre-write state
+// with no indication anything was lost (CLA-56).
 //
 // Save on its own does not make two concurrent writers safe: it guarantees
 // only that the write it was given lands whole or not at all, atomically
@@ -228,29 +232,10 @@ func (v *Vault) Save() error {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(v.path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(v.path), 0o700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, filepath.Base(v.path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(out); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := os.Chmod(tmpName, 0o600); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	return os.Rename(tmpName, v.path)
+	return atomicfile.Write(v.path, out, 0o600)
 }
 
 // lockSuffix names the sidecar lock file Update holds for the whole

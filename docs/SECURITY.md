@@ -26,8 +26,11 @@ that.
   on macOS, `$XDG_CONFIG_HOME/claudepass` (usually `~/.config/claudepass`) on
   Linux — and can be overridden with the `CPASS_HOME` environment variable.
   The file is written with mode `0600` inside a `0700` directory, atomically
-  (staged in a per-write, uniquely-named `vault.cpv.tmp-*` file, then
-  renamed over `vault.cpv`).
+  and durably (`internal/atomicfile`): staged in a per-write, uniquely-named
+  `vault.cpv.tmp-*` file, fsynced, renamed over `vault.cpv`, then the
+  containing directory is fsynced too — so a crash or power loss right after
+  cpass reports success cannot revert `vault.cpv` to its pre-write state
+  with no indication anything was lost.
 - **Concurrent writers** (`vault.Update`, `internal/lockfile`): every
   command that changes the Vault (`add`, `rm`, `mv`, `capture`, `import`,
   `intercept`, `mark-exposed`, `rotate-done`, and the MCP `capture` tool)
