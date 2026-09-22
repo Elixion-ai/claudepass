@@ -132,10 +132,29 @@ func Exists(path string) bool {
 }
 
 // Create initialises a new empty Vault at path under the given unlock key.
+//
+// Two concurrent `cpass init` runs against a fresh path both take Update's
+// own write lock (path+lockSuffix) for the whole check-then-create, and
+// re-check Exists once they hold it: an unlocked Exists-then-Save let both
+// runs pass the first check, create independently, and have the second
+// Save silently win the data key over the first — leaving a stray Keychain
+// item, on macOS, that no longer matches the Vault it started with (CLA-98
+// item 1, a CLA-55 follow-up).
 func Create(path string, key []byte) (*Vault, error) {
 	if len(key) != KeySize {
 		return nil, fmt.Errorf("vault: unlock key must be %d bytes", KeySize)
 	}
+	if Exists(path) {
+		return nil, fmt.Errorf("vault: %s already exists", path)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	lock, err := lockfile.Acquire(path+lockSuffix, lockfile.DefaultTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("vault: locking for create: %w", err)
+	}
+	defer func() { _ = lock.Release() }()
 	if Exists(path) {
 		return nil, fmt.Errorf("vault: %s already exists", path)
 	}

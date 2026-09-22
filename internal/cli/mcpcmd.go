@@ -20,7 +20,10 @@ func cmdMCP(e *env) int {
 	if fs.NArg() != 0 {
 		return e.fail(ExitUsage, "usage: cpass mcp")
 	}
-	if err := mcp.Serve(e.stdin, e.stdout, e.stderr, Version); err != nil {
+	// effectiveVersion, not the raw Version, so a `go install` build's
+	// initialize response names the same version `cpass version` prints
+	// instead of always falling back to "dev" (CLA-98 item 6).
+	if err := mcp.Serve(e.stdin, e.stdout, e.stderr, effectiveVersion()); err != nil {
 		return e.failErr(err)
 	}
 	return ExitOK

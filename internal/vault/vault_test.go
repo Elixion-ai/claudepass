@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -75,17 +77,19 @@ func TestSaveDurablyReplacesTheFileWithNoTempDebris(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// v.cpv and its CLA-59 backup v.cpv.bak are the only two files any
-	// number of successive Saves should leave behind — never a leftover
-	// "v.cpv.tmp-*" staging file from an aborted or bypassed atomicfile
-	// sequence.
+	// v.cpv, its CLA-59 backup v.cpv.bak, and Create's own CLA-98
+	// v.cpv.lock sidecar (never removed, per lockfile.Release's own doc
+	// comment) are the only files any number of successive Saves should
+	// leave behind — never a leftover "v.cpv.tmp-*" staging file from an
+	// aborted or bypassed atomicfile sequence.
 	names := make([]string, len(entries))
 	for i, e := range entries {
 		names[i] = e.Name()
 	}
 	sort.Strings(names)
-	if len(names) != 2 || names[0] != "v.cpv" || names[1] != "v.cpv.bak" {
-		t.Fatalf("directory should hold only v.cpv and v.cpv.bak after 3 Saves, got %v", names)
+	want := []string{"v.cpv", "v.cpv.bak", "v.cpv.lock"}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("directory should hold only %v after Create and 3 Saves, got %v", want, names)
 	}
 	if _, err := Open(p, key(6)); err != nil {
 		t.Fatalf("vault does not reopen after repeated Save: %v", err)
@@ -435,6 +439,53 @@ func TestConcurrentAddsAllSurvive(t *testing.T) {
 			t.Errorf("missing %s: %v", h, err)
 		}
 	}
+}
+
+// TestConcurrentCreateOnlyOneWins is CLA-98 item 1's regression test: two
+// concurrent `cpass init` runs against a fresh path must not both create
+// the Vault. Before the fix, Create's Exists check ran unlocked, so both
+// goroutines could pass it and each call Save with its own key — the
+// second Save silently overwriting the first's data key. With the fix,
+// exactly one Create succeeds and every other sees ErrExists (or the
+// "already exists" error Create wraps it in); whichever key won is the one
+// that unlocks the file afterwards.
+func TestConcurrentCreateOnlyOneWins(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "v.cpv")
+	const n = 20
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var winner byte
+	oks := 0
+	errsSeen := 0
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			k := key(byte(i + 1))
+			v, err := Create(p, k)
+			mu.Lock()
+			defer mu.Unlock()
+			if err == nil {
+				oks++
+				winner = byte(i + 1)
+				v.Close()
+			} else {
+				errsSeen++
+				if !strings.Contains(err.Error(), "already exists") {
+					t.Errorf("goroutine %d: unexpected error: %v", i, err)
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+	if oks != 1 {
+		t.Fatalf("got %d successful Creates, want exactly 1 (%d refused)", oks, errsSeen)
+	}
+	v, err := Open(p, key(winner))
+	if err != nil {
+		t.Fatalf("Open with the winning Create's key: %v", err)
+	}
+	v.Close()
 }
 
 func TestRenameKeepsCustomBinding(t *testing.T) {

@@ -248,15 +248,91 @@ func TestRunBackgroundedForwardsSIGINT(t *testing.T) {
 	if err != nil || pid <= 0 {
 		t.Fatalf("parse backgrounded cpass pid from %q: %v", out, err)
 	}
-	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) }) // best-effort if the assertion below fails first
+	// confirmedDead flips true only once the loop below has itself observed
+	// pid gone; the Cleanup below must not SIGKILL pid at all once that has
+	// happened (CLA-98 item 3) -- a pid the OS has since reused for an
+	// unrelated process would otherwise take a stray kill on this test's way
+	// out, for a test that had already passed.
+	confirmedDead := false
+	t.Cleanup(func() { _ = killIfStillAlive(pid, confirmedDead) }) // best-effort if the assertion below fails first
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		_ = syscall.Kill(pid, syscall.SIGINT)
 		if syscall.Kill(pid, 0) != nil {
+			confirmedDead = true
 			return // the backgrounded cpass (and the `sleep` it wraps) is gone
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("cpass pid %d (wrapping `sleep 30` in the background) still alive after repeated SIGINT for ~2s", pid)
+}
+
+// killIfStillAlive is TestRunBackgroundedForwardsSIGINT's Cleanup guard,
+// pulled out as its own function so TestKillIfStillAliveSkipsAConfirmedDeadPid
+// can call it directly rather than only ever running inside a closure no
+// test could invoke on its own. alreadyDead true means the caller itself
+// already observed pid gone (kill(pid, 0) failing) earlier in the same
+// process's lifetime, so sending it a signal now could only ever land on a
+// different process the OS has since reused that same pid number for
+// (CLA-98 item 3) -- never on the one this test actually launched.
+func killIfStillAlive(pid int, alreadyDead bool) error {
+	if alreadyDead {
+		return nil
+	}
+	return syscall.Kill(pid, syscall.SIGKILL)
+}
+
+// TestKillIfStillAliveSkipsAConfirmedDeadPid is CLA-98 item 3's regression
+// test. It proves killIfStillAlive's alreadyDead=true branch really does
+// skip sending the signal, not just that it returns nil: a second, wholly
+// unrelated process stands in for "the OS reused this pid number", and it
+// must survive a killIfStillAlive(pid, true) call untouched. The
+// alreadyDead=false branch is exercised on the same real process right
+// after, so both halves of the guard are pinned against an actual pid, not
+// a mocked syscall.
+func TestKillIfStillAliveSkipsAConfirmedDeadPid(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start stand-in process: %v", err)
+	}
+	pid := cmd.Process.Pid
+	// cmd.Wait is the only reliable "is it actually still running" signal
+	// here: kill(pid, 0) also succeeds against a killed-but-unreaped zombie,
+	// so it can't tell "still running" apart from "killed, not yet reaped" —
+	// exactly the two states this test needs to tell apart.
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	reaped := false
+	t.Cleanup(func() {
+		if reaped {
+			return
+		}
+		_ = syscall.Kill(pid, syscall.SIGKILL) // best-effort safety net
+		<-done                                 // drain so the goroutine above never leaks
+	})
+
+	if err := killIfStillAlive(pid, true); err != nil {
+		t.Fatalf("killIfStillAlive(alreadyDead=true) returned an error: %v", err)
+	}
+	select {
+	case err := <-done:
+		reaped = true
+		t.Fatalf("pid %d exited (wait err=%v) despite alreadyDead=true -- a reused pid would have taken this signal", pid, err)
+	case <-time.After(300 * time.Millisecond):
+		// still running, as intended: killIfStillAlive skipped the signal.
+	}
+
+	if err := killIfStillAlive(pid, false); err != nil {
+		t.Fatalf("killIfStillAlive(alreadyDead=false): %v", err)
+	}
+	select {
+	case err := <-done:
+		reaped = true
+		if err == nil {
+			t.Fatalf("sleep 30 (pid %d) exited cleanly, want it signal-killed by killIfStillAlive(alreadyDead=false)", pid)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("pid %d still alive 2s after killIfStillAlive(alreadyDead=false)", pid)
+	}
 }
