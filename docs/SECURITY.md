@@ -406,6 +406,8 @@ rather than runs unchecked):
   `base64`, `xxd`, `od`, `strings`, `hexdump`, `bat`, `tee`, `cp`, `nl`,
   `tac`, `rev`, `sort`, `uniq`, `cut`, `awk`, `sed`, `grep`, `jq`, `yq`,
   `dd`, `install`, `rsync`, `scp`) or a shell `source`/`.` builtin;
+- references a live file-Binding's run-directory path by literal path —
+  the same `$CPASS_HOME/run` root `cpass run` itself protects (CLA-63);
 - carries a raw Secret-shaped literal anywhere in the command text (the
   same entropy/prefix detector Intercept uses);
 - gives `cpass add` a second positional argument — an inline value, which

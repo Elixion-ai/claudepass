@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Elixion-ai/claudepass/internal/broker"
 )
 
 func TestEvaluateHook(t *testing.T) {
@@ -108,6 +110,27 @@ func TestEvaluateHookDoesNotLeakDetectedValueInRefusal(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), secret) {
 		t.Fatalf("refusal message must not repeat the Secret value: %v", err)
+	}
+}
+
+// TestEvaluateHookProtectedDirs is CLA-63's acceptance case: the hook must
+// refuse a raw Bash call that cats a live file-Binding's run-directory path
+// by literal path, matching policy_test.go's TestProtectedDirs coverage of
+// the non-hook path — EvaluateHook never wired ProtectedDirs in at all
+// before this fix, so this refused unconditionally on the old code.
+func TestEvaluateHookProtectedDirs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(broker.EnvHome, home)
+	target := filepath.Join(home, "run", "abc123", "gcp-sa")
+	if err := EvaluateHook("cat " + target); err == nil {
+		t.Fatalf("cat on a path under the run dir root should be refused: %s", target)
+	}
+	if err := EvaluateHook(`sh -c "head -c 10 ` + target + `"`); err == nil {
+		t.Fatalf("the same path inside a nested shell should be refused: %s", target)
+	}
+	// An unrelated path outside the run dir root is unaffected.
+	if err := EvaluateHook("cat " + filepath.Join(home, "vault.cpv")); err != nil {
+		t.Fatalf("a path outside the run dir root must not be refused: %v", err)
 	}
 }
 

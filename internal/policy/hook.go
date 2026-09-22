@@ -1,8 +1,10 @@
 package policy
 
 import (
+	"path/filepath"
 	"strings"
 
+	"github.com/Elixion-ai/claudepass/internal/broker"
 	"github.com/Elixion-ai/claudepass/internal/detect"
 )
 
@@ -18,6 +20,9 @@ import (
 //     the same rule Evaluate applies (see the package doc comment),
 //     checked here too so it catches a wrapped `cpass run` invocation
 //     before that subprocess ever starts, not only once it does;
+//   - references a live file-Binding's run-directory path by literal path
+//     (ProtectedDirs, the same rule `cpass run` itself applies — see
+//     runProtectedDirs);
 //   - carries a raw Secret-shaped literal (the CLA-10 detector) — again
 //     the same rule Evaluate applies, checked here unconditionally for the
 //     same reason;
@@ -47,11 +52,30 @@ func EvaluateHook(command string) error {
 		}
 	}
 	if !wrapsCpassRun(command) {
-		if err := Evaluate(Input{Argv: []string{"sh", "-c", command}}); err != nil {
+		in := Input{Argv: []string{"sh", "-c", command}, ProtectedDirs: runProtectedDirs()}
+		if err := Evaluate(in); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// runProtectedDirs returns the file-Binding run-directory root ProtectedDirs
+// guards ($CPASS_HOME/run), the same root internal/run.Run itself passes to
+// Evaluate — so a raw Bash call the Agent makes directly (not through
+// cpass run) can't cat a live file-Binding's plaintext Secret by literal
+// path either. This replicates internal/run's own runRoot logic locally
+// rather than importing internal/run, which itself imports internal/policy
+// (CLA-38); importing internal/broker here instead avoids that cycle. A
+// broker.Home error (unreadable config dir) yields no protected dirs rather
+// than failing the whole hook closed on an unrelated I/O problem — the
+// secret-file-glob and raw-literal rules above still apply regardless.
+func runProtectedDirs() []string {
+	home, err := broker.Home()
+	if err != nil {
+		return nil
+	}
+	return []string{filepath.Join(home, "run")}
 }
 
 // wrapsCpassRun reports whether any top-level simple command in command is
