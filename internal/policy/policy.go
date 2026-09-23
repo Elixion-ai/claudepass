@@ -15,9 +15,11 @@
 // bind — the Claude Code PreToolUse hook, so these rules are the same
 // everywhere with the small number of disclosed exceptions
 // docs/THREATS.md's own list states precisely (the hook's own `cpass add`
-// inline-value check, and the argv[0] exclusion from the raw-literal
-// scan): consult that list rather than assuming this comment enumerates
-// them, since a fix can close one without this file ever changing.
+// inline-value check, the argv[0] exclusion from the raw-literal scan,
+// and the hook-only printenv allowlist for well-known non-secret
+// variable names, CLA-102): consult that list rather than assuming this
+// comment enumerates them, since a fix can close one without this file
+// ever changing.
 package policy
 
 import (
@@ -53,6 +55,19 @@ type Input struct {
 	// own directory already IS where the command runs), Evaluate falls
 	// back to os.Getwd() itself.
 	Cwd string
+	// EnvAllowlist opts a small, fixed set of well-known non-secret
+	// variable names (hookEnvAllowlist, internal/policy/hook.go) out of
+	// the `printenv` reveal refusal below — set only by EvaluateHook
+	// (CLA-102). The hook has no Bound-variable knowledge at all, so
+	// without this it must refuse ANY `printenv NAME` conservatively,
+	// even an utterly ordinary `printenv PATH`/`printenv HOME` lookup,
+	// which is needless friction for everyday debugging. cpass run and
+	// the MCP server's own Evaluate calls never set this: real execution
+	// DOES have real Bound Secret values sitting in the same process
+	// environment as PATH/HOME, so this package keeps its stricter,
+	// allowlist-free printenv refusal there rather than assuming a name
+	// is safe just because it looks like an ordinary one.
+	EnvAllowlist bool
 }
 
 // Refusal explains why a command was refused. It is an error so the run
@@ -97,12 +112,13 @@ func Evaluate(in Input) error {
 		cwd, _ = os.Getwd()
 	}
 	ev := &evaluator{
-		bound:     map[string]vault.BindingKind{},
-		tainted:   map[string]bool{},
-		literals:  map[string]string{},
-		fds:       map[string]string{},
-		protected: in.ProtectedDirs,
-		cwd:       cwd,
+		bound:        map[string]vault.BindingKind{},
+		tainted:      map[string]bool{},
+		literals:     map[string]string{},
+		fds:          map[string]string{},
+		protected:    in.ProtectedDirs,
+		cwd:          cwd,
+		envAllowlist: in.EnvAllowlist,
 	}
 	for _, v := range in.Bound {
 		ev.bound[v.Name] = v.Kind
@@ -138,6 +154,10 @@ type evaluator struct {
 	// same "resolve only what's statically knowable" default
 	// ev.literals/ev.cwd already apply to a variable/cd target.
 	fds map[string]string
+	// envAllowlist mirrors Input.EnvAllowlist (see its own doc comment):
+	// true only for the evaluator EvaluateHook builds, never for a real
+	// cpass run / MCP server invocation.
+	envAllowlist bool
 }
 
 func (ev *evaluator) underProtected(w string) bool {
@@ -396,6 +416,15 @@ func (ev *evaluator) argv(argv []string, depth int) error {
 	}
 	switch {
 	case revealPrograms[prog]:
+		// CLA-102: at the hook layer only (ev.envAllowlist), printenv
+		// naming exclusively well-known, non-secret variables (PATH,
+		// HOME, ...) is not a reveal worth blocking everyday debugging
+		// over — see hookEnvAllowlist (hook.go) and Input.EnvAllowlist's
+		// own doc comment for why this is scoped to the hook and no
+		// further.
+		if prog == "printenv" && ev.envAllowlist && printenvAllowlisted(argv[1:]) {
+			return nil
+		}
 		return &Refusal{Rule: prog + " prints environment variables", Advice: "pass the variable to the tool that needs it instead"}
 	case prog == "env":
 		// env alone dumps; env [VAR=x]... cmd runs cmd.

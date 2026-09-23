@@ -460,6 +460,64 @@ func TestEvaluateHookReaderTriggerStillCatchesRealWrappers(t *testing.T) {
 	}
 }
 
+// TestEvaluateHookPrintenvAllowlist is CLA-102's acceptance case: at the
+// hook layer only, `printenv NAME` naming exclusively well-known,
+// non-secret variables (hookEnvAllowlist) is allowed — the hook has no
+// Bound-variable knowledge at all, so refusing an ordinary `printenv
+// PATH`/`printenv HOME` lookup was needless friction, not a caught
+// reveal. `echo $NAME`/`echo "${NAME}"` were already unaffected either
+// way (pinned here too, so that stays a conscious fact): the hook's own
+// synthetic Evaluate call has no Bound Secret to compare a variable
+// reference against, so a printer's argument is never refused there
+// regardless of which name it prints — the allowlist exists specifically
+// because `printenv`'s revealPrograms rule, unlike a printer's own
+// reference check, fires on the PROGRAM alone, with no Bound-variable
+// gate to already exempt an ordinary name.
+func TestEvaluateHookPrintenvAllowlist(t *testing.T) {
+	allowed := []string{
+		"printenv PATH",
+		"printenv HOME",
+		"printenv PATH HOME",
+		"printenv GOPATH",
+		"printenv LC_ALL",
+		"printenv XDG_CONFIG_HOME",
+		"echo $HOME",
+		`echo "${HOME}"`,
+		// echo of a name NOT on the allowlist is unaffected either way —
+		// the hook has no Bound Secret to check a printer's argument
+		// against at all (see this test's own doc comment) — pinned so a
+		// future change that starts gating echo the same way printenv is
+		// gated is a conscious edit, not a silent behavior change.
+		"echo $AWS_SECRET_ACCESS_KEY",
+	}
+	for _, command := range allowed {
+		t.Run(command, func(t *testing.T) {
+			if err := EvaluateHook(command); err != nil {
+				t.Fatalf("command %q: expected allowed, got refused: %v", command, err)
+			}
+		})
+	}
+
+	refused := []string{
+		"printenv",
+		"printenv AWS_SECRET_ACCESS_KEY",
+		// An allow-listed name wrapped around a non-allow-listed one:
+		// the whole invocation stays refused rather than silently
+		// printing just the allow-listed one.
+		"printenv PATH AWS_SECRET_ACCESS_KEY",
+		"printenv AWS_SECRET_ACCESS_KEY PATH",
+		"env | grep PATH",
+		"env",
+	}
+	for _, command := range refused {
+		t.Run(command, func(t *testing.T) {
+			if err := EvaluateHook(command); err == nil {
+				t.Fatalf("command %q: expected a refusal, got allowed", command)
+			}
+		})
+	}
+}
+
 // TestEvaluateHookMaxDepthFailsClosed is the hook-layer half of
 // TestMaxDepthFailsClosed (policy_test.go): a command nested more than
 // maxDepth shells/substitutions deep now refuses rather than silently

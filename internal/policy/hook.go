@@ -69,11 +69,64 @@ func EvaluateHook(command string) error {
 	// expensive in any way that matters: it is the same catch, just made
 	// to also happen before the cpass run subprocess starts, matching
 	// this function's own doc comment above).
-	in := Input{Argv: []string{"sh", "-c", command}, ProtectedDirs: runProtectedDirs()}
+	//
+	// EnvAllowlist: true opts the well-known non-secret variable names in
+	// hookEnvAllowlist below out of the printenv reveal refusal — see
+	// Input.EnvAllowlist's own doc comment (CLA-102) for why this is set
+	// here and nowhere else Evaluate is called from.
+	in := Input{Argv: []string{"sh", "-c", command}, ProtectedDirs: runProtectedDirs(), EnvAllowlist: true}
 	if err := Evaluate(in); err != nil {
 		return err
 	}
 	return nil
+}
+
+// hookEnvAllowlist is the small, fixed set of well-known, non-secret
+// variable names `printenv NAME` may name at the PreToolUse hook layer
+// without being refused (CLA-102): ordinary shell/session/toolchain
+// variables no cpass user has ever Bound a Secret to, whose value an
+// Agent routinely needs for everyday debugging (what's on PATH, which Go
+// toolchain, which virtualenv is active, ...). LC_* and XDG_* are
+// recognised by prefix (hookEnvAllowed below) rather than listed
+// individually, matching how a real shell environment actually
+// populates them (LC_ALL, LC_CTYPE, LC_COLLATE, ...; XDG_CONFIG_HOME,
+// XDG_CACHE_HOME, XDG_DATA_HOME, ...). Documented in docs/SECURITY.md —
+// the two must never diverge.
+var hookEnvAllowlist = map[string]bool{
+	"PATH": true, "HOME": true, "USER": true, "SHELL": true,
+	"PWD": true, "OLDPWD": true, "LANG": true, "TERM": true,
+	"TMPDIR": true, "GOPATH": true, "GOROOT": true, "GOBIN": true,
+	"NODE_ENV": true, "VIRTUAL_ENV": true, "CONDA_PREFIX": true,
+	"JAVA_HOME": true, "EDITOR": true, "PAGER": true, "HOSTNAME": true,
+}
+
+// hookEnvAllowed reports whether name is on hookEnvAllowlist above, or
+// matches one of its two recognised prefixes (LC_*/XDG_*).
+func hookEnvAllowed(name string) bool {
+	if hookEnvAllowlist[name] {
+		return true
+	}
+	return strings.HasPrefix(name, "LC_") || strings.HasPrefix(name, "XDG_")
+}
+
+// printenvAllowlisted reports whether args — the words following
+// `printenv` — are one or more bare NAME arguments, every one of them
+// hookEnvAllowed: `printenv` with NO arguments dumps every variable
+// (still refused, matching bare env/printenv elsewhere in this package),
+// and a single non-allow-listed name anywhere in the list — mixed in
+// with allow-listed ones or not — keeps the whole invocation refused
+// rather than silently printing just that one (`printenv PATH
+// AWS_SECRET_ACCESS_KEY` stays refused).
+func printenvAllowlisted(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	for _, a := range args {
+		if !hookEnvAllowed(a) {
+			return false
+		}
+	}
+	return true
 }
 
 // runProtectedDirs returns the file-Binding run-directory root ProtectedDirs

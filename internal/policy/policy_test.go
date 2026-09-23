@@ -1532,3 +1532,22 @@ func TestMaxDepthFailsClosed(t *testing.T) {
 		t.Fatalf("a command within maxDepth with nothing dangerous should stay allowed: %v", err)
 	}
 }
+
+// TestEnvAllowlistIsHookOnly is CLA-102's own stated scope: the
+// printenv allowlist is opted into by Input.EnvAllowlist, which only
+// EvaluateHook ever sets. A direct Evaluate call — the one cpass run and
+// the MCP server's run_with_secrets/capture tools actually gate real
+// execution with — leaves EnvAllowlist false by default and so keeps
+// refusing `printenv PATH` even though PATH is on hookEnvAllowlist: real
+// execution has real Bound Secret values sitting in the same process
+// environment as PATH, so this package deliberately does not extend the
+// hook's allowlist there (see Input.EnvAllowlist's own doc comment).
+func TestEnvAllowlistIsHookOnly(t *testing.T) {
+	argv := []string{"printenv", "PATH"}
+	if err := Evaluate(Input{Argv: argv}); err == nil {
+		t.Fatalf("argv %v: printenv PATH should still be refused when EnvAllowlist is left unset (the cpass run / MCP path)", argv)
+	}
+	if err := Evaluate(Input{Argv: argv, EnvAllowlist: true}); err != nil {
+		t.Fatalf("argv %v: printenv PATH should be allowed once EnvAllowlist is explicitly set: %v", argv, err)
+	}
+}

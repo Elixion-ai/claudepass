@@ -666,6 +666,23 @@ rather than runs unchecked):
   `/proc/*/environ`, or a shell/`set -x` trace flag — unless the command is
   itself a `cpass run` invocation, since that one re-applies the equivalent
   checks at execution time against its real Bound variables (see below).
+  **Exception (CLA-102, hook layer only):** `printenv NAME` is allowed
+  when every `NAME` given is on a small, fixed allowlist of well-known,
+  non-secret variables — `PATH`, `HOME`, `USER`, `SHELL`, `PWD`,
+  `OLDPWD`, `LANG`, `LC_*`, `TERM`, `TMPDIR`, `GOPATH`, `GOROOT`,
+  `GOBIN`, `NODE_ENV`, `VIRTUAL_ENV`, `CONDA_PREFIX`, `JAVA_HOME`,
+  `EDITOR`, `PAGER`, `HOSTNAME`, and `XDG_*` — since the hook has no
+  Bound-variable knowledge at all and would otherwise refuse even an
+  utterly ordinary `printenv PATH`/`printenv HOME` lookup. Bare
+  `printenv`/`env`, any name not on that list (`printenv
+  AWS_SECRET_ACCESS_KEY`), an allow-listed name mixed with a
+  non-allow-listed one (`printenv PATH AWS_SECRET_ACCESS_KEY`), and any
+  pipeline that dumps the whole environment (`env | grep PATH`) all stay
+  refused. This allowlist applies only to `cpass policy --hook`'s own
+  `Evaluate` call (`Input.EnvAllowlist`): `cpass run` and the MCP
+  server's `run_with_secrets`/`capture` tools never set it, since real
+  execution has real Bound Secret values sitting in the same process
+  environment as `PATH`/`HOME`.
 
 This hook never opens the Vault and makes no network call; it is a pure,
 static judgment over the command text (`internal/policy`).

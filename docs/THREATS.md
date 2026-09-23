@@ -152,34 +152,47 @@ value can still end up somewhere it shouldn't, today:
    other completes a match risks over-redaction and race conditions
    between the two streams' writers — so this is recorded here as a
    disclosed limitation rather than attempted in this pass.
-5. **Two narrow, deliberate differences remain between the PreToolUse hook
-   and the other two surfaces** (closed for the file-glob and raw-literal
-   rules themselves by CLA-38 — see below). `cpass policy --hook` alone
-   refuses `cpass add <handle> <value>` (an inline second positional
-   argument defeats the terminal gate `cpass add`'s own hidden prompt
-   enforces): there is no equivalent check in `cpass run` or the MCP
-   server, since only the hook inspects a raw Bash command line before
-   `cpass` has parsed anything, and `cpass add` is not a command either of
-   them wraps. Separately, the hook's raw-literal scan (`internal/detect`)
-   covers a command's entire text, including its program's own path,
-   while the shared `Evaluate` (used by `cpass run`, the MCP server's
-   `run_with_secrets`/`capture` tools, and the hook itself) deliberately
-   excludes argv[0] from that scan: a real executable path — a build
-   artifact under a randomly named temp directory, a versioned tool under
-   a hashed store path — routinely reads as high-entropy to the same
-   heuristic without being a Secret, and a Secret value is never itself
-   the program being executed, so nothing is actually missed by excluding
-   it. Before CLA-38, the secret-file-glob rule (`.env*`, `*.pem`,
-   `id_rsa*`, `*.key`, `credentials*.json`, `.netrc`, `.npmrc`) and the
-   raw-literal rule applied only to the hook: `cpass run -- cat .env` and
-   an MCP `run_with_secrets` call with `command: ["cat", ".env"]` were
-   **not** refused, even though the functionally identical Bash tool call
-   inside Claude Code was — and `internal/policy`'s package doc comment
+5. **Three narrow, deliberate differences remain between the PreToolUse
+   hook and the other two surfaces** (closed for the file-glob and
+   raw-literal rules themselves by CLA-38 — see below). `cpass policy
+   --hook` alone refuses `cpass add <handle> <value>` (an inline second
+   positional argument defeats the terminal gate `cpass add`'s own
+   hidden prompt enforces): there is no equivalent check in `cpass run`
+   or the MCP server, since only the hook inspects a raw Bash command
+   line before `cpass` has parsed anything, and `cpass add` is not a
+   command either of them wraps. Separately, the hook's raw-literal scan
+   (`internal/detect`) covers a command's entire text, including its
+   program's own path, while the shared `Evaluate` (used by `cpass run`,
+   the MCP server's `run_with_secrets`/`capture` tools, and the hook
+   itself) deliberately excludes argv[0] from that scan: a real
+   executable path — a build artifact under a randomly named temp
+   directory, a versioned tool under a hashed store path — routinely
+   reads as high-entropy to the same heuristic without being a Secret,
+   and a Secret value is never itself the program being executed, so
+   nothing is actually missed by excluding it. A third difference,
+   narrower still and added by CLA-102: `cpass policy --hook` alone
+   allows `printenv NAME` when every `NAME` given is on a small, fixed
+   allowlist of well-known, non-secret variables (`PATH`, `HOME`, `LANG`,
+   `GOPATH`, ... — see `docs/SECURITY.md`'s full list). This exists
+   because the hook has no Bound-variable knowledge at all — unlike
+   `cpass run` and the MCP server, which run with real Bound Secret
+   values already sitting in the same process environment as `PATH`/
+   `HOME` — so it would otherwise refuse even an utterly ordinary
+   `printenv PATH` lookup; those two other surfaces deliberately keep the
+   stricter, allowlist-free refusal, since assuming a name is safe there
+   just because it looks like an ordinary one is a different, higher-cost
+   bet once real Secret values are actually present. Before CLA-38, the
+   secret-file-glob rule (`.env*`, `*.pem`, `id_rsa*`, `*.key`,
+   `credentials*.json`, `.netrc`, `.npmrc`) and the raw-literal rule
+   applied only to the hook: `cpass run -- cat .env` and an MCP
+   `run_with_secrets` call with `command: ["cat", ".env"]` were **not**
+   refused, even though the functionally identical Bash tool call inside
+   Claude Code was — and `internal/policy`'s package doc comment
    overclaimed "the same evaluator serves `cpass run`, the ... hook, and
    the MCP server, so behaviour is identical everywhere." Both rules now
    live in the shared `Evaluate`, so all three surfaces refuse the same
    file reads and raw literals; the package doc comment states precisely
-   the two differences left above.
+   the three differences left above.
 6. **The `!!` Intercept bypass is a deliberate escape hatch, not a filter
    that got weaker.** It exists so a false positive never blocks real
    work; using it on an actual Secret sends that value into the Agent's
@@ -547,6 +560,15 @@ value can still end up somewhere it shouldn't, today:
     subcommand semantics — the same unbounded task this item already
     declines for third-party tools generally. Redaction and `cpass
     import` remain the enforced boundary for this narrower shape.
+
+    **CLA-102 (2026-09-23 audit follow-up)** is not a residual-class item
+    on its own — it is the hook-only `printenv` allowlist documented in
+    item 5 above — but is noted here too since it is the same kind of
+    "narrow the check, disclose what narrowing costs" trade-off: a
+    `printenv` call naming only well-known, non-secret variables no
+    longer refuses at the hook layer, and the fixed, small allowlist
+    (`docs/SECURITY.md`) is itself the disclosed boundary — a name not on
+    it stays refused exactly as before, by design, not by omission.
 
 ## Intercept precision (v0.1.4)
 
