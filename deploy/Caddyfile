@@ -63,11 +63,11 @@ claudepass.com {
 	root * /srv/claudepass/site
 
 	# The release mirror install.sh and the Homebrew formula pull from
-	# (CLA-16) — plain static files, directory listing off.
+	# (CLA-16) — plain static files. Caddy lists no directories unless
+	# `browse` is present; `browse` takes a template path, not on/off, so
+	# `browse off` made every directory request fail with a 500 (CLA-104).
 	handle /dl/* {
-		file_server {
-			browse off
-		}
+		file_server
 	}
 
 	handle {

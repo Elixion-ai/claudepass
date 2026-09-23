@@ -67,7 +67,7 @@ func TestConcurrentAddsAllSurvive(t *testing.T) {
 		if results[i].code != 0 {
 			t.Fatalf("add %d failed: %s", i, results[i])
 		}
-		if strings.Contains(results[i].stderr, "no such file or directory") {
+		if renameRaced(results[i].stderr) {
 			t.Fatalf("add %d raced another writer's rename: %s", i, results[i])
 		}
 	}
@@ -175,4 +175,21 @@ func TestConcurrentAddGlobalDeclarationsAllSurvive(t *testing.T) {
 			t.Errorf("global.toml is missing %s:\n%s", want, raw)
 		}
 	}
+}
+
+// renameRaced reports whether stderr shows a Vault write losing a rename
+// race. Lines from Go's coverage runtime are skipped: under the CI coverage
+// job (CLA-88) many -cover binaries share one GOCOVERDIR and that runtime
+// prints the same "no such file or directory" while racing to write its
+// covmeta/covcounters files, which says nothing about the Vault (CLA-104).
+func renameRaced(stderr string) bool {
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.Contains(line, "covmeta") || strings.Contains(line, "covcounters") || strings.Contains(line, "coverage") {
+			continue
+		}
+		if strings.Contains(line, "no such file or directory") {
+			return true
+		}
+	}
+	return false
 }
