@@ -213,16 +213,19 @@ func hookWalk(command string, depth int, literals map[string]string) *Refusal {
 					}
 				}
 			}
-			if readers[prog] && readerIsProgramPosition(words, i) {
-				// readerIsProgramPosition (CLA-101) is what keeps a
-				// reader behind a wrapper this list doesn't enumerate
-				// (`find . -exec cat .env \;`, `timeout 5 cat .env`,
-				// `nice cat .env`, `xargs cat < .env`, `sudo cat .env`)
-				// refused without narrowing detection to argv[0] plus a
-				// fixed allowlist of wrappers, while no longer treating a
-				// multi-level CLI's own subcommand that merely shares a
-				// reader's name (`aws logs tail ...`) as a program
-				// position at all — see its own doc comment.
+			if readers[prog] && !isCoincidentalReaderSubcommand(rawWordAt(words), commandStartIndex(words), i) {
+				// isCoincidentalReaderSubcommand (policy.go, CLA-101
+				// review) is what keeps a reader behind a wrapper this
+				// list doesn't enumerate (`find . -exec cat .env \;`,
+				// `timeout 5 cat .env`, `nice cat .env`, `xargs cat <
+				// .env`, `sudo cat .env`, `docker exec c cat .env`,
+				// `chroot / cat .env`, `strace -f cat .env`, `setsid cat
+				// .env`, `unshare cat .env`, `stdbuf -oL cat .env`, ...)
+				// refused at ANY word position, while excluding only the
+				// small, specific set of multi-level CLI subcommands that
+				// merely share a reader's name without behaving like one
+				// (`aws logs tail ...`, `kubectl cp ...`) — see its own
+				// doc comment.
 				//
 				// A pure-output program's own arguments are data it
 				// prints, not programs it runs: `echo cat .env` never
@@ -344,24 +347,35 @@ func commandStart(words []word, i int) bool {
 	return true
 }
 
-// readerIsProgramPosition reports whether word position i in words is
-// where a genuine reader-program invocation is expected: the command's
-// own first word (found the same way commandStart finds it, so a
-// leading VAR=value run before a bare `cat .env` is still recognised,
-// e.g. `DEBUG=1 cat .env`), or immediately after a known trigger word
-// (isReaderTrigger, policy.go) — the tail of a wrapper this package's
-// own `wrappers` map doesn't enumerate, or find's exec-style flags / a
-// bare `xargs`'s own first argument. Mirrors readerWordRefusal's
-// identical narrowing (policy.go) for the flat-argv, no-shell path — see
-// its own doc comment for what requiring this excludes and why
-// (CLA-101): a reader name elsewhere in the word list — most commonly a
-// multi-level CLI's own subcommand sharing a reader's name (`aws logs
-// tail`) — is not a program position at all.
-func readerIsProgramPosition(words []word, i int) bool {
-	if commandStart(words, i) {
-		return true
+// commandStartIndex returns the index of a command's own program-name
+// word within words: position 0, or the first word after a leading run
+// of VAR=value assignments — the same position commandStart (above) and
+// printerArg (below) each locate for their own purposes, but as an
+// index rather than a boolean, since isCoincidentalReaderSubcommand
+// (policy.go) needs to know which word is a multi-level CLI's own
+// program name to look it up in coincidentalReaderSubcommands.
+func commandStartIndex(words []word) int {
+	j := 0
+	for j < len(words) && assignment.MatchString(words[j].raw) {
+		j++
 	}
-	return isReaderTrigger(base(words[i-1].raw))
+	return j
+}
+
+// rawWordAt adapts a []word list to the wordAt(int) string shape
+// isCoincidentalReaderSubcommand (policy.go) takes, so hookWalk's
+// per-word reader scan can share that exact same coincidental-
+// subcommand denylist logic with readerWordRefusal's flat-argv
+// equivalent — out-of-range indices (a path that would reach past
+// either end of words) return "", which never equals a real subcommand
+// segment, matching wordAt's existing contract.
+func rawWordAt(words []word) func(int) string {
+	return func(k int) string {
+		if k < 0 || k >= len(words) {
+			return ""
+		}
+		return words[k].raw
+	}
 }
 
 // printerArg reports whether word position i in words is an argument

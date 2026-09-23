@@ -1271,19 +1271,21 @@ func TestReaderPatternArgumentNotAFilename(t *testing.T) {
 }
 
 // TestReaderWordRefusalCoincidentalSubcommand is CLA-101's acceptance
-// case: readerWordRefusal's flat per-word scan (and hookWalk's identical
-// one) now requires a genuine trigger word — a known wrapper, one of
-// find's exec-style flags, a bare xargs, or `--` (isReaderTrigger) —
-// immediately before a reader-name word, so a multi-level CLI's own
-// subcommand that merely shares a reader's name (`aws logs tail`,
-// `kubectl cp`) is no longer treated as a program position at all. The
-// same narrowing has a disclosed collateral cost (readerWordRefusal's
-// own doc comment, docs/THREATS.md item 16): a multi-level CLI
-// subcommand that — unlike `tail`/`cp` above — genuinely DOES read a
-// local file (`git grep PATTERN .env`) is no longer caught by this
-// fallback either, since `git` is neither a wrapper nor an exec-style
-// flag; that shape is pinned here too, deliberately, so a future change
-// to it is a conscious edit, not a silent regression.
+// case, updated by CLA-101's own review fix: readerWordRefusal's flat
+// per-word scan (and hookWalk's identical one) matches a reader name at
+// ANY word position again, exactly like before CLA-101, EXCEPT for the
+// small, specific set of multi-level CLI subcommands that merely share a
+// reader's name without behaving like one at all
+// (coincidentalReaderSubcommands) — `aws logs tail`, `aws s3 cp` and
+// `kubectl cp` here. CLA-101's original fix instead required a genuine
+// trigger word (a known wrapper, an exec-style flag, xargs, or --)
+// immediately before a reader-name word, which also closed these three
+// false positives, but as its own review found, silently stopped
+// catching every OTHER wrapper this package doesn't happen to enumerate
+// too (see TestEvaluateReaderBehindUnenumeratedWrapper below) — a
+// regression this denylist-based fix does not reintroduce: a reader name
+// behind a wrapper, real or synthetic, unrelated to this denylist stays
+// caught regardless of what precedes it.
 func TestReaderWordRefusalCoincidentalSubcommand(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -1292,23 +1294,87 @@ func TestReaderWordRefusalCoincidentalSubcommand(t *testing.T) {
 	}{
 		{"aws logs tail's own subcommand is not the tail(1) reader",
 			[]string{"aws", "logs", "tail", "/aws/lambda/f", "--filter-pattern", ".env"}, false},
+		{"aws s3 cp's own subcommand is not the cp(1) reader",
+			[]string{"aws", "s3", "cp", "s3://bucket/.env", "."}, false},
 		{"kubectl cp's own subcommand is not the cp(1) reader",
 			[]string{"kubectl", "cp", "pod:/x", ".env"}, false},
-		// Collateral, disclosed gap: git's own grep subcommand genuinely
-		// reads the named file, unlike the two cases above, but this
-		// fallback can no longer tell it apart from a coincidental
-		// subcommand name using argv text alone (readerWordRefusal's own
-		// doc comment).
-		{"disclosed gap: git grep's own subcommand genuinely reads the file but is no longer caught",
-			[]string{"sh", "-c", `git grep pattern .env`}, false},
-		// Paired: the same reader names, genuinely invoked behind a real
-		// trigger, still refuse.
+		// Reverted collateral effect of CLA-101's own narrowing: git's
+		// own grep subcommand genuinely reads the named file — unlike
+		// the coincidental cases above — and is not on the denylist, so
+		// it is refused again exactly as it was before CLA-101, which is
+		// correct: this was always a real read, not a false positive.
+		{"git grep's own subcommand genuinely reads the file and is refused",
+			[]string{"sh", "-c", `git grep pattern .env`}, true},
+		// The denylist matches only the CLI's own subcommand path in its
+		// exact, contiguous position right after the CLI name — a reader
+		// name that merely follows an unrelated word, even one that
+		// happens to also be a denylisted CLI's name, is not exempted.
+		{"aws logs tail exemption does not match a different aws subcommand path",
+			[]string{"aws", "ec2", "tail", ".env"}, true},
+		{"kubectl cp exemption does not apply once kubectl isn't argv[0]",
+			[]string{"find", ".", "-exec", "kubectl", "cp", "pod:/x", ".env", ";"}, true},
+		// Paired: the same reader names, genuinely invoked at any word
+		// position (trigger word or not), still refuse.
 		{"cpass run's own -- separator still triggers",
 			[]string{"cpass", "run", "--", "cat", ".env"}, true},
 		{"find -exec still triggers",
 			[]string{"find", ".", "-exec", "tail", ".env", ";"}, true},
 		{"bare xargs still triggers",
 			[]string{"xargs", "cat", ".env"}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: c.argv})
+			if (err != nil) != c.refused {
+				t.Fatalf("argv %v: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestEvaluateReaderBehindUnenumeratedWrapper is CLA-101's own review
+// finding (round 2): CLA-101's original fix collapsed readerWordRefusal
+// / hookWalk's broad per-word reader scan down to "only right after a
+// known trigger word (a wrapper, an exec-style flag, xargs, or --)" —
+// closing the aws/kubectl coincidental-subcommand false positive, but
+// also silently dropping every OTHER wrapper name this package's own
+// `wrappers` map doesn't happen to enumerate, even though its argv text
+// plainly, unambiguously names the reader right there. This mirrors
+// TestEvaluateShellBehindUnenumeratedWrapper's own made-up-wrapper-name
+// pattern above (same doc comment rationale: the list of real-world
+// wrapper/tracing/namespacing utilities can never be exhaustively
+// enumerated), but for a bare READER, not a shell — proving a reader
+// behind ANY unenumerated wrapper, not only the specific ones named in
+// the review, is refused again.
+func TestEvaluateReaderBehindUnenumeratedWrapper(t *testing.T) {
+	dotenv := "." + "env"
+	cases := []struct {
+		name    string
+		argv    []string
+		refused bool
+	}{
+		{"docker exec hides a reader invocation",
+			[]string{"docker", "exec", "mycontainer", "cat", dotenv}, true},
+		{"chroot hides a reader invocation",
+			[]string{"chroot", "/", "cat", dotenv}, true},
+		{"strace hides a reader invocation",
+			[]string{"strace", "-f", "cat", dotenv}, true},
+		{"setsid hides a reader invocation",
+			[]string{"setsid", "cat", dotenv}, true},
+		{"unshare hides a reader invocation",
+			[]string{"unshare", "cat", dotenv}, true},
+		{"stdbuf hides a reader invocation",
+			[]string{"stdbuf", "-oL", "cat", dotenv}, true},
+		// A made-up wrapper name, standing in for the whole unenumerable
+		// class this fallback exists to catch in the first place.
+		{"a totally unenumerated wrapper name, same shape",
+			[]string{"totally-unenumerable-shim", "cat", dotenv}, true},
+		// Paired benign: the same wrapper shapes, pointed at nothing
+		// dangerous, stay allowed — this is Command Policy correctly
+		// checking the real argument, not refusing every wrapper shape
+		// on sight.
+		{"docker exec with a benign argument is allowed",
+			[]string{"docker", "exec", "mycontainer", "cat", "notes.txt"}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

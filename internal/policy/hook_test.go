@@ -414,16 +414,14 @@ func TestEvaluateHookWrappedCpassRunFullParity(t *testing.T) {
 // TestEvaluateHookReaderNameCoincidentalSubcommandMatch is CLA-101's
 // acceptance case at the hook layer: a multi-level CLI's own subcommand
 // that happens to share a name with a reader program (`aws logs tail`,
-// `kubectl cp`) is no longer treated as a genuine reader invocation —
-// readerWordRefusal/hookWalk's per-word fallback now requires a real
-// trigger word (isReaderTrigger) immediately before the reader-name
-// word, and neither `aws` nor `kubectl`'s own subcommand words are one.
-// Before this fix both commands below were refused (see this test's own
-// prior revision, and docs/THREATS.md item 16's now-updated disclosure)
-// — an over-refusal, not a caught leak, since AWS's `tail` streams
-// remote CloudWatch logs and kubectl's `cp` here WRITES a local file,
-// neither of which reads anything through the local filesystem the way
-// a real `tail`/`cp` invocation would.
+// `kubectl cp`) is not treated as a genuine reader invocation —
+// hookWalk's per-word fallback excludes exactly these known {CLI,
+// subcommand} pairs (coincidentalReaderSubcommands, policy.go, CLA-101's
+// own review fix), not a reader name generally. Before CLA-101 both
+// commands below were refused — an over-refusal, not a caught leak,
+// since AWS's `tail` streams remote CloudWatch logs and kubectl's `cp`
+// here WRITES a local file, neither of which reads anything through the
+// local filesystem the way a real `tail`/`cp` invocation would.
 func TestEvaluateHookReaderNameCoincidentalSubcommandMatch(t *testing.T) {
 	cases := []string{
 		`aws logs tail /aws/lambda/myfunction --filter-pattern .env`,
@@ -440,11 +438,11 @@ func TestEvaluateHookReaderNameCoincidentalSubcommandMatch(t *testing.T) {
 }
 
 // TestEvaluateHookReaderTriggerStillCatchesRealWrappers is the paired
-// benign-vs-refused check for CLA-101's own narrowing: a reader name
-// genuinely invoked behind a trigger word (isReaderTrigger) must stay
-// refused exactly as before, including `cpass run`'s own `--`
-// separator — by far the most common shape this whole mechanism exists
-// to catch, and the one a too-narrow fix would most easily break.
+// benign-vs-refused check for the coincidental-subcommand denylist: a
+// reader name genuinely invoked anywhere else — behind `cpass run`'s own
+// `--` separator, find's `-exec`, or a bare `xargs` — must stay refused
+// exactly as before, by far the most common shape this whole mechanism
+// exists to catch, and the one a too-narrow fix would most easily break.
 func TestEvaluateHookReaderTriggerStillCatchesRealWrappers(t *testing.T) {
 	cases := []string{
 		`cpass run -- cat .env`,
@@ -455,6 +453,43 @@ func TestEvaluateHookReaderTriggerStillCatchesRealWrappers(t *testing.T) {
 		t.Run(command, func(t *testing.T) {
 			if err := EvaluateHook(command); err == nil {
 				t.Fatalf("command %q: expected a refusal, got allowed", command)
+			}
+		})
+	}
+}
+
+// TestEvaluateHookReaderBehindUnenumeratedWrapper is CLA-101's own
+// review finding (round 2) at the hook layer: CLA-101's original fix
+// required a genuine trigger word (a known wrapper, an exec-style flag,
+// xargs, or --) immediately before a reader-name word, which silently
+// stopped catching a reader behind any OTHER wrapper program this
+// package's own `wrappers` map doesn't happen to enumerate — even though
+// its argv text plainly, unambiguously names the reader right there, no
+// renaming or obscuring involved. Mirrors
+// TestEvaluateReaderBehindUnenumeratedWrapper (policy_test.go) at the
+// hook layer, proving hookWalk's own per-word scan — not only Evaluate's
+// — catches this class again.
+func TestEvaluateHookReaderBehindUnenumeratedWrapper(t *testing.T) {
+	cases := []struct {
+		command string
+		refused bool
+	}{
+		{`docker exec mycontainer cat .env`, true},
+		{`chroot / cat .env`, true},
+		{`strace -f cat .env`, true},
+		{`setsid cat .env`, true},
+		{`unshare cat .env`, true},
+		{`stdbuf -oL cat .env`, true},
+		{`totally-unenumerable-shim cat .env`, true},
+		// Paired benign: the same wrapper shape, pointed at nothing
+		// dangerous, stays allowed.
+		{`docker exec mycontainer cat notes.txt`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.command, func(t *testing.T) {
+			err := EvaluateHook(c.command)
+			if (err != nil) != c.refused {
+				t.Fatalf("command %q: refused=%v want %v (err=%v)", c.command, err != nil, c.refused, err)
 			}
 		})
 	}

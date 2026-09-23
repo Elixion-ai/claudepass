@@ -498,19 +498,19 @@ value can still end up somewhere it shouldn't, today:
       tool instead of per language.
     - **An unenumerated wrapper this package's own per-word fallback
       doesn't reach still exists.** `readerWordRefusal`/`hookWalk`'s
-      per-word scans catch a reader or shell name appearing right after a
-      genuine trigger word (a wrapper, one of find's own exec-style
-      flags, a bare `xargs`, or `--` — CLA-101 narrowed the reader-name
-      half of this from "anywhere in a flat argv or word list" to this,
-      see below) in a flat argv or word list (`find . -exec cat .env
-      \;`, `xargs cat .env`, `cpass run -- cat .env`; the shell-name half
-      is unaffected and still matches at any position, e.g. `nsenter ...
-      sh -c '...'`), which covers the common, genuinely reachable shapes
-      — but a wrapper that renames its child process, execs through a
-      compiled helper binary with no readable argv text naming the real
-      command, or otherwise obscures what it's about to run from the
-      text of the command line itself is outside what any text-based
-      scan can see, by construction.
+      per-word scans catch a reader or shell name appearing at ANY
+      position in a flat argv or word list (`find . -exec cat .env \;`,
+      `xargs cat .env`, `cpass run -- cat .env`, `docker exec c cat
+      .env`, `nsenter ... sh -c '...'`), except for the small, specific
+      set of multi-level CLI subcommands that merely share a reader's
+      name without behaving like one (`coincidentalReaderSubcommands`,
+      `internal/policy/policy.go` — see CLA-101's own entry below), which
+      covers the common, genuinely reachable shapes — but a wrapper that
+      renames its child process, execs through a compiled helper binary
+      with no readable argv text naming the real command, or otherwise
+      obscures what it's about to run from the text of the command line
+      itself is outside what any text-based scan can see, by
+      construction.
 
     The enforced boundary for this whole residual class is not Command
     Policy — it is Redaction (a value these programs print still gets
@@ -544,22 +544,41 @@ value can still end up somewhere it shouldn't, today:
     name with a reader utility and does not itself read a local file
     (`aws logs tail ...`, `kubectl cp pod:/x .env` — AWS's `tail`
     streams remote CloudWatch logs, and this `kubectl cp` invocation
-    WRITES a local file) is no longer treated as a reader invocation at
-    all; `readerWordRefusal`/`hookWalk`'s per-word fallback now requires
-    a genuine trigger word (a wrapper, one of find's own exec-style
-    flags, a bare `xargs`, or `--`) immediately before the reader-name
-    word — see `isReaderTrigger`'s own doc comment. This narrowing
-    leaves its own, smaller disclosed edge: a multi-level CLI subcommand
-    that — unlike the two examples above — genuinely DOES read a local
-    file the way a real reader would (`git grep PATTERN .env`) is no
-    longer caught by this fallback either, since its own program name
-    (`git`) is neither a wrapper nor an exec-style flag, and there is no
-    static way to tell "a coincidental subcommand name" from "a
-    subcommand that happens to have reader-like semantics" from argv
-    text alone without enumerating every third-party CLI's own
-    subcommand semantics — the same unbounded task this item already
-    declines for third-party tools generally. Redaction and `cpass
-    import` remain the enforced boundary for this narrower shape.
+    WRITES a local file) is not treated as a reader invocation. CLA-101's
+    first version of this fix required a genuine trigger word (a wrapper,
+    one of find's own exec-style flags, a bare `xargs`, or `--`)
+    immediately before ANY reader-name word — closing the aws/kubectl
+    false positive, but, as CLA-101's own follow-up review found (round
+    2), also silently dropping detection for every OTHER wrapper program
+    this package doesn't happen to enumerate (`docker exec`, `chroot`,
+    `strace`, `setsid`, `unshare`, `stdbuf`, and any other passthrough
+    shim) — a substantial, undisclosed reduction of this fallback's whole
+    reason to exist, not a narrower version of the disclosed trade-off
+    below. **CLA-101's review fix (round 2)** replaced that trigger-word
+    gate with a small, specific denylist instead
+    (`coincidentalReaderSubcommands`/`isCoincidentalReaderSubcommand`,
+    `internal/policy/policy.go`): a reader name is caught at ANY word
+    position again, exactly as before CLA-101, except for the exact,
+    contiguous `{CLI, subcommand path}` pairs on that list (`aws logs
+    tail`, `aws s3 cp`, `kubectl cp`, `docker cp`, `gh run view`, `git
+    show`) — restoring detection for every unenumerated-wrapper shape
+    without reopening the aws/kubectl false positive. As a side effect,
+    this also restores catching a multi-level CLI subcommand that
+    genuinely DOES read a local file the way a real reader would (`git
+    grep PATTERN .env`), which CLA-101's first version had disclosed
+    losing as an unavoidable cost of the trigger-word approach — it isn't
+    unavoidable with a denylist instead, and refusing a command that
+    really would read the file is correct, not a new false positive. The
+    denylist's own `cp` entries stay direction-blind (`kubectl cp
+    LOCAL pod:PATH` genuinely reads LOCAL off disk on upload,
+    `kubectl cp pod:PATH LOCAL` only writes LOCAL on download, and this
+    exemption skips every argument's secretFileGlobs check either way,
+    the same edge CLA-101's own trigger-word version already had for
+    this shape) — telling those two argument shapes apart precisely
+    enough to re-check only the genuinely local one would mean modeling
+    each CLI's own copy-argument syntax, the same unbounded per-tool task
+    this item already declines generally. Redaction and `cpass import`
+    remain the enforced boundary for both disclosed edges.
 
     **CLA-102 (2026-09-23 audit follow-up)** is not a residual-class item
     on its own — it is the hook-only `printenv` allowlist documented in
