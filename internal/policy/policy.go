@@ -155,6 +155,21 @@ func (ev *evaluator) resolvePath(w string) string {
 
 const maxDepth = 8
 
+// maxDepthRefusal is returned once a command's own nested structure
+// (shells inside shells, command substitutions, wrapped `cpass run`
+// invocations, ...) exceeds maxDepth levels — refusing, not silently
+// allowing, so an adversarially over-nested command can't evade every
+// rule above by nesting past what this package will keep recursing
+// into. maxDepth (8) is generous enough that no legitimate command in
+// this package's own test corpus or the false-positive A/B harness
+// comes remotely close to it; a real command that genuinely needs more
+// is vanishingly rare and, unlike every other refusal in this package,
+// has no narrower fix available short of raising the constant.
+var maxDepthRefusal = &Refusal{
+	Rule:   "this command nests more than 8 shells/substitutions deep",
+	Advice: "simplify the command so its structure can be checked statically",
+}
+
 var (
 	revealPrograms = map[string]bool{"printenv": true}
 	shells         = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "fish": true}
@@ -179,8 +194,21 @@ var (
 		// other reader.
 		"read": true, "mapfile": true, "readarray": true,
 	}
-	procEnviron = regexp.MustCompile(`/proc/(self|\$\$|[0-9]+|[a-z]*\$[A-Za-z_{]*[}]?)/environ`)
-	varRef      = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)`)
+	// readBuiltins are the readers entries that are shell BUILTINS whose
+	// own positional words are destination variable/array names, never a
+	// file path — read/mapfile/readarray's only possible file operand is
+	// a `< target` redirection word (word.redirTarget) or a same-
+	// shell-string fd alias (resolveFDAlias), unlike every other
+	// `readers` entry (a real reader program), whose ordinary positional
+	// words genuinely are file arguments. Checking a positional word of
+	// one of these three against secretFileGlobs the same way wrongly
+	// refuses e.g. `read -r id_rsa_output` or `mapfile -t id_rsa_lines`
+	// — no file is read at all, "id_rsa_output"/"id_rsa_lines" are only
+	// ever variable/array names, never the id_rsa* SSH key file itself
+	// (command-policy:read-builtin-destination-name-not-a-filename).
+	readBuiltins = map[string]bool{"read": true, "mapfile": true, "readarray": true}
+	procEnviron  = regexp.MustCompile(`/proc/(self|\$\$|[0-9]+|[a-z]*\$[A-Za-z_{]*[}]?)/environ`)
+	varRef       = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)`)
 	// indirectVarRef matches Bash indirect expansion, ${!NAME} — NAME's
 	// own value (resolved through literals) names the variable actually
 	// being read, e.g. `x=STRIPE_LIVE; echo ${!x}` reads $STRIPE_LIVE.
@@ -222,6 +250,53 @@ var secretFileExcludeGlobs = []string{
 // argv[0] a subprocess could exec.
 var sourceBuiltins = map[string]bool{"source": true, ".": true}
 
+// patternTakingReaders are the `readers` entries whose CLI convention
+// puts a PATTERN/FILTER/SCRIPT — never a filename — at the first
+// positional argument position: grep/egrep/fgrep's own regex, sed's
+// `s/.../.../` script, awk's program, jq/yq's filter. Checking that
+// argument against secretFileGlobs the same way a genuine filename
+// argument is checked conflates "the text this reader is searching FOR"
+// with "the file it would read" — e.g. `git grep -n '\.env\*'
+// internal/policy` refuses because the PATTERN `\.env\*` happens to
+// de-escape to literal text matching the `.env*` glob, even though
+// internal/policy (the real, ordinary directory argument) is what grep
+// actually reads (command-policy:reader-pattern-argument-not-a-
+// filename).
+var patternTakingReaders = map[string]bool{
+	"grep": true, "egrep": true, "fgrep": true,
+	"sed": true, "awk": true, "jq": true, "yq": true,
+}
+
+// readerPatternIndex returns the index within args (the words following
+// a patternTakingReaders program name) that is that reader's own
+// implicit PATTERN/FILTER/SCRIPT positional — exempt from every
+// filename-style check a genuine file argument gets — or -1 when prog
+// isn't one of those readers, no non-flag word exists to be it, or the
+// first non-flag word found is actually the VALUE of a file-consuming
+// flag (`-f`/`--file`: grep/awk's own pattern-file/program-file, sed's
+// own script-file), which genuinely is a file argument and so must NOT
+// be exempted the way the implicit bare-positional pattern is
+// (command-policy:reader-pattern-argument-not-a-filename). Only the
+// first candidate is ever exempt — every later positional is a real
+// file argument, exactly as before.
+func readerPatternIndex(prog string, args []string) int {
+	if !patternTakingReaders[prog] {
+		return -1
+	}
+	fileFlag := false
+	for i, a := range args {
+		if strings.HasPrefix(a, "-") {
+			fileFlag = a == "-f" || a == "--file"
+			continue
+		}
+		if fileFlag {
+			return -1
+		}
+		return i
+	}
+	return -1
+}
+
 func matchesSecretFile(arg string) bool {
 	if strings.HasPrefix(arg, "-") {
 		return false
@@ -255,8 +330,11 @@ func base(s string) string { return filepath.Base(s) }
 // argv judges a command given as an argument vector (no shell involved,
 // so $VAR in a word is literal text — but the word may be a shell string).
 func (ev *evaluator) argv(argv []string, depth int) error {
-	if len(argv) == 0 || depth > maxDepth {
+	if len(argv) == 0 {
 		return nil
+	}
+	if depth > maxDepth {
+		return maxDepthRefusal
 	}
 	for _, w := range argv {
 		if procEnviron.MatchString(w) {
@@ -264,8 +342,22 @@ func (ev *evaluator) argv(argv []string, depth int) error {
 		}
 	}
 	prog := base(argv[0])
-	if readers[prog] {
-		for _, w := range argv[1:] {
+	// read/mapfile/readarray never reach this loop meaningfully: a
+	// literal exec-style argv (no shell string was ever parsed) has no
+	// redirection syntax at all, so none of their own words could ever
+	// be a `< target` file operand here — and they are shell builtins
+	// besides, never a real argv[0] any exec family call would actually
+	// invoke (command-policy:read-builtin-destination-name-not-a-
+	// filename).
+	if readers[prog] && !readBuiltins[prog] {
+		patIdx := readerPatternIndex(prog, argv[1:])
+		for k, w := range argv[1:] {
+			// command-policy:reader-pattern-argument-not-a-filename:
+			// grep/sed/awk/jq/yq's own PATTERN/FILTER/SCRIPT argument
+			// (see readerPatternIndex) is never a filename.
+			if k == patIdx {
+				continue
+			}
 			if ev.underProtected(ev.resolvePath(w)) {
 				return &Refusal{Rule: prog + " would print a Secret file", Advice: "pass the path to the tool that needs the file instead"}
 			}
@@ -374,16 +466,47 @@ func (ev *evaluator) shellWordRefusal(argv []string, depth int) error {
 // argv[0] itself is exempt when it is a pure-output printer
 // (echo/printf/print): the remaining words are then data it prints, never
 // programs it runs — the same exemption hookWalk's printerArg applies.
+//
+// KNOWN, ACCEPTED OVER-REFUSAL (disclosed in docs/THREATS.md): this is a
+// flat per-word scan with no notion of argv structure, so a word that
+// merely coincides with a reader's name is treated the same as a genuine
+// invocation of it — including a multi-level CLI's own SUBCOMMAND that
+// happens to share a name with a reader utility, e.g. `aws logs tail
+// /aws/lambda/f --filter-pattern .env`: "tail" here is the AWS CLI's own
+// subcommand, never the tail(1) reader, and ".env" is a filter-pattern
+// string, not a file argument, yet this loop cannot tell the two apart
+// from "tail" behind a real wrapper (`find . -exec tail .env \;`), which
+// is the shape this fallback exists to catch and must keep catching.
+// Scoping the check to only the argv position right after a known
+// exec-taking flag (`find`'s `-exec`) would lose the equally-legitimate
+// `xargs cat .env` shape, which has no such flag at all — narrowing this
+// enough to exclude the coincidental-subcommand case would reopen one of
+// those two, not close a gap, so this stays a deliberate, disclosed
+// trade-off rather than a narrower heuristic guessing at which shape a
+// given wrapper is (command-policy:reader-name-coincidental-subcommand-
+// match).
 func readerWordRefusal(argv []string) *Refusal {
 	if len(argv) == 0 || printers[base(argv[0])] {
 		return nil
 	}
 	for i := 1; i < len(argv); i++ {
 		prog := base(argv[i])
-		if !readers[prog] {
+		if !readers[prog] || readBuiltins[prog] {
 			continue
 		}
-		for _, arg := range argv[i+1:] {
+		patIdx := readerPatternIndex(prog, argv[i+1:])
+		for k, arg := range argv[i+1:] {
+			// command-policy:reader-pattern-argument-not-a-filename:
+			// grep/sed/awk/jq/yq's own PATTERN/FILTER/SCRIPT argument
+			// (see readerPatternIndex) is never a filename — this is
+			// what keeps `git grep -n '\.env\*' internal/policy` from
+			// refusing on its own search PATTERN (which happens to
+			// de-escape to literal text matching a secretFileGlobs
+			// entry) while internal/policy, the real directory grep
+			// reads, is untouched.
+			if k == patIdx {
+				continue
+			}
 			if r := secretFileRefusal(prog, arg); r != nil {
 				return r
 			}
@@ -497,8 +620,20 @@ func shellCommandString(args []string) (content string, refuse bool) {
 // scriptFileContent reads path as the shell script a bare `<shell>
 // path...` invocation would run: refusing, rather than silently allowing
 // unchecked, when path is not a readable regular file no larger than
-// maxStaticScriptSize.
+// maxStaticScriptSize. A leading `~/` or a bare `~` is expanded against
+// $HOME first, the same way a real shell's own tilde expansion resolves
+// it before ever handing the word to os.Stat — needed for this to find a
+// real script named by a resolved variable
+// (command-policy:shell-script-path-literal-variable's own common
+// spelling, `G=~/bin/deploy.sh; bash $G`), since Go's os.Stat, unlike a
+// shell, never expands `~` on its own. `~user/...` (a specific OTHER
+// user's home) is left unexpanded — a shape this package doesn't attempt
+// to resolve, matching its existing "don't guess" default; that leaves
+// the path looking for a literal "~user"-named entry, so it fails
+// os.Stat and falls to the ordinary unresolvable-shape refusal below,
+// same as always.
 func scriptFileContent(path string) (content string, refuse bool) {
+	path = expandHome(path)
 	info, err := os.Stat(path)
 	if err != nil || !info.Mode().IsRegular() || info.Size() > maxStaticScriptSize {
 		return "", true
@@ -508,6 +643,25 @@ func scriptFileContent(path string) (content string, refuse bool) {
 		return "", true
 	}
 	return string(raw), false
+}
+
+// expandHome expands a leading `~` (the whole path) or `~/...` to
+// os.UserHomeDir(), the same narrow, common case a real shell's own
+// tilde expansion covers for an unquoted leading `~`. Anything else
+// (`~user/...`, an error reading $HOME, no leading `~` at all) is
+// returned unchanged.
+func expandHome(path string) string {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	if path == "~" {
+		return home
+	}
+	return filepath.Join(home, path[2:])
 }
 
 func hasTraceFlag(args []string) bool {
@@ -529,7 +683,7 @@ func hasTraceFlag(args []string) bool {
 // and judging each, tracking variables assigned from Secrets.
 func (ev *evaluator) shell(s string, depth int) error {
 	if depth > maxDepth {
-		return nil
+		return maxDepthRefusal
 	}
 	for _, simple := range splitCommands(s) {
 		if err := ev.simple(simple, depth); err != nil {
@@ -703,7 +857,12 @@ func (ev *evaluator) simple(words []word, depth int) error {
 		}
 		return nil
 	case readers[prog]:
-		for _, a := range args {
+		argsRaw := make([]string, len(args))
+		for k, a := range args {
+			argsRaw[k] = a.raw
+		}
+		patIdx := readerPatternIndex(prog, argsRaw)
+		for k, a := range args {
 			// command-policy:read-builtin-and-fd-redirection-bypass: a
 			// `<&N`/`<&$name` fd-alias word (raw=="", see split.go's
 			// word doc comment) resolves through a same-shell-string
@@ -736,6 +895,33 @@ func (ev *evaluator) simple(words []word, depth int) error {
 			// argument already is above.
 			if v := ev.references(a.raw); v != "" {
 				return &Refusal{Rule: fmt.Sprintf("%s would print $%s", prog, v), Advice: "pass the variable to the tool that needs it instead"}
+			}
+			// command-policy:read-builtin-destination-name-not-a-
+			// filename: read/mapfile/readarray's own positional words
+			// are destination variable/array names, never a file
+			// operand -- only a `< target` redirection word
+			// (a.redirTarget) can be one for these three builtins,
+			// unlike every other entry in `readers` (a real reader
+			// program), whose ordinary positional words genuinely are
+			// file arguments. Skip the filename-style checks below for
+			// anything else, so e.g. `read -r id_rsa_output` is never
+			// mistaken for reading the id_rsa* SSH key file -- the
+			// reveal-style checks just above (a bound/tainted $VAR
+			// reference, or one behind a same-shell-string fd alias)
+			// still apply regardless, since those detect a genuinely
+			// different shape that has nothing to do with a
+			// destination name's own spelling.
+			if readBuiltins[prog] && !a.redirTarget {
+				continue
+			}
+			// command-policy:reader-pattern-argument-not-a-filename:
+			// grep/sed/awk/jq/yq's own PATTERN/FILTER/SCRIPT argument
+			// (see readerPatternIndex) is never a filename — the
+			// reveal-style checks above still apply to it regardless
+			// (a bound Secret used AS a pattern is still a reveal), only
+			// the filename-style checks below are skipped.
+			if k == patIdx {
+				continue
 			}
 			resolved := ev.resolveLiteral(a.raw)
 			if ev.underProtected(ev.resolvePath(resolved)) {
@@ -787,10 +973,23 @@ func (ev *evaluator) simple(words []word, depth int) error {
 		// heredoc was checked first and, when present, evaluated
 		// instead of a real -c/script-path argument alongside it — a
 		// full, silent bypass of every rule below (CLA-62 review).
+		//
+		// Each word is also resolved through ev.resolveLiteral first
+		// (command-policy:shell-script-path-literal-variable): a script
+		// path — or a -c string — stashed in a shell variable earlier
+		// assigned a plain string literal in this same shell string
+		// (`G=script.sh; bash $G`) is exactly what a real shell expands
+		// before ever invoking bash, and is exactly as checkable as the
+		// literal spelling `bash script.sh` already is; without this, `$G`
+		// reaches shellCommandString as the literal two-byte text "$G",
+		// which os.Stat obviously can't find, so a benign, ordinary
+		// "script path held in a variable" invocation was refused as an
+		// unresolvable shape even though the path it names is real and
+		// readable.
 		raw := make([]string, 0, len(args))
 		for _, a := range args {
 			if !a.hasHeredoc {
-				raw = append(raw, a.raw)
+				raw = append(raw, ev.resolveLiteral(a.raw))
 			}
 		}
 		content, refuse := shellCommandString(raw)
@@ -808,12 +1007,84 @@ func (ev *evaluator) simple(words []word, depth int) error {
 			Advice: `use -c "..." or a readable script file under 1 MiB (cpass reads and checks it) instead`,
 		}
 	}
+	// A shell name appearing among the ARGUMENTS here (rest[0] itself,
+	// checked above, already ruled out) — `ssh host bash <<EOF ... EOF`,
+	// `docker run --rm -i alpine sh <<EOF ... EOF` — is resolved from the
+	// original word list, preserving any heredoc attached to it, before
+	// any conversion to plain strings below: shellWordRefusalWords needs
+	// the heredoc word's actual body (word.heredoc), which the
+	// plain-string argv conversion just below would throw away (a
+	// heredoc word's raw text is "" — see split.go's word doc comment),
+	// wrongly making an ordinary "pipe a script into a wrapped shell's
+	// stdin" invocation look statically unresolvable even though its
+	// heredoc body sits right there
+	// (command-policy:shell-behind-wrapper-heredoc-lost-on-argv-
+	// conversion). ev.argv's own shellWordRefusal (below, via the
+	// argv fallback) remains correct and unchanged for a literal argv
+	// that never went through shell-string parsing at all (cpass run's
+	// own direct Input.Argv, or an argv reached by unwrapping env/sudo/
+	// timeout/etc.), which can never carry a heredoc to begin with.
+	for _, w := range args {
+		if shells[base(w.raw)] {
+			return ev.shellWordRefusalWords(args, depth)
+		}
+	}
 	// Anything else: judge as an argv, so nested shells, env, printenv apply.
 	argv := make([]string, len(rest))
 	for i, w := range rest {
 		argv[i] = w.raw
 	}
 	return ev.argv(argv, depth+1)
+}
+
+// shellWordRefusalWords mirrors shellWordRefusal (below) — a shell name
+// appearing anywhere in a word list, not only at position 0 — but works
+// from the original []word rather than a flattened []string, so a heredoc
+// attached to that later word is still visible as its executed script,
+// and a script-path/-c argument that is a whole-word variable reference
+// to an earlier plain-string literal is still resolved
+// (command-policy:shell-behind-wrapper-heredoc-lost-on-argv-conversion,
+// command-policy:shell-script-path-literal-variable). Called only from
+// ev.simple's catch-all, which is the one place a []word list carrying a
+// real heredoc/literal-tracking evaluator is available for this; a true
+// literal argv (Input.Argv, never shell-parsed) can never carry a
+// heredoc, so shellWordRefusal's plain-string version remains correct
+// and unchanged for that path.
+func (ev *evaluator) shellWordRefusalWords(words []word, depth int) error {
+	for i := 0; i < len(words); i++ {
+		prog := base(words[i].raw)
+		if !shells[prog] {
+			continue
+		}
+		rest := words[i+1:]
+		raw := make([]string, 0, len(rest))
+		for _, w := range rest {
+			if !w.hasHeredoc {
+				raw = append(raw, ev.resolveLiteral(w.raw))
+			}
+		}
+		content, refuse := shellCommandString(raw)
+		if !refuse {
+			if hasTraceFlag(raw) {
+				return &Refusal{Rule: "shell tracing (-x) echoes expanded variables", Advice: "drop -x"}
+			}
+			if err := ev.shell(content, depth+1); err != nil {
+				return err
+			}
+			continue
+		}
+		if hd, ok := heredocArg(rest); ok {
+			if err := ev.shell(hd.body, depth+1); err != nil {
+				return err
+			}
+			continue
+		}
+		return &Refusal{
+			Rule:   prog + "'s invocation shape can't be checked statically",
+			Advice: `use -c "..." or a readable script file under 1 MiB (cpass reads and checks it) instead`,
+		}
+	}
+	return nil
 }
 
 // references returns the first bound or tainted variable referenced in s,
@@ -861,11 +1132,22 @@ func (ev *evaluator) referencesFile(s string) string {
 // bound/tainted Secret reference, no reference at all, an unknown
 // variable) is returned unchanged.
 func (ev *evaluator) resolveLiteral(s string) string {
+	return resolveLiteralIn(s, ev.literals)
+}
+
+// resolveLiteralIn is resolveLiteral's underlying logic, taking the
+// literals map explicitly rather than through an *evaluator, so hookWalk
+// — which has no *evaluator of its own (see its doc comment: it "does
+// not touch the Bound/tainted evaluator" since it has no Bound vars to
+// work from) — can resolve the same shape with its own, lighter
+// leading-assignment tracking (command-policy:shell-script-path-literal-
+// variable).
+func resolveLiteralIn(s string, literals map[string]string) string {
 	name, whole := wholeVarRef(s)
 	if !whole {
 		return s
 	}
-	if lit, ok := ev.literals[name]; ok {
+	if lit, ok := literals[name]; ok {
 		return lit
 	}
 	return s
@@ -901,13 +1183,20 @@ func (ev *evaluator) resolveFDAlias(w word) (path string, ok bool) {
 // is guaranteed to hold in precisely the scenario Command Policy exists
 // to defend: a real .env sitting in the project directory. An argument
 // with no glob metacharacter at all is untouched (nil, cheaply, before
-// any I/O). When this evaluator has no usable cwd, or the glob itself
-// can't be evaluated, this fails closed (refuses) rather than silently
-// letting an unresolvable glob pattern through unchecked — this
-// package's existing default for any other shape it cannot statically
-// resolve. A glob that resolves to nothing dangerous (no match at all,
-// or matches that aren't Secret-bearing) is allowed, exactly like an
-// ordinary non-glob filename that isn't one.
+// any I/O). When this evaluator has no usable cwd — a genuinely
+// well-formed glob this package simply has nothing to resolve it
+// against — this fails closed (refuses) rather than silently letting an
+// unresolvable glob pattern through unchecked, this package's existing
+// default for any other shape it cannot statically resolve. A pattern
+// that fails to PARSE as a glob at all (filepath.Glob's own
+// ErrBadPattern — an unbalanced "[", the shape a reader's own
+// PATTERN/FILTER/SCRIPT argument routinely takes, e.g. grep/sed's own
+// regex or jq's `.[] | .name` filter) is different: it was never a
+// filename-globbing attempt to begin with, so it is allowed, not
+// refused — see the err != nil case below. A glob that resolves to
+// nothing dangerous (parses fine, but no match at all, or matches that
+// aren't Secret-bearing) is likewise allowed, exactly like an ordinary
+// non-glob filename that isn't one.
 func (ev *evaluator) secretFileGlobRefusal(prog, arg string) *Refusal {
 	if !strings.ContainsAny(arg, "*?[") || strings.HasPrefix(arg, "-") {
 		return nil
@@ -925,7 +1214,21 @@ func (ev *evaluator) secretFileGlobRefusal(prog, arg string) *Refusal {
 	}
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
-		return unresolvable
+		// A malformed glob pattern (filepath.ErrBadPattern — an unbalanced
+		// "[", most commonly) is not a real shell glob at all: a real
+		// shell's own filename globbing requires syntactically valid glob
+		// syntax to begin with, so text that fails to parse as one was
+		// never attempting to reference a file this way in the first
+		// place, and cannot expand to one either. This is what a reader's
+		// own PATTERN/FILTER/SCRIPT argument routinely looks like —
+		// grep/sed/awk's regex, jq's `.[] | .name` filter — since regex
+		// bracket expressions and substitution syntax are not valid glob
+		// syntax; treated as "no glob match" (allow) rather than
+		// "unresolvable" (refuse), unlike ev.cwd=="" just above, which IS
+		// a genuinely well-formed glob this evaluator merely has nothing
+		// to resolve it against (command-policy:glob-pattern-vs-reader-
+		// filter-argument).
+		return nil
 	}
 	for _, m := range matches {
 		if r := secretFileRefusal(prog, m); r != nil {

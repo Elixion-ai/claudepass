@@ -269,6 +269,25 @@ func TestEvaluateHookShellInvocationShapes(t *testing.T) {
 		// CLA-62 review: a script-by-path argument is what actually
 		// executes even when a heredoc is attached alongside it.
 		{"script-by-path reading .env alongside a benign heredoc is still refused", "bash " + script + " <<'EOF'\necho decoy\nEOF\n", true},
+		// 2026-09-23 audit false-positive A/B corpus
+		// (command-policy:shell-behind-wrapper-heredoc-lost-on-argv-
+		// conversion): a shell name behind an unenumerated wrapper
+		// (ssh/docker) that receives its script only via an attached
+		// heredoc, not -c/a script path, must still resolve that
+		// heredoc's body as the executed script the same way a bare `sh
+		// <<EOF` already does — losing the heredoc on the way to a
+		// plain-string argv previously made this look like an
+		// unparseable bare-shell invocation.
+		{"ssh piping a heredoc script into bash is allowed", "ssh build-host bash <<'EOF'\ncd /srv/app\ngit pull\nmake build\nEOF\n", false},
+		{"paired bypass: the same ssh shape reading a secret file in its heredoc body is still refused", "ssh build-host bash <<'EOF'\ncat .env\nEOF\n", true},
+		{"docker run piping a heredoc script into sh is allowed", "docker run --rm -i alpine sh <<'EOF'\necho hello from container\nuname -a\nEOF\n", false},
+		{"paired bypass: the same docker shape reading a secret file in its heredoc body is still refused", "docker run --rm -i alpine sh <<'EOF'\ncat .env\nEOF\n", true},
+		// command-policy:shell-script-path-literal-variable: a script
+		// path stashed in a shell variable (`G=script.sh; bash $G`) must
+		// resolve back to the real, checkable file the same way the
+		// literal spelling `bash script.sh` already does.
+		{"a script path held in a shell variable resolves to the safe script", "G=" + safe + "; bash $G", false},
+		{"paired bypass: a script path held in a shell variable resolves to the dangerous script", "G=" + script + "; bash $G", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -277,6 +296,153 @@ func TestEvaluateHookShellInvocationShapes(t *testing.T) {
 				t.Fatalf("command %q: refused=%v want %v (err=%v)", c.command, err != nil, c.refused, err)
 			}
 		})
+	}
+}
+
+// TestEvaluateHookReaderPatternArgumentNotAFilename is
+// command-policy:reader-pattern-argument-not-a-filename and
+// command-policy:glob-pattern-vs-reader-filter-argument (2026-09-23
+// audit's false-positive A/B corpus): grep/sed/awk/jq/yq's own regex,
+// substitution script, program, or filter argument is routinely
+// shaped like a filename glob (brackets, a leading dot after
+// de-escaping, ...) or happens to spell a secretFileGlobs pattern
+// outright, but it is never the file being read — the real file
+// argument, when there is one, is a later positional.
+func TestEvaluateHookReaderPatternArgumentNotAFilename(t *testing.T) {
+	cases := []struct {
+		name    string
+		command string
+		refused bool
+	}{
+		{"jq's own filter expression is not a filename glob", `jq -r '.[] | .name' data.json`, false},
+		{"grep -E pattern with a bracket expression is not a filename glob", `/usr/bin/grep -E "^\s+[a-z-]+ " somefile.txt`, false},
+		{"sed substitution script is not a filename glob", `sed -E 's/^[^ ]+ - - \[([^]]+)\].*/\1/' access.log`, false},
+		{"grep -l with an id_rsa-shaped PATTERN is not a filename", `grep -l "id_rsa" README.md CONTRIBUTING.md`, false},
+		{"git grep with an .env*-shaped PATTERN is not a filename", `git grep -n "\.env\*" internal/policy`, false},
+		{"grep -E pattern matching diff +/- lines is not a filename glob", `git diff HEAD~1 HEAD | grep -E '^[+-]'`, false},
+		// Paired bypass: the reader's PATTERN position is exempt, but a
+		// later, genuine positional file argument is still checked.
+		{"paired bypass: id_rsa as a genuine second positional file argument is still refused", `grep -l pattern id_rsa`, true},
+		{"paired bypass: jq's own trailing file argument is still checked", `jq -r '.[] | .name' .env`, true},
+		// Paired bypass: grep's -f flag consumes the NEXT word as a
+		// real file argument (a pattern-file), not an implicit bare
+		// pattern position — its value must stay checked, not be
+		// exempted as if it were the pattern itself.
+		{"paired bypass: grep -f's own file-valued flag argument is still checked", `grep -f .env data.txt`, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := EvaluateHook(c.command)
+			if (err != nil) != c.refused {
+				t.Fatalf("command %q: refused=%v want %v (err=%v)", c.command, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestEvaluateHookCaseStatementPatternArmNotACommand is
+// command-policy:case-statement-pattern-arm-not-a-command: a case
+// statement's own PATTERN) arm — including one that happens to spell
+// the name of a Bound-independent, zero-argument-triggers-a-refusal
+// rule this package already has (set/export/env) — is bash's own
+// pattern-arm syntax, never a command invocation with no arguments.
+func TestEvaluateHookCaseStatementPatternArmNotACommand(t *testing.T) {
+	cases := []struct {
+		name    string
+		command string
+		refused bool
+	}{
+		{"a case arm literally named set is not the set builtin", "case \"$1\" in\n  set)\n    echo arming\n    ;;\nesac", false},
+		{"a case arm literally named env is not the env dump", "case \"$1\" in\n  env)\n    echo showing\n    ;;\nesac", false},
+		{"alternated patterns (a|b) are still recognized as pattern text", "case \"$1\" in\n  set|export)\n    echo arming\n    ;;\nesac", false},
+		{"a nested case statement inside an arm body is still fully parsed", "case \"$1\" in\n  a)\n    case \"$2\" in\n      set) echo inner ;;\n    esac\n    ;;\nesac", false},
+		// Paired bypass: a real command inside an arm's own body is
+		// still evaluated exactly like any other command — the fix
+		// only discards the PATTERN word itself, never the body that
+		// follows it.
+		{"paired bypass: a secret-file read inside a case arm's body is still refused", "case \"$1\" in\n  set)\n    cat .env\n    ;;\nesac", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := EvaluateHook(c.command)
+			if (err != nil) != c.refused {
+				t.Fatalf("command %q: refused=%v want %v (err=%v)", c.command, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestEvaluateHookWrappedCpassRunFullParity closes the gap the review
+// found in this round's own audit: EvaluateHook previously skipped the
+// full Evaluate call (with its fd-alias and glob-expansion mechanisms,
+// which hookWalk's own lighter per-word scan does not implement) for a
+// command that itself wraps `cpass run`, relying only on hookWalk —
+// which caught neither an fd-alias reveal nor a glob-expansion reveal
+// for that specific shape. Evaluate now always runs, so these are
+// caught by the hook itself before the `cpass run` subprocess starts,
+// not only once cpass run's own execution-time check runs a moment
+// later inside it.
+func TestEvaluateHookWrappedCpassRunFullParity(t *testing.T) {
+	dotenv := "." + "env"
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, dotenv), []byte("STRIPE_LIVE=x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	cases := []struct {
+		name    string
+		command string
+		refused bool
+	}{
+		{"cpass-run-wrapped fd-alias reveal is refused before the subprocess starts",
+			"cpass run -- bash -c 'exec 3< " + dotenv + "; cat <&3'", true},
+		{"cpass-run-wrapped glob-expansion reveal is refused before the subprocess starts",
+			"cpass run -- bash -c 'cat .en?'", true},
+		{"cpass-run-wrapped invocation with nothing dangerous stays allowed",
+			"cpass run -- bash -c 'echo hello'", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := EvaluateHook(c.command)
+			if (err != nil) != c.refused {
+				t.Fatalf("command %q: refused=%v want %v (err=%v)", c.command, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestEvaluateHookReaderNameCoincidentalSubcommandMatch pins a KNOWN,
+// ACCEPTED over-refusal (see readerWordRefusal's own doc comment and
+// docs/THREATS.md): a multi-level CLI's own subcommand that happens to
+// share a name with a reader program (`aws logs tail`) is
+// indistinguishable, by this package's flat per-word scan, from a
+// genuine invocation of that reader behind an unenumerated wrapper
+// (`find . -exec tail .env \;`) — narrowing the check enough to
+// exclude one would reopen the other, so this stays a deliberate,
+// disclosed trade-off. This test exists so a future change to that
+// trade-off is a conscious edit here, not a silent behavior change.
+func TestEvaluateHookReaderNameCoincidentalSubcommandMatch(t *testing.T) {
+	command := `aws logs tail /aws/lambda/myfunction --filter-pattern .env`
+	if err := EvaluateHook(command); err == nil {
+		t.Fatalf("command %q: expected the documented, accepted over-refusal (readerWordRefusal treats \"tail\" as a reader invocation), got allowed", command)
+	}
+}
+
+// TestEvaluateHookMaxDepthFailsClosed is the hook-layer half of
+// TestMaxDepthFailsClosed (policy_test.go): a command nested more than
+// maxDepth shells/substitutions deep now refuses rather than silently
+// running unchecked past that point. Nested via "eval" prefixes (see
+// TestMaxDepthFailsClosed's doc comment) rather than repeated `sh -c
+// "..."` wrapping, which would need real, non-naive recursive quote
+// escaping this test has no need to model.
+func TestEvaluateHookMaxDepthFailsClosed(t *testing.T) {
+	deep := strings.Repeat("eval ", maxDepth+4) + "echo hi"
+	if err := EvaluateHook(deep); err == nil {
+		t.Fatalf("a command nested past maxDepth should refuse, not silently allow")
+	}
+	shallow := strings.Repeat("eval ", maxDepth-4) + "echo hi"
+	if err := EvaluateHook(shallow); err != nil {
+		t.Fatalf("a command within maxDepth with nothing dangerous should stay allowed: %v", err)
 	}
 }
 

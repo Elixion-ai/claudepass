@@ -71,6 +71,24 @@ type word struct {
 	// statically knowable" default every other dynamic reference in
 	// this package already has.
 	fdAliasNum string
+
+	// redirTarget is set on an ordinary word that is the TARGET of a
+	// plain INPUT redirection (`< target`, or the fd-bind forms `N<
+	// target`/`{name}< target`, which also set fdBindNum) — never on a
+	// positional argument, a here-string's own word (`<<<` is scanned
+	// separately, above `<`/`>` in splitCommands' switch, and never
+	// reaches this case), or an output redirection's target (`>
+	// target`). This is what lets a consumer tell "the file this word
+	// names is a genuine file OPERAND" (`cat < .env`, `read line <
+	// .env`) apart from "this word merely occupies the same position a
+	// filename would in an ordinary reader invocation" (`read
+	// id_rsa_output`, where "id_rsa_output" is read's own destination
+	// VARIABLE name, never a file — command-policy:
+	// read-builtin-destination-name-not-a-filename). Every other
+	// reader's non-flag positional words genuinely are file arguments
+	// regardless of this bit (see readBuiltins), so only read/
+	// mapfile/readarray's own checks consult it.
+	redirTarget bool
 }
 
 // pendingHeredoc is a <<[-]DELIM seen earlier on the current line, whose
@@ -140,6 +158,44 @@ func splitCommands(s string) [][]word {
 	// (see the '<'/'>' case), so it can never leak onto an unrelated
 	// later word (command-policy:read-builtin-and-fd-redirection-bypass).
 	var pendingFDBind string
+	// pendingRedirIn mirrors pendingFDBind exactly (same set/consume/clear
+	// points) but for the plain, no-fd-prefix case too: set by the
+	// '<'/'>' case whenever the operator was '<' (an input redirection,
+	// including the fd-bind forms, which also set pendingFDBind), and
+	// carried onto the very next word tokenized as that word's own
+	// redirTarget bit (command-policy:read-builtin-destination-name-not-
+	// a-filename). Left false for a '>' output redirection's target,
+	// which is never a reader's file operand.
+	var pendingRedirIn bool
+	// caseDepth, inCaseHeader and wantPattern together recognize a `case
+	// X in PATTERN) cmds ;; PATTERN2) cmds ;; esac` statement's own
+	// PATTERN words as pattern-arm syntax, not a command to evaluate —
+	// without this, `set)`/`env)`/`export)` (an entirely ordinary case
+	// arm for a CLI whose own subcommands happen to share a name with
+	// one of this package's zero-argument-triggers-a-refusal builtins,
+	// e.g. a script with its own `set`/`env` subcommand) tokenizes as a
+	// bare one-word command "set"/"env"/"export" with no arguments,
+	// which several of this package's own rules refuse outright
+	// (command-policy:case-statement-pattern-arm-not-a-command).
+	// caseDepth counts currently-open case blocks (case/esac are
+	// otherwise ordinary shellKeywords entries, discarded exactly like
+	// if/while/for/etc. already are); inCaseHeader is true only between
+	// a just-opened case's own keyword and its matching "in" (so a
+	// selector expression, `case "$1" in`, is never mistaken for a
+	// pattern); wantPattern is true only for the pattern-arm position
+	// itself — right after that "in", or right after a `;;` that ends
+	// one arm and starts the next — and is what flushCmd (below) and the
+	// ')' case (see the '<'/'>' redirection case's sibling switch arms
+	// further down) consult to discard a pattern word instead of
+	// treating it as a real command. A single, non-stacked wantPattern
+	// (rather than one per case-nesting level) stays correct for a
+	// case-inside-a-case: discarding "esac" always clears it, which is
+	// exactly the state the ENCLOSING context should be in immediately
+	// after a nested case statement closes (its own arm's body, not a
+	// fresh pattern position) — see the shellKeywords branch below.
+	var caseDepth int
+	var inCaseHeader bool
+	var wantPattern bool
 
 	flushWord := func() {
 		if inWord {
@@ -155,16 +211,59 @@ func splitCommands(s string) [][]word {
 				// argv[0] of a fake command; the word that follows is
 				// judged as the real one.
 				pendingFDBind = ""
+				pendingRedirIn = false
+				switch w {
+				case "case":
+					caseDepth++
+					inCaseHeader = true
+				case "esac":
+					if caseDepth > 0 {
+						caseDepth--
+					}
+					wantPattern = false
+					inCaseHeader = false
+				}
+				return
+			}
+			if w == "in" && inCaseHeader {
+				// The "in" that ends a case statement's own header — its
+				// selector word(s), already sitting in cur, are flushed
+				// as their own inert leftover "command" exactly like an
+				// ordinary bareword that matches no policy rule (the
+				// same harmless fallthrough `for i in 1 2 3`'s own
+				// selector words already get) — never discarded as a
+				// keyword itself: "in" is a keyword only in command-start
+				// position, and cur is never empty here (the selector
+				// word(s) already occupy it).
+				pendingFDBind = ""
+				pendingRedirIn = false
+				inCaseHeader = false
+				wantPattern = true
 				return
 			}
 			fd := pendingFDBind
 			pendingFDBind = ""
-			cur = append(cur, word{raw: w, subs: ws, fdBindNum: fd})
+			ri := pendingRedirIn
+			pendingRedirIn = false
+			cur = append(cur, word{raw: w, subs: ws, fdBindNum: fd, redirTarget: ri})
 		}
 	}
 	flushCmd := func() {
 		flushWord()
 		pendingFDBind = ""
+		pendingRedirIn = false
+		if wantPattern && caseDepth > 0 {
+			// A case-pattern word (or one alternative of a `|`-separated
+			// pattern list, each ended by its own flushCmd via the '|'
+			// case below) — never a real command, so it is discarded
+			// rather than appended to cmds, exactly like a comment or a
+			// bare keyword already is above
+			// (command-policy:case-statement-pattern-arm-not-a-command).
+			// wantPattern itself stays true across a `|` alternative
+			// (only ')' below clears it) and across this flush.
+			cur = nil
+			return
+		}
 		if len(cur) > 0 {
 			cmds = append(cmds, expandBraces(cur))
 			cur = nil
@@ -338,8 +437,34 @@ func splitCommands(s string) [][]word {
 			}
 			flushCmd()
 			i++
-		case c == ';' || c == '|' || c == '&' || c == '(' || c == ')':
+		case c == ';' && i+1 < len(s) && s[i+1] == ';':
+			// `;;`: ends a case statement's own arm, exactly the boundary
+			// a real shell's case grammar gives it — re-opening the
+			// pattern-arm position for whatever comes next (another
+			// PATTERN), or "esac", both handled by wantPattern/
+			// inCaseHeader's own logic above
+			// (command-policy:case-statement-pattern-arm-not-a-command).
+			// A lone ';' (the generic case just below) never does this:
+			// only the doubled form is bash's own arm terminator.
 			flushCmd()
+			if caseDepth > 0 {
+				wantPattern = true
+			}
+			i += 2
+		case c == ';' || c == '|' || c == '&' || c == '(':
+			flushCmd()
+			i++
+		case c == ')':
+			flushCmd()
+			// Clears whatever pattern-arm position wantPattern was
+			// tracking — the word(s) just flushed (discarded above, in
+			// flushCmd) were this pattern's own text; anything from here
+			// until the next ';;'/`in` is the arm's actual command body,
+			// checked exactly like any other command
+			// (command-policy:case-statement-pattern-arm-not-a-command).
+			// Harmless when wantPattern was already false (an ordinary
+			// subshell-closing or otherwise unrelated ')').
+			wantPattern = false
 			i++
 		case (c == '{' || c == '}') && !inWord && isWordBoundaryByte(s, i+1):
 			// A standalone `{`/`}` token: real bash's command-grouping
@@ -395,6 +520,7 @@ func splitCommands(s string) [][]word {
 			// an EARLIER, already-consumed redirection must never leak
 			// onto this one's target.
 			pendingFDBind = ""
+			pendingRedirIn = false
 			var fdKey string
 			var fdKeyOK bool
 			if c == '<' {
@@ -443,6 +569,16 @@ func splitCommands(s string) [][]word {
 				// target — picks this up via flushWord() above.
 				pendingFDBind = fdKey
 			}
+			// The very next word tokenized is this redirection's own
+			// target (word.redirTarget) whenever it was an INPUT
+			// redirection — including the fd-bind forms just above,
+			// which additionally set pendingFDBind — but never for a
+			// '>' output redirection's target, which is never a
+			// reader's file operand
+			// (command-policy:read-builtin-destination-name-not-a-
+			// filename). The `<&N` fd-alias sub-case above already
+			// `continue`d before reaching here, so it never sets this.
+			pendingRedirIn = c == '<'
 		default:
 			buf.WriteByte(c)
 			inWord = true
@@ -903,7 +1039,7 @@ func expandBraces(words []word) []word {
 			continue
 		}
 		for _, r := range expandBraceWord(w.raw) {
-			out = append(out, word{raw: r, subs: w.subs, fdBindNum: w.fdBindNum})
+			out = append(out, word{raw: r, subs: w.subs, fdBindNum: w.fdBindNum, redirTarget: w.redirTarget})
 		}
 	}
 	return out

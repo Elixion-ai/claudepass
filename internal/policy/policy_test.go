@@ -3,6 +3,7 @@ package policy
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Elixion-ai/claudepass/internal/vault"
@@ -929,6 +930,22 @@ func TestReadMapfileReadarrayBuiltins(t *testing.T) {
 		{"read builtin on an unrelated file is allowed", []string{"sh", "-c", `read -r line < notes.txt`}, false},
 		{"read builtin with no redirection at all is allowed", []string{"sh", "-c", `read -r line`}, false},
 		{"mapfile on an unrelated file is allowed", []string{"sh", "-c", `mapfile -t lines < notes.txt`}, false},
+		// command-policy:read-builtin-destination-name-not-a-filename
+		// (2026-09-23 audit): read/mapfile/readarray's own positional
+		// words are destination variable/array names, never a file —
+		// only a `< target` redirection word can be one. A destination
+		// name that happens to spell a secretFileGlobs pattern (id_rsa*
+		// needs no literal dot, unlike .env*/*.pem/etc., so it collides
+		// with an ordinary identifier easily) must not be mistaken for
+		// reading that file.
+		{"read builtin with an id_rsa-shaped destination name is allowed", []string{"sh", "-c", `read -r id_rsa_output`}, false},
+		{"mapfile with an id_rsa-shaped destination array name is allowed", []string{"sh", "-c", `mapfile -t id_rsa_lines`}, false},
+		{"readarray with an id_rsa-shaped destination array name is allowed", []string{"sh", "-c", `readarray -t id_rsa_new`}, false},
+		// Paired bypass: a here-string reveal into a read builtin's
+		// destination is still caught — the fix only exempts the
+		// destination NAME from the filename-style checks, never the
+		// reveal-style checks that apply regardless of a word's role.
+		{"paired bypass: read via a here-string reveals a bound Secret", []string{"sh", "-c", `read -r line <<< $STRIPE_LIVE`}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1152,5 +1169,307 @@ func TestSecretFileGlobRefusalFailsClosedWithNoCwd(t *testing.T) {
 	// A non-glob argument is unaffected even with no cwd.
 	if r := ev.secretFileGlobRefusal("cat", "notes.txt"); r != nil {
 		t.Fatalf("a literal (non-glob) argument must not be refused by this check: %v", r)
+	}
+}
+
+// TestSecretFileGlobRefusalMalformedPatternIsNotAGlob is
+// command-policy:glob-pattern-vs-reader-filter-argument (2026-09-23
+// audit's false-positive A/B corpus): a reader's own PATTERN/FILTER/
+// SCRIPT argument routinely contains *, ?, or [ as ordinary regex/
+// filter syntax — jq's `.[] | .name`, grep/sed's own bracket
+// expressions — without being a filename-globbing attempt at all. Since
+// a real shell's own filename globbing requires syntactically valid
+// glob syntax to begin with, text that fails to PARSE as a glob
+// (filepath.Glob's ErrBadPattern) was never attempting to reference a
+// file this way, and is allowed rather than refused — unlike
+// TestSecretFileGlobRefusalFailsClosedWithNoCwd's ev.cwd=="" case just
+// above, which IS a well-formed glob this evaluator merely has nothing
+// to resolve against.
+func TestSecretFileGlobRefusalMalformedPatternIsNotAGlob(t *testing.T) {
+	ev := &evaluator{cwd: t.TempDir()}
+	malformed := []string{
+		".[] | .name",         // jq's own filter
+		`^\s+[a-z-]+ `,        // grep -E pattern
+		"[tool.ruff",          // an unbalanced bracket, e.g. from a grep pattern
+		`s/^[^ ]+ - -.*$/\1/`, // a sed substitution script
+		"^[+-]",               // a grep pattern matching diff +/- lines
+	}
+	for _, arg := range malformed {
+		t.Run(arg, func(t *testing.T) {
+			if r := ev.secretFileGlobRefusal("grep", arg); r != nil {
+				t.Fatalf("a malformed (non-glob) pattern must not be refused as an unresolvable glob: %v", r)
+			}
+		})
+	}
+	// Paired bypass: a WELL-FORMED glob that actually expands to a real
+	// Secret-bearing file in this cwd must still refuse — this fix only
+	// changes the malformed-pattern (parse error) case, never the
+	// genuine glob-expansion-hides-filename mechanism itself.
+	dotenv := "." + "env"
+	if err := os.WriteFile(filepath.Join(ev.cwd, dotenv), []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := ev.secretFileGlobRefusal("cat", ".en?"); r == nil {
+		t.Fatal("paired bypass: a well-formed glob expanding to a real secret file must still refuse")
+	}
+}
+
+// TestReaderPatternArgumentNotAFilename is
+// command-policy:reader-pattern-argument-not-a-filename (2026-09-23
+// audit's refused_on_both false positives): grep/egrep/fgrep/sed/awk/
+// jq/yq's own implicit first-positional PATTERN/FILTER/SCRIPT argument
+// is never a filename, even when its literal text happens to match a
+// secretFileGlobs entry outright (a regex like `\.env\*` de-escapes to
+// the literal text ".env*").
+func TestReaderPatternArgumentNotAFilename(t *testing.T) {
+	cases := []struct {
+		name    string
+		argv    []string
+		refused bool
+	}{
+		{"grep -l with an id_rsa-shaped PATTERN is allowed",
+			[]string{"sh", "-c", `grep -l "id_rsa" README.md CONTRIBUTING.md`}, false},
+		{"git grep with a literal .env*-shaped PATTERN is allowed",
+			[]string{"sh", "-c", `git grep -n "\.env\*" internal/policy`}, false},
+		{"jq's filter matching a secretFileGlobs entry is allowed",
+			[]string{"sh", "-c", `jq '.env' data.json`}, false},
+		// Paired bypass: the pattern position is exempt, but a later,
+		// genuine positional file argument is still checked, on both
+		// the position-0 (ev.simple) and behind-a-wrapper
+		// (readerWordRefusal) paths.
+		{"paired bypass: id_rsa as a genuine second positional file argument is still refused",
+			[]string{"sh", "-c", `grep -l pattern id_rsa`}, true},
+		{"paired bypass: git grep's own trailing file argument is still checked",
+			[]string{"sh", "-c", `git grep pattern .env`}, true},
+		// Paired bypass: -f's own file-consuming flag value is a real
+		// file argument, not the implicit bare pattern position, and
+		// must stay checked.
+		{"paired bypass: grep -f's own file-valued flag argument is still checked",
+			[]string{"sh", "-c", `grep -f .env data.txt`}, true},
+		// The same exemption also applies directly at the argv level
+		// (no shell), through the top-of-ev.argv readers[prog] loop.
+		{"direct argv: grep's own PATTERN argument is not a filename",
+			[]string{"grep", "id_rsa", "README.md"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: c.argv})
+			if (err != nil) != c.refused {
+				t.Fatalf("argv %v: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestShellBehindWrapperHeredoc is
+// command-policy:shell-behind-wrapper-heredoc-lost-on-argv-conversion
+// (2026-09-23 audit's false-positive A/B corpus): a shell name behind
+// an unenumerated wrapper (ssh, docker run) that receives its script
+// only via an attached heredoc must still resolve that heredoc's body
+// as the executed script, the same way a bare `sh <<EOF` invocation
+// already does — ev.simple's catch-all previously flattened the word
+// list to plain strings before checking for a shell name there,
+// discarding the heredoc's own body (a heredoc word's raw text is "")
+// in the process.
+func TestShellBehindWrapperHeredoc(t *testing.T) {
+	cases := []struct {
+		name    string
+		argv    []string
+		refused bool
+	}{
+		{"ssh piping a heredoc script into bash is allowed",
+			[]string{"sh", "-c", "ssh build-host bash <<'EOF'\ncd /srv/app\ngit pull\nmake build\nEOF\n"}, false},
+		{"docker run piping a heredoc script into sh is allowed",
+			[]string{"sh", "-c", "docker run --rm -i alpine sh <<'EOF'\necho hello from container\nuname -a\nEOF\n"}, false},
+		// Paired bypass: the exact same shapes, reading a secret file
+		// from the heredoc body, are still refused.
+		{"paired bypass: ssh piping a heredoc that reads a secret file is refused",
+			[]string{"sh", "-c", "ssh build-host bash <<'EOF'\ncat .env\nEOF\n"}, true},
+		{"paired bypass: docker run piping a heredoc that reads a secret file is refused",
+			[]string{"sh", "-c", "docker run --rm -i alpine sh <<'EOF'\ncat .env\nEOF\n"}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: c.argv})
+			if (err != nil) != c.refused {
+				t.Fatalf("argv %v: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestShellScriptPathLiteralVariable is
+// command-policy:shell-script-path-literal-variable (2026-09-23 audit's
+// false-positive A/B corpus): a script path stashed in a shell variable
+// earlier assigned a plain string literal (`G=script.sh; bash $G`) must
+// resolve back to the real, checkable file — the same way a bare
+// filename argument already resolves through ev.resolveLiteral
+// elsewhere in this package — rather than reaching shellCommandString
+// as the literal two-byte text "$G", which os.Stat obviously can't
+// find.
+func TestShellScriptPathLiteralVariable(t *testing.T) {
+	dir := t.TempDir()
+	safe := filepath.Join(dir, "safe.sh")
+	if err := os.WriteFile(safe, []byte("#!/bin/sh\necho hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dangerous := filepath.Join(dir, "dangerous.sh")
+	if err := os.WriteFile(dangerous, []byte("#!/bin/sh\ncat .env\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		command string
+		refused bool
+	}{
+		{"a script path held in a variable, invoked with a plain argument, is allowed",
+			"G=" + safe + "; bash $G status", false},
+		{"the braced spelling ${G} resolves the same way",
+			"G=" + safe + "; bash ${G}", false},
+		// Paired bypass: the exact same mechanism, pointed at a script
+		// that actually reads a secret file, is still refused — this is
+		// Command Policy correctly resolving and checking the real
+		// script, not merely allowing every variable-held script path
+		// on sight.
+		{"paired bypass: a script path held in a variable pointing at a dangerous script is refused",
+			"G=" + dangerous + "; bash $G", true},
+		// An unresolvable variable (never assigned a plain-string
+		// literal in this shell string) is left alone rather than
+		// guessed at — the existing "nothing statically visible to
+		// check" refusal still applies.
+		{"an unresolved script-path variable still fails closed",
+			"bash $UNRESOLVED_SCRIPT_VAR", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: []string{"sh", "-c", c.command}})
+			if (err != nil) != c.refused {
+				t.Fatalf("command %q: refused=%v want %v (err=%v)", c.command, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestScriptFileContentExpandsHome pins scriptFileContent's own leading-
+// `~` expansion directly: a script path resolved from a shell variable
+// (or given literally) may itself use the common `~/...` spelling,
+// which os.Stat, unlike a real shell, never expands on its own.
+func TestScriptFileContentExpandsHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no $HOME available in this environment")
+	}
+	dir, err := os.MkdirTemp(home, "cpass-policy-test-*")
+	if err != nil {
+		t.Skip("cannot create a temp dir under $HOME in this environment")
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Logf("cleanup: %v", err)
+		}
+	})
+	script := filepath.Join(dir, "script.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(home, script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, refuse := scriptFileContent("~/" + rel)
+	if refuse {
+		t.Fatalf("a ~/-prefixed script path should expand against $HOME and be read")
+	}
+	if content != "#!/bin/sh\necho hello\n" {
+		t.Fatalf("unexpected content: %q", content)
+	}
+}
+
+// TestCaseStatementPatternArmNotACommand is
+// command-policy:case-statement-pattern-arm-not-a-command: a case
+// statement's own PATTERN) arm is bash's own pattern-arm syntax, never
+// a command invocation — even when the pattern text happens to spell
+// the name of a Bound-independent, zero-argument-triggers-a-refusal
+// rule this package already has (set/export/declare/typeset/env).
+func TestCaseStatementPatternArmNotACommand(t *testing.T) {
+	cases := []struct {
+		name    string
+		command string
+		refused bool
+	}{
+		{"a case arm literally named set is not the set builtin",
+			"case \"$1\" in\n  set)\n    echo arming\n    ;;\nesac", false},
+		{"a case arm literally named export is not export with no arguments",
+			"case \"$1\" in\n  export)\n    echo exporting\n    ;;\nesac", false},
+		{"alternated patterns (a|b) are still recognized as pattern text, not commands",
+			"case \"$1\" in\n  set|export)\n    echo arming\n    ;;\nesac", false},
+		{"a nested case statement inside an arm body is still fully parsed",
+			"case \"$1\" in\n  a)\n    case \"$2\" in\n      set) echo inner ;;\n    esac\n    ;;\nesac", false},
+		// Paired bypass: a real command inside an arm's own body is
+		// still evaluated exactly like any other command.
+		{"paired bypass: a secret-file read inside a case arm's body is still refused",
+			"case \"$1\" in\n  set)\n    cat .env\n    ;;\nesac", true},
+		// Paired bypass: a for-loop's own "in" nested inside an arm
+		// body must not be mistaken for a case statement's "in" (which
+		// would wrongly discard "1" "2" "3" as pattern text and misparse
+		// everything after).
+		{"paired bypass: a for-loop nested in a case arm body still evaluates its own commands",
+			"case \"$1\" in\n  a)\n    for i in 1 2 3; do cat .env; done\n    ;;\nesac", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: []string{"sh", "-c", c.command}})
+			if (err != nil) != c.refused {
+				t.Fatalf("command %q: refused=%v want %v (err=%v)", c.command, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestSplitCommandsCaseStatementPatternArm is the tokenizer-level
+// regression for TestCaseStatementPatternArmNotACommand above: a case
+// statement's PATTERN) words never become their own simple command.
+func TestSplitCommandsCaseStatementPatternArm(t *testing.T) {
+	cmds := splitCommands("case \"$1\" in\n  set)\n    echo arming\n    ;;\nesac")
+	for _, cmd := range cmds {
+		if len(cmd) == 1 && cmd[0].raw == "set" {
+			t.Fatalf("the case arm's own pattern word \"set\" must not become its own simple command: %+v", cmds)
+		}
+	}
+	var sawEcho bool
+	for _, cmd := range cmds {
+		if len(cmd) == 2 && cmd[0].raw == "echo" && cmd[1].raw == "arming" {
+			sawEcho = true
+		}
+	}
+	if !sawEcho {
+		t.Fatalf("the arm's own body command must still be tokenized normally: %+v", cmds)
+	}
+}
+
+// TestMaxDepthFailsClosed is command-policy's own stated design
+// principle (docs/adr/0013): a command whose nested structure exceeds
+// maxDepth now refuses rather than silently running unchecked past that
+// point — previously ev.shell/ev.argv/hookWalk all returned nil (allow)
+// once depth exceeded maxDepth, contradicting this package's own
+// documented "fails closed on shapes it cannot resolve" default and the
+// "at any nesting depth" claim docs/THREATS.md and the package doc
+// comments made about shell-string evaluation.
+func TestMaxDepthFailsClosed(t *testing.T) {
+	// Each "eval" prefix re-parses its own remaining argument text as a
+	// fresh shell string one level deeper (ev.simple's eval case), with
+	// no quoting/escaping needed to nest it — a plain, uncontroversial
+	// way to drive this package's own recursion arbitrarily deep without
+	// depending on how a real shell would actually re-parse nested
+	// quotes (which this synthetic test has no need to model).
+	deep := strings.Repeat("eval ", maxDepth+4) + "cat notes.txt"
+	if err := Evaluate(Input{Argv: []string{"sh", "-c", deep}}); err == nil {
+		t.Fatalf("a command nested past maxDepth should refuse, not silently allow")
+	}
+	// A command comfortably within maxDepth, with nothing dangerous in
+	// it, is unaffected.
+	shallow := strings.Repeat("eval ", maxDepth-4) + "cat notes.txt"
+	if err := Evaluate(Input{Argv: []string{"sh", "-c", shallow}}); err != nil {
+		t.Fatalf("a command within maxDepth with nothing dangerous should stay allowed: %v", err)
 	}
 }
