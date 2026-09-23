@@ -1239,8 +1239,17 @@ func TestReaderPatternArgumentNotAFilename(t *testing.T) {
 		// (readerWordRefusal) paths.
 		{"paired bypass: id_rsa as a genuine second positional file argument is still refused",
 			[]string{"sh", "-c", `grep -l pattern id_rsa`}, true},
-		{"paired bypass: git grep's own trailing file argument is still checked",
-			[]string{"sh", "-c", `git grep pattern .env`}, true},
+		// CLA-101: a real wrapper (find -exec) in front of grep exercises
+		// readerWordRefusal's own patIdx handling — the earlier version
+		// of this test used `git grep pattern .env` for the same
+		// purpose, but CLA-101 stopped treating a bare multi-level CLI
+		// subcommand (`git grep`, sharing a name with the reader `grep`
+		// but preceded by neither a wrapper nor an exec-style flag) as a
+		// program position at all; see
+		// TestReaderWordRefusalCoincidentalSubcommand below for that
+		// collateral, disclosed change on its own.
+		{"paired bypass: find -exec grep's own trailing file argument is still checked",
+			[]string{"sh", "-c", `find . -exec grep pattern .env \;`}, true},
 		// Paired bypass: -f's own file-consuming flag value is a real
 		// file argument, not the implicit bare pattern position, and
 		// must stay checked.
@@ -1250,6 +1259,56 @@ func TestReaderPatternArgumentNotAFilename(t *testing.T) {
 		// (no shell), through the top-of-ev.argv readers[prog] loop.
 		{"direct argv: grep's own PATTERN argument is not a filename",
 			[]string{"grep", "id_rsa", "README.md"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: c.argv})
+			if (err != nil) != c.refused {
+				t.Fatalf("argv %v: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestReaderWordRefusalCoincidentalSubcommand is CLA-101's acceptance
+// case: readerWordRefusal's flat per-word scan (and hookWalk's identical
+// one) now requires a genuine trigger word — a known wrapper, one of
+// find's exec-style flags, a bare xargs, or `--` (isReaderTrigger) —
+// immediately before a reader-name word, so a multi-level CLI's own
+// subcommand that merely shares a reader's name (`aws logs tail`,
+// `kubectl cp`) is no longer treated as a program position at all. The
+// same narrowing has a disclosed collateral cost (readerWordRefusal's
+// own doc comment, docs/THREATS.md item 16): a multi-level CLI
+// subcommand that — unlike `tail`/`cp` above — genuinely DOES read a
+// local file (`git grep PATTERN .env`) is no longer caught by this
+// fallback either, since `git` is neither a wrapper nor an exec-style
+// flag; that shape is pinned here too, deliberately, so a future change
+// to it is a conscious edit, not a silent regression.
+func TestReaderWordRefusalCoincidentalSubcommand(t *testing.T) {
+	cases := []struct {
+		name    string
+		argv    []string
+		refused bool
+	}{
+		{"aws logs tail's own subcommand is not the tail(1) reader",
+			[]string{"aws", "logs", "tail", "/aws/lambda/f", "--filter-pattern", ".env"}, false},
+		{"kubectl cp's own subcommand is not the cp(1) reader",
+			[]string{"kubectl", "cp", "pod:/x", ".env"}, false},
+		// Collateral, disclosed gap: git's own grep subcommand genuinely
+		// reads the named file, unlike the two cases above, but this
+		// fallback can no longer tell it apart from a coincidental
+		// subcommand name using argv text alone (readerWordRefusal's own
+		// doc comment).
+		{"disclosed gap: git grep's own subcommand genuinely reads the file but is no longer caught",
+			[]string{"sh", "-c", `git grep pattern .env`}, false},
+		// Paired: the same reader names, genuinely invoked behind a real
+		// trigger, still refuse.
+		{"cpass run's own -- separator still triggers",
+			[]string{"cpass", "run", "--", "cat", ".env"}, true},
+		{"find -exec still triggers",
+			[]string{"find", ".", "-exec", "tail", ".env", ";"}, true},
+		{"bare xargs still triggers",
+			[]string{"xargs", "cat", ".env"}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

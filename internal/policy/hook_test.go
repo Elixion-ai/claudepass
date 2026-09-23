@@ -411,20 +411,52 @@ func TestEvaluateHookWrappedCpassRunFullParity(t *testing.T) {
 	}
 }
 
-// TestEvaluateHookReaderNameCoincidentalSubcommandMatch pins a KNOWN,
-// ACCEPTED over-refusal (see readerWordRefusal's own doc comment and
-// docs/THREATS.md): a multi-level CLI's own subcommand that happens to
-// share a name with a reader program (`aws logs tail`) is
-// indistinguishable, by this package's flat per-word scan, from a
-// genuine invocation of that reader behind an unenumerated wrapper
-// (`find . -exec tail .env \;`) — narrowing the check enough to
-// exclude one would reopen the other, so this stays a deliberate,
-// disclosed trade-off. This test exists so a future change to that
-// trade-off is a conscious edit here, not a silent behavior change.
+// TestEvaluateHookReaderNameCoincidentalSubcommandMatch is CLA-101's
+// acceptance case at the hook layer: a multi-level CLI's own subcommand
+// that happens to share a name with a reader program (`aws logs tail`,
+// `kubectl cp`) is no longer treated as a genuine reader invocation —
+// readerWordRefusal/hookWalk's per-word fallback now requires a real
+// trigger word (isReaderTrigger) immediately before the reader-name
+// word, and neither `aws` nor `kubectl`'s own subcommand words are one.
+// Before this fix both commands below were refused (see this test's own
+// prior revision, and docs/THREATS.md item 16's now-updated disclosure)
+// — an over-refusal, not a caught leak, since AWS's `tail` streams
+// remote CloudWatch logs and kubectl's `cp` here WRITES a local file,
+// neither of which reads anything through the local filesystem the way
+// a real `tail`/`cp` invocation would.
 func TestEvaluateHookReaderNameCoincidentalSubcommandMatch(t *testing.T) {
-	command := `aws logs tail /aws/lambda/myfunction --filter-pattern .env`
-	if err := EvaluateHook(command); err == nil {
-		t.Fatalf("command %q: expected the documented, accepted over-refusal (readerWordRefusal treats \"tail\" as a reader invocation), got allowed", command)
+	cases := []string{
+		`aws logs tail /aws/lambda/myfunction --filter-pattern .env`,
+		`kubectl cp pod:/x .env.example`,
+		`kubectl cp pod:/x .env`,
+	}
+	for _, command := range cases {
+		t.Run(command, func(t *testing.T) {
+			if err := EvaluateHook(command); err != nil {
+				t.Fatalf("command %q: expected the coincidental-subcommand-name case to be allowed, got refused: %v", command, err)
+			}
+		})
+	}
+}
+
+// TestEvaluateHookReaderTriggerStillCatchesRealWrappers is the paired
+// benign-vs-refused check for CLA-101's own narrowing: a reader name
+// genuinely invoked behind a trigger word (isReaderTrigger) must stay
+// refused exactly as before, including `cpass run`'s own `--`
+// separator — by far the most common shape this whole mechanism exists
+// to catch, and the one a too-narrow fix would most easily break.
+func TestEvaluateHookReaderTriggerStillCatchesRealWrappers(t *testing.T) {
+	cases := []string{
+		`cpass run -- cat .env`,
+		`find . -exec cat .env \;`,
+		`xargs cat < .env`,
+	}
+	for _, command := range cases {
+		t.Run(command, func(t *testing.T) {
+			if err := EvaluateHook(command); err == nil {
+				t.Fatalf("command %q: expected a refusal, got allowed", command)
+			}
+		})
 	}
 }
 

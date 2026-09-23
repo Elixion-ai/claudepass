@@ -217,8 +217,21 @@ var (
 	// ever variable/array names, never the id_rsa* SSH key file itself
 	// (command-policy:read-builtin-destination-name-not-a-filename).
 	readBuiltins = map[string]bool{"read": true, "mapfile": true, "readarray": true}
-	procEnviron  = regexp.MustCompile(`/proc/(self|\$\$|[0-9]+|[a-z]*\$[A-Za-z_{]*[}]?)/environ`)
-	varRef       = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)`)
+	// execStyleFlags are the words whose own semantics feed a program
+	// name into the WORD RIGHT AFTER them as a real invocation: find's
+	// own prompt-and-exec family (-exec/-execdir run the following
+	// command unconditionally; -ok/-okdir do the same after a y/n
+	// prompt — okdir isn't named by CLA-101's own ticket text but is
+	// find's identical-shape sibling of -ok, so leaving it out would
+	// reopen the exact gap this closes, one flag over), and a bare
+	// `xargs`, whose own first non-option argument names the command it
+	// appends its stdin-derived arguments to and execs. See
+	// isReaderTrigger and readerWordRefusal's own doc comment (CLA-101).
+	execStyleFlags = map[string]bool{
+		"-exec": true, "-execdir": true, "-ok": true, "-okdir": true, "xargs": true,
+	}
+	procEnviron = regexp.MustCompile(`/proc/(self|\$\$|[0-9]+|[a-z]*\$[A-Za-z_{]*[}]?)/environ`)
+	varRef      = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)`)
 	// indirectVarRef matches Bash indirect expansion, ${!NAME} — NAME's
 	// own value (resolved through literals) names the variable actually
 	// being read, e.g. `x=STRIPE_LIVE; echo ${!x}` reads $STRIPE_LIVE.
@@ -464,42 +477,76 @@ func (ev *evaluator) shellWordRefusal(argv []string, depth int) error {
 	return nil
 }
 
+// isReaderTrigger reports whether prev — the word immediately before a
+// reader-name word in a flat, no-shell argv or word list — is a genuine
+// "the next word is a program about to run" position: a known wrapper
+// this package already always unwraps in a real command-start position
+// (`wrappers`), one of find's own exec-style flags / a bare `xargs`
+// (`execStyleFlags`), or a bare `--` option terminator. The `--` case is
+// load-bearing on its own: `cpass run [flags] -- <command>` — the
+// documented, primary way to invoke `cpass run` at all (see its own
+// `usage:` line in internal/cli/runcmd.go) — is exactly this shape, and
+// unlike find's flags or xargs it names no fixed wrapper program at
+// all, since `--` is a generic option-terminator convention many CLIs
+// (`cpass run` among them) use to mark "everything after this is the
+// command to run." A CLI that instead puts `--` INSIDE its own
+// invocation to end ITS OWN flags before an ordinary positional
+// argument (`grep -- .env file.txt`) never places a reader-named word
+// immediately after it, so treating `--` as a trigger costs nothing
+// there — it only ever adds coverage, the same direction execStyleFlags
+// itself takes. Shared by readerWordRefusal below and hookWalk's
+// identical narrowing (internal/policy/hook.go), which must stay in
+// parity — see readerWordRefusal's own doc comment for what requiring
+// this excludes and why (CLA-101).
+func isReaderTrigger(prev string) bool {
+	return prev == "--" || wrappers[prev] || execStyleFlags[prev]
+}
+
 // readerWordRefusal mirrors hookWalk's per-word reader-name fallback
 // (internal/policy/hook.go) for a flat argv with no shell involved: even
-// when argv[0] isn't itself a reader, a reader name appearing anywhere
-// else in argv — the tail of a wrapper neither `wrappers` nor `shells`
-// enumerates, e.g. `find . -exec cat .env \;` — is still a real
-// subprocess invocation a real exec family call (execvp inside -exec, in
-// find's own case) will make, and its own file-argument words are still
-// checkable text sitting right there in argv. Before this, Evaluate (the
-// function cpass run and the MCP server actually gate real execution
-// with) special-cased only the fixed `wrappers` map plus `timeout`,
-// leaving every other wrapper completely unchecked — a parity gap with
-// EvaluateHook's hookWalk, which already scans every word position for
-// exactly this reason
+// when argv[0] isn't itself a reader, a reader name appearing right
+// after a known trigger (isReaderTrigger) — the tail of a wrapper
+// neither `wrappers` nor `shells` enumerates, e.g. `find . -exec cat
+// .env \;`, or a bare `xargs`'s own first argument, e.g. `xargs cat <
+// .env` — is still a real subprocess invocation a real exec family call
+// (execvp inside -exec, in find's own case) will make, and its own
+// file-argument words are still checkable text sitting right there in
+// argv. Before CLA-99, Evaluate (the function cpass run and the MCP
+// server actually gate real execution with) special-cased only the
+// fixed `wrappers` map plus `timeout`, leaving every other wrapper
+// completely unchecked — a parity gap with EvaluateHook's hookWalk,
+// which already scanned every word position for exactly this reason
 // (command-policy:evaluate-missing-hook-per-word-wrapper-coverage).
 // argv[0] itself is exempt when it is a pure-output printer
 // (echo/printf/print): the remaining words are then data it prints, never
 // programs it runs — the same exemption hookWalk's printerArg applies.
 //
-// KNOWN, ACCEPTED OVER-REFUSAL (disclosed in docs/THREATS.md): this is a
-// flat per-word scan with no notion of argv structure, so a word that
-// merely coincides with a reader's name is treated the same as a genuine
-// invocation of it — including a multi-level CLI's own SUBCOMMAND that
+// CLA-101 narrowed this from "any word position at all" (CLA-99's
+// original shape) to "only right after isReaderTrigger": scanning every
+// position caught a reader behind an unenumerated wrapper, but along
+// with it, indistinguishably, a multi-level CLI's own SUBCOMMAND that
 // happens to share a name with a reader utility, e.g. `aws logs tail
 // /aws/lambda/f --filter-pattern .env`: "tail" here is the AWS CLI's own
 // subcommand, never the tail(1) reader, and ".env" is a filter-pattern
-// string, not a file argument, yet this loop cannot tell the two apart
-// from "tail" behind a real wrapper (`find . -exec tail .env \;`), which
-// is the shape this fallback exists to catch and must keep catching.
-// Scoping the check to only the argv position right after a known
-// exec-taking flag (`find`'s `-exec`) would lose the equally-legitimate
-// `xargs cat .env` shape, which has no such flag at all — narrowing this
-// enough to exclude the coincidental-subcommand case would reopen one of
-// those two, not close a gap, so this stays a deliberate, disclosed
-// trade-off rather than a narrower heuristic guessing at which shape a
-// given wrapper is (command-policy:reader-name-coincidental-subcommand-
-// match).
+// string, not a file argument — refusing it was over-refusal, not a
+// caught leak. Requiring a trigger word closes that false positive
+// while keeping every real per-word shape this fallback exists for
+// (`find . -exec cat .env \;` via `-exec`, `xargs cat < .env` via a bare
+// `xargs`).
+//
+// KNOWN, ACCEPTED GAP left by this narrowing (disclosed in
+// docs/THREATS.md): a multi-level CLI's own subcommand that — unlike
+// `aws logs tail`/`kubectl cp` — genuinely DOES read a local file the
+// way a real reader would (`git grep PATTERN .env`) is no longer caught
+// by this fallback either, since its own program name (`git`) is
+// neither a wrapper nor an exec-style flag. Re-widening the check to
+// catch that shape would reopen the exact false positive this ticket
+// exists to close — there is no static way to tell "aws's own tail
+// subcommand" from "git's own grep subcommand" from argv text alone
+// without enumerating every third-party CLI's own subcommand semantics,
+// the unbounded task docs/THREATS.md item 16 already declines for
+// third-party tools generally. Redaction and `cpass import` remain the
+// enforced boundary for this narrower shape, per ADR-0013.
 func readerWordRefusal(argv []string) *Refusal {
 	if len(argv) == 0 || printers[base(argv[0])] {
 		return nil
@@ -507,6 +554,9 @@ func readerWordRefusal(argv []string) *Refusal {
 	for i := 1; i < len(argv); i++ {
 		prog := base(argv[i])
 		if !readers[prog] || readBuiltins[prog] {
+			continue
+		}
+		if !isReaderTrigger(base(argv[i-1])) {
 			continue
 		}
 		patIdx := readerPatternIndex(prog, argv[i+1:])

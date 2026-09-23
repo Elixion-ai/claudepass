@@ -696,14 +696,27 @@ a direct `$IFS`/`${IFS}` reference, and a glob-shaped argument hidden
 behind an unenumerated wrapper program).
 
 Separately from the tokenizer, `Evaluate`'s per-word fallback — the
-mechanism that already resolved a reader name appearing anywhere in a
-command's words, not only as the program actually invoked (`find .
--exec cat .env \;`) — now resolves a SHELL name the same way (round 3):
-a shell invocation behind ANY wrapper program, not only the ones
-`wrappers` enumerates, has its `-c`/script-path content statically
-evaluated the same way a direct shell invocation already is, matching a
-parity `EvaluateHook`'s own per-word scan already had by structural
-accident.
+mechanism that already resolved a reader name appearing right after a
+genuine trigger word in a command's words, not only as the program
+actually invoked (`find . -exec cat .env \;`, `xargs cat < .env`, or
+`cpass run`'s own `--` separator) — now resolves a SHELL name the same
+way (round 3): a shell invocation behind ANY wrapper program, not only
+the ones `wrappers` enumerates, has its `-c`/script-path content
+statically evaluated the same way a direct shell invocation already is,
+matching a parity `EvaluateHook`'s own per-word scan already had by
+structural accident. **CLA-101** narrowed the reader-name half of this
+fallback from matching a reader's name at ANY word position to only
+right after a known wrapper, one of find's own exec-style flags
+(`-exec`/`-execdir`/`-ok`/`-okdir`), a bare `xargs`, or `--`: scanning
+every position caught a reader behind an unenumerated wrapper, but
+along with it, indistinguishably, a multi-level CLI's own subcommand
+that merely shares a reader's name (`aws logs tail ...`, `kubectl cp
+...`) — over-refusal, not a caught leak. The shell-name half of this
+fallback is unaffected and still matches at any position — see
+`docs/THREATS.md` item 16 for the narrower, disclosed gap this leaves
+(a multi-level CLI subcommand that, unlike the two examples above,
+genuinely does read a local file, e.g. `git grep PATTERN .env`, is no
+longer caught by this fallback either).
 
 **Scope note**: the secret-file-glob and raw-literal checks above are the
 same rule in `EvaluateHook` and the evaluator `cpass run` and the MCP
@@ -740,12 +753,16 @@ detail.
    Secret-bearing file by the same basename glob the PreToolUse hook
    matches (`.env*`, `*.pem`, `id_rsa*`, `*.key`, `credentials*.json`,
    `.netrc`, `.npmrc`, with the same non-secret-counterpart exclusions —
-   see above), passed to the same reader programs — anywhere in the
-   command, not only as the program actually invoked, so a reader behind
-   a wrapper this package doesn't enumerate (`find . -exec cat .env \;`)
-   is still caught the same way the hook's own per-word scan already
-   catches it (2026-09-22 audit round 2 closed this `Evaluate`/
-   `EvaluateHook` parity gap) — or a shell `source`/`.` builtin; a bound
+   see above), passed to the same reader programs — right after a known
+   trigger word (a wrapper, one of find's own exec-style flags, a bare
+   `xargs`, or `--`, not only as the program actually invoked — CLA-101
+   narrowed this from "anywhere in the command" to close a
+   multi-level-CLI-subcommand false positive, see `docs/THREATS.md` item
+   16), so a reader behind a wrapper this package doesn't enumerate
+   (`find . -exec cat .env \;`) is still caught the same way the hook's
+   own per-word scan already catches it (2026-09-22 audit round 2 closed
+   this `Evaluate`/`EvaluateHook` parity gap) — or a shell `source`/`.`
+   builtin; a bound
    or tainted variable given to a reader with no matching file operand —
    a here-string (`cat <<< $STRIPE_LIVE`) is the live shape, since a
    reader given no real file argument is functionally "cat used as echo"

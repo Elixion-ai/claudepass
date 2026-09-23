@@ -160,7 +160,17 @@ func hookWalk(command string, depth int, literals map[string]string) *Refusal {
 					}
 				}
 			}
-			if readers[prog] {
+			if readers[prog] && readerIsProgramPosition(words, i) {
+				// readerIsProgramPosition (CLA-101) is what keeps a
+				// reader behind a wrapper this list doesn't enumerate
+				// (`find . -exec cat .env \;`, `timeout 5 cat .env`,
+				// `nice cat .env`, `xargs cat < .env`, `sudo cat .env`)
+				// refused without narrowing detection to argv[0] plus a
+				// fixed allowlist of wrappers, while no longer treating a
+				// multi-level CLI's own subcommand that merely shares a
+				// reader's name (`aws logs tail ...`) as a program
+				// position at all — see its own doc comment.
+				//
 				// A pure-output program's own arguments are data it
 				// prints, not programs it runs: `echo cat .env` never
 				// executes cat. This exempts only an argument of
@@ -168,13 +178,7 @@ func hookWalk(command string, depth int, literals map[string]string) *Refusal {
 				// simple command, or the first word after a leading run of
 				// VAR=value assignments, so a printer prefixed with one (e.g.
 				// DEBUG=1 echo ...) is exempted the same way (printerArg,
-				// CLA-64 review) — a reader named anywhere else is still
-				// caught, exactly as before, which is what keeps a reader
-				// behind a wrapper this list doesn't enumerate (`find .
-				// -exec cat .env \;`, `timeout 5 cat .env`, `nice cat
-				// .env`, `xargs cat < .env`, `sudo cat .env`) refused
-				// without narrowing detection to argv[0] plus an
-				// allowlist of wrappers.
+				// CLA-64 review).
 				if !printerArg(words, i) {
 					rest := words[i+1:]
 					restRaw := make([]string, len(rest))
@@ -285,6 +289,26 @@ func commandStart(words []word, i int) bool {
 		}
 	}
 	return true
+}
+
+// readerIsProgramPosition reports whether word position i in words is
+// where a genuine reader-program invocation is expected: the command's
+// own first word (found the same way commandStart finds it, so a
+// leading VAR=value run before a bare `cat .env` is still recognised,
+// e.g. `DEBUG=1 cat .env`), or immediately after a known trigger word
+// (isReaderTrigger, policy.go) — the tail of a wrapper this package's
+// own `wrappers` map doesn't enumerate, or find's exec-style flags / a
+// bare `xargs`'s own first argument. Mirrors readerWordRefusal's
+// identical narrowing (policy.go) for the flat-argv, no-shell path — see
+// its own doc comment for what requiring this excludes and why
+// (CLA-101): a reader name elsewhere in the word list — most commonly a
+// multi-level CLI's own subcommand sharing a reader's name (`aws logs
+// tail`) — is not a program position at all.
+func readerIsProgramPosition(words []word, i int) bool {
+	if commandStart(words, i) {
+		return true
+	}
+	return isReaderTrigger(base(words[i-1].raw))
 }
 
 // printerArg reports whether word position i in words is an argument

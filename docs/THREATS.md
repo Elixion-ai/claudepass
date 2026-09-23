@@ -485,14 +485,19 @@ value can still end up somewhere it shouldn't, today:
       tool instead of per language.
     - **An unenumerated wrapper this package's own per-word fallback
       doesn't reach still exists.** `readerWordRefusal`/`hookWalk`'s
-      per-word scans catch a reader or shell name appearing anywhere in
-      a flat argv or word list (`find . -exec cat .env \;`, `xargs cat
-      .env`, `nsenter ... sh -c '...'`), which covers the common,
-      genuinely reachable shapes — but a wrapper that renames its child
-      process, execs through a compiled helper binary with no readable
-      argv text naming the real command, or otherwise obscures what it's
-      about to run from the text of the command line itself is outside
-      what any text-based scan can see, by construction.
+      per-word scans catch a reader or shell name appearing right after a
+      genuine trigger word (a wrapper, one of find's own exec-style
+      flags, a bare `xargs`, or `--` — CLA-101 narrowed the reader-name
+      half of this from "anywhere in a flat argv or word list" to this,
+      see below) in a flat argv or word list (`find . -exec cat .env
+      \;`, `xargs cat .env`, `cpass run -- cat .env`; the shell-name half
+      is unaffected and still matches at any position, e.g. `nsenter ...
+      sh -c '...'`), which covers the common, genuinely reachable shapes
+      — but a wrapper that renames its child process, execs through a
+      compiled helper binary with no readable argv text naming the real
+      command, or otherwise obscures what it's about to run from the
+      text of the command line itself is outside what any text-based
+      scan can see, by construction.
 
     The enforced boundary for this whole residual class is not Command
     Policy — it is Redaction (a value these programs print still gets
@@ -511,12 +516,7 @@ value can still end up somewhere it shouldn't, today:
     it isn't.
 
     This round (2026-09-23 audit) also leaves its own narrower disclosed
-    edges: `readerWordRefusal`'s coincidental-subcommand-match
-    over-refusal (a multi-level CLI's own subcommand sharing a name with
-    a reader, e.g. `aws logs tail ...`, is refused the same as a real
-    `tail` invocation — see the function's own doc comment) is a
-    deliberate, accepted trade-off, not a narrowed-then-reopened gap; and
-    the case-statement pattern-arm fix models `case`/`in`/`;;`/`esac`
+    edges: the case-statement pattern-arm fix models `case`/`in`/`;;`/`esac`
     precisely but not bash's `;&`/`;;&` fallthrough operators, which this
     package's tokenizer still treats as plain `;`-separated command
     boundaries — a case arm using either form parses as more separate
@@ -524,6 +524,29 @@ value can still end up somewhere it shouldn't, today:
     mean MORE separately-checked text, never less, the same conservative
     direction every other under-modeled shape in this document already
     takes.
+
+    **CLA-101 (2026-09-23 audit follow-up)** fixed that same round's own
+    disclosed `readerWordRefusal` coincidental-subcommand-match
+    over-refusal: a multi-level CLI's own subcommand that merely shares a
+    name with a reader utility and does not itself read a local file
+    (`aws logs tail ...`, `kubectl cp pod:/x .env` — AWS's `tail`
+    streams remote CloudWatch logs, and this `kubectl cp` invocation
+    WRITES a local file) is no longer treated as a reader invocation at
+    all; `readerWordRefusal`/`hookWalk`'s per-word fallback now requires
+    a genuine trigger word (a wrapper, one of find's own exec-style
+    flags, a bare `xargs`, or `--`) immediately before the reader-name
+    word — see `isReaderTrigger`'s own doc comment. This narrowing
+    leaves its own, smaller disclosed edge: a multi-level CLI subcommand
+    that — unlike the two examples above — genuinely DOES read a local
+    file the way a real reader would (`git grep PATTERN .env`) is no
+    longer caught by this fallback either, since its own program name
+    (`git`) is neither a wrapper nor an exec-style flag, and there is no
+    static way to tell "a coincidental subcommand name" from "a
+    subcommand that happens to have reader-like semantics" from argv
+    text alone without enumerating every third-party CLI's own
+    subcommand semantics — the same unbounded task this item already
+    declines for third-party tools generally. Redaction and `cpass
+    import` remain the enforced boundary for this narrower shape.
 
 ## Intercept precision (v0.1.4)
 
