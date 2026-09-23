@@ -209,7 +209,14 @@ value can still end up somewhere it shouldn't, today:
       -p -s -a -b -f -h -k -m -t`, `-o`/`-O`/`+o`/`+O <arg>`, or
       `--noprofile --norc --login --posix` before it — the STRING is
       evaluated exactly like the shell string this package already parses
-      everywhere else, including at any nesting depth. This holds for
+      everywhere else, up to a nesting depth of 8 (`maxDepth`) — past
+      which this package now refuses rather than silently allowing an
+      unevaluated command through (2026-09-23 audit; previously it
+      returned nil past this depth, a real gap between this claim and
+      what actually happened, since nothing that deep is genuinely
+      evaluated at all — it is refused instead, which is what keeps this
+      a non-issue for the property that matters: no command can evade
+      every rule above by nesting deep enough). This holds for
       every ordering a real shell accepts, combined short-flag groups
       included: `-co`, `-oc`, `+co`, and `+oc` all consume exactly one
       word for `o`/`O` (wherever it falls in the group) and defer `c`'s
@@ -389,6 +396,82 @@ value can still end up somewhere it shouldn't, today:
       its own, so the reading program receives the glob pattern's
       literal text and simply fails to find a file by that name — there
       is nothing to leak in that shape to begin with.
+
+13. **Command Policy is a static guardrail, not a decision procedure for
+    arbitrary shell (see [ADR-0013](adr/0013-command-policy-is-a-static-guardrail.md))
+    — a command can compute what it does at run time in ways no amount of
+    precise syntax modeling reaches, and this is the standing, disclosed
+    residual class every item above is an instance of, not a defect any
+    one of them was supposed to close.** Concretely:
+    - **An interpreter's own `-c`/`-e` string is not shell syntax and this
+      package does not read it as one.** `python3 -c "open('.env').read()"`,
+      `node -e "require('fs').readFileSync('.env')"`, `ruby -e
+      "File.read('.env')"` — none of these are `shells`-map members (only
+      `sh`/`bash`/`zsh`/`dash`/`ksh`/`fish` are), so their own `-c`/`-e`
+      argument is checked only as ordinary argv text (the raw-literal and
+      glob/filename rules still apply to it), never parsed as the
+      language it's actually written in. A language-specific parser for
+      every interpreter an Agent might reach for is not a "cheap, precise
+      addition" — it is a second copy of this package per language, which
+      is not what a static guardrail can be.
+    - **A dynamically constructed string handed to `eval` isn't
+      resolved, per item 11's own dynamic-command-name entry — one level
+      up, at `eval` itself.** `eval "$(printf '%s' Y2F0IC5lbnY= | base64
+      -d)"` decodes and runs `cat .env`, but the text `eval`'s own
+      argument statically shows is a `base64 -d` pipeline's output, not
+      the command that output happens to spell; this package evaluates
+      what a command's own text literally says, not what any program it
+      invokes might later produce.
+    - **A program that opens a file itself, through an argument shape
+      this package has no reason to model as file-like, is invisible to
+      the secretFileGlobs checks.** `mytool --config .env` is checked
+      only if `mytool` is a name in `readers`/`sourceBuiltins`/`shells` —
+      an ordinary CLI tool with its own `--config`/`--input`/`--source`
+      flag pointing at a Secret-bearing file is not, and has no reason to
+      be: enumerating every third-party tool's own file-taking flag is
+      the same unbounded task as the interpreter case above, just per
+      tool instead of per language.
+    - **An unenumerated wrapper this package's own per-word fallback
+      doesn't reach still exists.** `readerWordRefusal`/`hookWalk`'s
+      per-word scans catch a reader or shell name appearing anywhere in
+      a flat argv or word list (`find . -exec cat .env \;`, `xargs cat
+      .env`, `nsenter ... sh -c '...'`), which covers the common,
+      genuinely reachable shapes — but a wrapper that renames its child
+      process, execs through a compiled helper binary with no readable
+      argv text naming the real command, or otherwise obscures what it's
+      about to run from the text of the command line itself is outside
+      what any text-based scan can see, by construction.
+
+    The enforced boundary for this whole residual class is not Command
+    Policy — it is Redaction (a value these programs print still gets
+    stripped from `cpass run`'s own stdout/stderr, per item 3's stated
+    scope) and `cpass import` removing the plaintext Secret file from disk
+    once its values are in the Vault (so there is decreasingly often a
+    `.env`/`id_rsa`/etc. left on disk for one of these to open in the
+    first place). A newly found shape in this class is not a broken
+    Command Policy guarantee; it is confirmation of the boundary ADR-0013
+    already states. A shape that genuinely IS syntax this package could
+    model precisely — a new heredoc form, a redirection this page doesn't
+    yet cover — is a different kind of finding, judged the way items 1–12
+    above already are: a regression (something this package used to catch
+    and now doesn't) is a bug, and a shape it never modeled is a cheap,
+    precise addition when the fix is narrow, or a disclosed edge here when
+    it isn't.
+
+    This round (2026-09-23 audit) also leaves its own narrower disclosed
+    edges: `readerWordRefusal`'s coincidental-subcommand-match
+    over-refusal (a multi-level CLI's own subcommand sharing a name with
+    a reader, e.g. `aws logs tail ...`, is refused the same as a real
+    `tail` invocation — see the function's own doc comment) is a
+    deliberate, accepted trade-off, not a narrowed-then-reopened gap; and
+    the case-statement pattern-arm fix models `case`/`in`/`;;`/`esac`
+    precisely but not bash's `;&`/`;;&` fallthrough operators, which this
+    package's tokenizer still treats as plain `;`-separated command
+    boundaries — a case arm using either form parses as more separate
+    commands than a real shell would run together, which can only ever
+    mean MORE separately-checked text, never less, the same conservative
+    direction every other under-modeled shape in this document already
+    takes.
 
 ## Intercept precision (v0.1.4)
 

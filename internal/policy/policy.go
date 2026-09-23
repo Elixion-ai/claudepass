@@ -1,13 +1,23 @@
-// Package policy decides whether a command an Agent wants to run may
-// proceed: it refuses commands that would reveal a Secret rather than use
-// it, read a Secret-bearing file directly, or carry a raw Secret-shaped
-// literal. The same evaluator (Evaluate) serves cpass run, the MCP
-// server's run_with_secrets/capture tools, and — via EvaluateHook, which
-// applies Evaluate's rules plus one more before any value exists to bind —
-// the Claude Code PreToolUse hook, so these rules are identical
-// everywhere. The one exception is EvaluateHook's refusal of `cpass add`
-// given an inline value: it has no equivalent in Evaluate, since only the
-// hook inspects a raw Bash command line before cpass has parsed anything.
+// Package policy statically refuses the well-known ways a command an
+// Agent wants to run would reveal a bound Secret or read a Secret-bearing
+// file directly, modeling real shell syntax as far as that stays precise,
+// and fails closed — refuses, not silently runs unchecked — on a
+// shell-invocation shape it cannot parse (see docs/adr/0013). It is not,
+// and does not try to be, a complete decision procedure for arbitrary
+// shell: a command can compute what it does at run time (an interpreter's
+// own -c/-e string, eval of a dynamically constructed string, a program
+// that opens a file by a name this package never modeled as file-shaped,
+// an unenumerated wrapper), and docs/THREATS.md's own numbered list is
+// the honest, standing account of exactly which such shapes this package
+// does not attempt. The same evaluator (Evaluate) serves cpass run, the
+// MCP server's run_with_secrets/capture tools, and — via EvaluateHook,
+// which applies Evaluate's rules plus one more before any value exists to
+// bind — the Claude Code PreToolUse hook, so these rules are the same
+// everywhere with the small number of disclosed exceptions
+// docs/THREATS.md's own list states precisely (the hook's own `cpass add`
+// inline-value check, and the argv[0] exclusion from the raw-literal
+// scan): consult that list rather than assuming this comment enumerates
+// them, since a fix can close one without this file ever changing.
 package policy
 
 import (
@@ -223,11 +233,16 @@ var (
 
 // secretFileGlobs are basename patterns of files that hold Secret values on
 // disk rather than in the Vault. Evaluate (and so cpass run, the MCP
-// server, and — via EvaluateHook — the PreToolUse hook) refuses any
-// command that would read one directly: doing so bypasses the Vault, and
-// the value would land straight in the Agent's Context. Matched with
-// filepath.Match against the basename of each argument, so a path like
-// "$HOME/.env" is still caught.
+// server, and — via EvaluateHook — the PreToolUse hook) refuses the
+// well-known, statically recognizable ways a command would read one
+// directly: doing so bypasses the Vault, and the value would land
+// straight in the Agent's Context. Matched with filepath.Match against
+// the basename of each argument, so a path like "$HOME/.env" is still
+// caught — but this is necessarily a list of known patterns (a reader
+// program, a source builtin, a redirection, a resolvable variable or fd
+// alias, a well-formed glob expansion), not a sandbox: a program that
+// opens the file itself, through an argument shape this package doesn't
+// model as file-like, is not caught this way (docs/THREATS.md).
 var secretFileGlobs = []string{
 	".env*", "*.pem", "id_rsa*", "*.key", "credentials*.json", ".netrc", ".npmrc",
 }
