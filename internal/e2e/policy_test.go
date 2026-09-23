@@ -305,7 +305,9 @@ func TestPolicyRunRound2ReviewFindings(t *testing.T) {
 		// command-policy:dynamic-command-name-not-resolved
 		{"a whole variable naming a literal command reading a secret file", "x='cat .env'; $x", "x='echo hello'; $x"},
 		// command-policy:reader-here-string-reveal-bypass
-		{"cat here-string reveals a bound variable", "cat <<< $STRIPE_LIVE", "cat <<< hello"},
+		// The allowed half runs its here-string under bash explicitly: sh is
+		// dash on Linux, which has no <<< and fails with a syntax error.
+		{"cat here-string reveals a bound variable", "cat <<< $STRIPE_LIVE", "bash -c 'cat <<< hello'"},
 	}
 	for _, p := range pairs {
 		t.Run(p.name, func(t *testing.T) {
