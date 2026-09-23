@@ -121,8 +121,16 @@
         a command tries to defeat Redaction on purpose: dumping the
         environment, reading a Secret-bearing file like <code>.env</code>
         or an SSH private key, or handing <code>cpass add</code> an inline
-        value that would bypass its terminal-only gate. The same rule set
-        runs in the CLI, the Claude Code hook, and the MCP server.
+        value that would bypass its terminal-only gate. It's a static
+        check — it fails closed on a shell shape it can't parse rather
+        than run it unchecked, but it isn't a sandbox, so a command that
+        computes what it does at run time (an interpreter's own script, a
+        program that opens a file itself) can still fall outside what it
+        catches. The same rule set runs in the CLI, the Claude Code hook,
+        and the MCP server, other than a couple of narrow, disclosed
+        exceptions — see
+        <a href="https://github.com/Elixion-ai/claudepass/blob/main/docs/THREATS.md" target="_blank" rel="noopener">the threat model</a>
+        on GitHub for exactly what those are and aren't.
       </p>
 
       <div class="cp-alert">

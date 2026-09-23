@@ -2,6 +2,8 @@ package e2e
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -49,6 +51,25 @@ func TestPolicyHookAcceptanceFixtures(t *testing.T) {
 		// Secret-shaped literal and trip the hook.
 		{"ordinary REST call with a versioned/hex URL path is allowed", `cpass run --with stripe/live -- curl -H "Authorization: Bearer $STRIPE_LIVE" https://api.stripe.com/v1/charges/ch_3Oq5x2AbCdEfGh011`, false, ""},
 		{"plain ls is allowed", "ls", false, ""},
+		// CLA-62 review: a -c STRING is what actually executes even when
+		// a heredoc is attached alongside it — the heredoc must not be
+		// able to shadow a dangerous -c string and let it through as a
+		// silent, exit-0, unredacted-file-content bypass.
+		{"dangerous -c string alongside a benign heredoc is still refused", "bash -c \"cat .env\" <<'EOF'\necho decoy\nEOF\n", true, "Secret-bearing file"},
+		// CLA-61 review: an UNQUOTED heredoc delimiter's body is expanded
+		// by a real shell — command substitutions included — before it
+		// ever reaches the reading program's stdin, regardless of which
+		// program that is; a QUOTED delimiter's body stays inert.
+		{"unquoted heredoc's command substitution reads .env, attached to cat", "cat <<EOF\n$(cat .env)\nEOF\n", true, "Secret-bearing file"},
+		{"unquoted heredoc's command substitution reads .env, attached to a non-reader program", "wc -l <<EOF\n$(cat .env)\nEOF\n", true, "Secret-bearing file"},
+		{"quoted heredoc's would-be command substitution stays inert", "cat <<'EOF'\n$(cat .env)\nEOF\n", false, ""},
+		// CLA-62 review: shellCommandString's combined-short-option
+		// branch used to return the word right after wherever 'c' fell
+		// in the group as the -c string the instant it saw the letter —
+		// checking "pipefail" and letting the real `cat .env` through.
+		{"combined -co: o's value first, c's string is the real command", "bash -co pipefail 'cat .env'", true, "Secret-bearing file"},
+		{"combined -oc: same result with the letters swapped", "bash -oc pipefail 'cat .env'", true, "Secret-bearing file"},
+		{"combined -co with a safe command is allowed", "bash -co pipefail 'echo hello'", false, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -73,6 +94,52 @@ func TestPolicyHookAcceptanceFixtures(t *testing.T) {
 			}
 			if strings.Contains(r.stdout+r.stderr, "sk_live_51H8xJ2eZvKYlo2CThookfixtureVALUEabc") {
 				t.Fatalf("raw Secret value leaked: %s", r)
+			}
+		})
+	}
+}
+
+// TestPolicyHookRound2ReviewFindings is the fixer round's e2e proof, at the
+// PreToolUse hook layer driven against a real built `cpass policy --hook`
+// invocation, for every file-read-class shape the round-2 review reported.
+// The two Bound-value-dependent classes (a reveal via a bound variable
+// inside a control-flow body, and the here-string reveal) have no Bound
+// value at this Bound-independent hook layer to check against at all —
+// they are covered above, at the cpass run e2e layer, where a Handle is
+// actually bound.
+func TestPolicyHookRound2ReviewFindings(t *testing.T) {
+	ve := newVault(t)
+	cases := []struct {
+		name    string
+		command string
+		blocked bool
+		want    string
+	}{
+		{"if condition reads a secret file", "if cat .env; then true; fi", true, "Secret-bearing file"},
+		{"while condition reads a secret file", "while cat .env; do break; done", true, "Secret-bearing file"},
+		{"until condition reads a secret file", "until cat .env; do break; done", true, "Secret-bearing file"},
+		{"if/then/fi with nothing dangerous is allowed", "if true; then echo hello; fi", false, ""},
+		{"ANSI-C quoting names a secret file", `cat $'.env'`, true, "Secret-bearing file"},
+		{"locale quoting names a secret file", `cat $".env"`, true, "Secret-bearing file"},
+		{"ANSI-C quoting around benign text is allowed", `cat $'hello'`, false, ""},
+		{"brace expansion names a secret file", "cat .{env,bashrc}", true, "Secret-bearing file"},
+		{"brace expansion with nothing dangerous is allowed", "echo .{txt,md}", false, ""},
+		{"a whole variable naming a literal command reading a secret file", `x='cat .env'; $x`, true, "Secret-bearing file"},
+		{"a whole variable naming a literal, benign command is allowed", `x='echo hello'; $x`, false, ""},
+		{"find -exec cat dotenv is refused at the hook layer", `find . -exec cat .env \;`, true, "Secret-bearing file"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := ve.run(preToolUseJSON(c.command), "policy", "--hook")
+			if c.blocked {
+				if r.code != 2 || !strings.HasPrefix(r.stderr, "cpass: refused: ") {
+					t.Fatalf("want a refused message on stderr: %s", r)
+				}
+				if !strings.Contains(r.stderr, c.want) {
+					t.Fatalf("stderr should mention %q: %s", c.want, r)
+				}
+			} else if r.code != 0 {
+				t.Fatalf("want exit 0, got %s", r)
 			}
 		})
 	}
@@ -134,5 +201,92 @@ func TestPolicyHookEmptyCommandAllowed(t *testing.T) {
 	r := ve.run(preToolUseJSON(""), "policy", "--hook")
 	if r.code != 0 {
 		t.Fatalf("an empty command should pass through: %s", r)
+	}
+}
+
+// TestPolicyHookRound3ReviewFindings is the fixer round's e2e proof, at
+// the PreToolUse hook layer driven against a real built `cpass policy
+// --hook` invocation, for every shape the round-3 (2026-09-22) audit
+// reported: command-policy:ifs-word-splitting-bypass,
+// command-policy:read-builtin-and-fd-redirection-bypass, and
+// command-policy:evaluate-shell-behind-unenumerated-wrapper-parity-gap
+// (hookWalk's own per-word loop already caught the wrapper-parity shape
+// by structural accident before this round; kept here so the hook-level
+// table stays a complete, standalone record of every shape this round
+// closes).
+func TestPolicyHookRound3ReviewFindings(t *testing.T) {
+	ve := newVault(t)
+	cases := []struct {
+		name    string
+		command string
+		blocked bool
+		want    string
+	}{
+		{"braced ${IFS} glues cat to a secret file", `cat${IFS}.env`, true, "Secret-bearing file"},
+		{"bare $IFS glues cat to a secret file", `cat$IFS.env`, true, "Secret-bearing file"},
+		{"IFS splitting around benign text is allowed", `echo${IFS}hello`, false, ""},
+		{"read builtin via redirect reads a secret file", `read -r line < .env`, true, "Secret-bearing file"},
+		{"mapfile via redirect reads a secret file", `mapfile -t lines < .env`, true, "Secret-bearing file"},
+		{"exec fd bind then alias reads a secret file", `exec 3< .env; cat <&3`, true, "Secret-bearing file"},
+		{"exec named-fd bind then alias reads a secret file", `exec {fd}< .env; cat <&$fd`, true, "Secret-bearing file"},
+		{"an untracked fd alias with no matching exec bind is allowed", `cat <&9; true`, false, ""},
+		{"unenumerated wrapper hides a shell invocation", `totally-unenumerable-shim sh -c 'cat .env'`, true, "Secret-bearing file"},
+		{"unenumerated wrapper with a safe shell invocation is allowed", `totally-unenumerable-shim sh -c 'echo hello'`, false, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := ve.run(preToolUseJSON(c.command), "policy", "--hook")
+			if c.blocked {
+				if r.code != 2 || !strings.HasPrefix(r.stderr, "cpass: refused: ") {
+					t.Fatalf("want a refused message on stderr: %s", r)
+				}
+				if !strings.Contains(r.stderr, c.want) {
+					t.Fatalf("stderr should mention %q: %s", c.want, r)
+				}
+			} else if r.code != 0 {
+				t.Fatalf("want exit 0, got %s", r)
+			}
+		})
+	}
+}
+
+// TestPolicyHookSecretFileGlobExpansion is
+// command-policy:shell-glob-expansion-hides-filename's e2e proof at the
+// PreToolUse hook layer, with a REAL secret file on disk: a real shell's
+// own filename globbing expands a glob-shaped argument against files
+// that actually exist before the reading program ever starts, resolved
+// here through a same-command `cd` into the real directory (the hook has
+// no explicit cwd input of its own, matching how
+// TestPolicyRunProtectedDirsRelativePathAfterCd already resolves a
+// relative path at this layer).
+func TestPolicyHookSecretFileGlobExpansion(t *testing.T) {
+	ve := newVault(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("STRIPE_LIVE=x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		command string
+		blocked bool
+	}{
+		{"question-mark glob expands to the real secret file", "cd " + dir + " && cat .en?", true},
+		{"star glob expands to the real secret file", "cd " + dir + " && cat .e*", true},
+		{"glob pattern matching only a benign file is allowed", "cd " + dir + " && cat *.txt", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := ve.run(preToolUseJSON(c.command), "policy", "--hook")
+			if c.blocked {
+				if r.code != 2 || !strings.Contains(r.stderr, "Secret-bearing file") {
+					t.Fatalf("want a refused message mentioning the secret file: %s", r)
+				}
+			} else if r.code != 0 {
+				t.Fatalf("want exit 0, got %s", r)
+			}
+		})
 	}
 }

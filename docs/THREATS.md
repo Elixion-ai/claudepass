@@ -253,6 +253,277 @@ value can still end up somewhere it shouldn't, today:
     symlinked or bind-mounted path to either that `filepath.EvalSymlinks`
     cannot resolve. The same honest shape as 10 above — a named, narrow
     check, stated as exactly that.
+13. **A shell invocation's argument shape decides whether Command Policy
+    can statically inspect what it runs, and the default for anything it
+    cannot is refuse, not allow** (`shellCommandString`, CLA-62). What it
+    inspects, precisely:
+    - `<shell> -c STRING`, with any combination of `-e -u -x -l -i -n -v
+      -p -s -a -b -f -h -k -m -t`, `-o`/`-O`/`+o`/`+O <arg>`, or
+      `--noprofile --norc --login --posix` before it — the STRING is
+      evaluated exactly like the shell string this package already parses
+      everywhere else, up to a nesting depth of 8 (`maxDepth`) — past
+      which this package now refuses rather than silently allowing an
+      unevaluated command through (2026-09-23 audit; previously it
+      returned nil past this depth, a real gap between this claim and
+      what actually happened, since nothing that deep is genuinely
+      evaluated at all — it is refused instead, which is what keeps this
+      a non-issue for the property that matters: no command can evade
+      every rule above by nesting deep enough). This holds for
+      every ordering a real shell accepts, combined short-flag groups
+      included: `-co`, `-oc`, `+co`, and `+oc` all consume exactly one
+      word for `o`/`O` (wherever it falls in the group) and defer `c`'s
+      own word until the entire run of option tokens ends — matching a
+      real shell's own getopt-style parsing, live-verified against
+      `/bin/bash` — not "the word immediately after wherever the letter
+      `c` happens to sit," which is what `shellCommandString`'s combined-
+      group branch actually did before a review fix (CLA-62): `-co
+      pipefail 'cat .env'` checked the harmless word `pipefail` as if it
+      were the `-c` string, so the real command, `cat .env`, was never
+      evaluated at all — a silent, full bypass reachable with either
+      letter order, either sign. See
+      `TestShellInvocationCombinedOptionOrdering` (and its hook/e2e
+      counterparts) for the exact shapes now covered.
+    - `<shell> script-path [args...]` (script-by-path) — when script-path
+      names a readable regular file no larger than 1 MiB, its own content
+      is read and statically evaluated the same way, so `cpass run --
+      bash script.sh` keeps working for a legitimate script. This is why
+      `#comment` lines (including a shebang) are recognised and skipped:
+      without that, a script's own `#!/bin/sh` line would misparse as a
+      bare invocation of `sh` and refuse the whole script.
+    - A heredoc (`<<[-]DELIM ... DELIM`) attached to a shell — `sh
+      <<'EOF'` or `bash <<EOF`, quoted delimiter or not — has its body
+      evaluated as the script it is, since the target shell runs it as
+      commands either way, **but only when the invocation has no `-c
+      STRING` or script-path argument of its own.** When it does, that's
+      what a real shell actually executes — the heredoc is just stdin
+      data for the invocation, and the -c/script content is what's
+      checked, exactly like the no-heredoc case above; the heredoc
+      fallback exists only for the genuinely bare `sh <<EOF` shape,
+      where the shell would otherwise read its script from stdin
+      interactively. (CLA-62's initial heredoc support checked the heredoc
+      first and evaluated it instead of a real -c/script-path argument
+      alongside it — a silent bypass fixed in review: see the
+      `TestShellInvocationHeredoc`/`TestEvaluateHookShellInvocationShapes`
+      "alongside a benign heredoc" cases.)
+    - A heredoc attached to **anything else** — `cat <<EOF`, `python3 -
+      <<EOF`, `wc -l <<EOF` — is **not** simply left alone as inert data,
+      and an earlier version of this page was wrong to say so (CLA-61
+      review). Whether its body is inert depends on its delimiter, exactly
+      as it does for a real shell: a **quoted** delimiter (`<<'EOF'` or
+      `<<"EOF"`) is genuinely inert — the body reaches the program's stdin
+      byte-for-byte, never expanded, so `cat <<'EOF'` followed by
+      `$(cat .env)` prints that literal seven-character-plus text and
+      never touches `.env`. An **unquoted** delimiter's body, though, is
+      expanded by the real shell — command substitutions, backticks, and
+      parameter (variable) expansions — exactly like a double-quoted
+      string, *before* it is ever handed to the reading program's stdin:
+      `cat <<EOF` followed by `$(cat .env)` already ran `cat .env` and
+      already handed its output to the outer `cat`'s stdin before that
+      outer `cat` ever started, and a bound variable reference in such a
+      body (`cat <<EOF` / `$STRIPE_LIVE` / `EOF`) resolves to the Secret's
+      real value there exactly as `echo $STRIPE_LIVE` would, since a
+      reading program given no file operand generally does nothing but
+      echo its stdin back out. Command Policy evaluates both halves of
+      this for an unquoted delimiter — command/backtick substitutions
+      (populated as the word's own `subs`, walked by the same "command
+      substitutions are commands too" step every other word's `subs`
+      already goes through) and a bound/tainted parameter reference
+      (`ev.simple`'s own heredoc-reveal check) — regardless of which
+      program the heredoc is attached to, not only a shell. See
+      `TestShellInvocationHeredocUnquotedExpansionAnyProgram`,
+      `TestSplitCommandsUnquotedHeredocSubs`, and their hook/e2e
+      counterparts for the exact shapes now covered, quoted and unquoted
+      side by side.
+    - What it does **not** inspect, and so refuses rather than guesses at:
+      an unrecognised option; `-o`/`-c` with no value following it; a
+      script path that is not a readable regular file under 1 MiB (an
+      executable run directly by path, a missing file, a directory, a
+      symlink to something else, an oversized file); a bare shell
+      invocation with nothing statically visible (`sh` alone, `sh -s`,
+      or one reading real, non-heredoc piped stdin); and a here-string's
+      own `$(...)`/backtick command substitutions once it becomes an
+      ordinary checkable word (CLA-61) are evaluated, but its surrounding
+      plain text is not scanned for reader programs — it is inline data,
+      not a script. None of this is a leak path: every one of these
+      shapes is a refusal, not a silent allow.
+14. **Three narrower shapes closed this round leave their own, smaller
+    disclosed edges** (2026-09-22 audit, stream `policy`, round 2):
+    - **A dynamic command name is only resolved back to a real program
+      when it is a whole variable reference (`$x`/`${x}`) to a plain
+      string literal already assigned in the same shell string** —
+      `x='cat .env'; $x` really does execute `cat .env` and is refused the
+      same way. A command substitution naming the program (`` `echo
+      cat` .env ``, `$(echo cat) .env`) or an array expansion
+      (`arr=(cat); ${arr[@]} .env`) needs that substitution's actual
+      *runtime output*, which isn't knowable by any static read of the
+      command text, so neither is resolved and both still run unchecked
+      by this rule specifically (Redaction still catches a value the
+      resulting command then echoes back, the same defense-in-depth
+      backstop every other gap on this page already relies on). A shell
+      function defined and then called (`f(){ cat "$1"; }; f .env`) is
+      the same family and is likewise not inlined at its call site.
+    - **Brace expansion ({a,b,c}, {n..m}, {a..z}) is single-level and
+      non-nested, and only the first `{..}` span in a given word is
+      expanded.** A nested span (`{a,{b,c}}`) or a second span later in
+      the same word is left as intact literal text rather than being
+      truncated — still checked as the one word it already was, just not
+      multiplied into the several words a real shell would produce from
+      it — matching this package's existing, deliberate rule of refusing
+      or under-checking rather than guessing at a shape it cannot fully
+      model.
+    - **A reader's file argument must appear as literal text in the
+      command itself.** `echo .env | xargs cat` — the filename arriving
+      over a pipe from another program's own stdout, never sitting in the
+      command's text as an argument `cat`/`xargs` is invoked with — is
+      invisible to a purely text-based reader: there is no `.env` word
+      anywhere in the command line for `matchesSecretFile` to match
+      against. This is the same limitation item 3 above already states
+      for Redaction's own stdout/stderr-only view, one level up the
+      pipeline.
+
+15. **Four narrower shapes closed this round leave their own, smaller
+    disclosed edges** (2026-09-22 audit, stream `policy`, round 3):
+    - **The `$IFS`/`${IFS}` word-splitting fix treats every unquoted
+      reference as a word-splitting boundary unconditionally, without
+      modeling IFS's actual runtime value.** This is deliberately the
+      conservative direction: whatever IFS was ever reassigned to
+      earlier in the same shell string, an unquoted `$IFS`/`${IFS}`
+      reference is always treated as if it splits into nothing but
+      whitespace, so this can only ever split a word into MORE, smaller
+      pieces to check, never fewer. What it does not attempt: a custom,
+      non-default `IFS` value relied on through something OTHER than a
+      direct `$IFS`/`${IFS}` reference — reassigning `IFS` to a
+      punctuation character and then depending on that character's
+      field-splitting effect on some OTHER expansion's result. A real
+      shell's word-splitting only ever applies to the result of an
+      expansion (`$var`, a command substitution, an arithmetic
+      expansion) in the first place, never to literal text typed
+      directly in the command line, so this narrower shape needs an
+      actual expansion vector this package doesn't otherwise resolve to
+      a filename (see item 14's dynamic-command-name entry above) — not
+      a new gap this fix opens, only one it doesn't happen to also
+      close.
+    - **The `read`/`mapfile`/`readarray`/`exec`-fd-alias fix's
+      descriptor tracking is scoped to one shell string, and records a
+      bind regardless of which command it was attached to, not only
+      `exec`.** A real shell scopes a plain `cmd N< target` redirection
+      (one not on `exec`) to that one command's own execution only; this
+      package deliberately does not model that precision, recording the
+      bind for any command carrying one, since doing so can only make a
+      LATER `<&N` resolve to a path that really was bound to that number
+      at some point in the same shell string, never to something
+      invented — over-conservative in the safe direction, matching this
+      package's existing "refuse/resolve rather than guess" default, not
+      a leak.
+    - **The `Evaluate` shell-behind-unenumerated-wrapper fix mirrors
+      `EvaluateHook`'s own hookWalk exactly, including hookWalk's
+      pre-existing lack of a printer exemption for a shell name.**
+      Unlike the equivalent reader-name fallback (which exempts
+      `echo`/`printf`'s own data arguments), a shell name appearing as a
+      mere argument to `echo` — `echo bash -c 'cat .env'`, where `bash`
+      is never actually invoked — is still resolved and evaluated as if
+      it were, the same way it already was for hookWalk before this
+      round. This is an existing, shipped over-refusal this fix
+      intentionally left alone, since changing it would itself be a
+      fresh `Evaluate`/`EvaluateHook` divergence in the other direction;
+      it is disclosed here rather than silently inherited.
+    - **The glob-expansion fix is scoped to a shell-string argument to a
+      reader/source builtin directly (`ev.simple`), not to one hidden
+      behind a wrapper program the per-word fallback resolves (`find .
+      -exec cat .en? \;`), and does not replicate a real shell's own
+      "hide dotfiles from a pattern with no literal leading dot" rule.**
+      The first gap means a glob-shaped filename passed to an
+      unenumerated wrapper's own argument list is not currently
+      glob-resolved by this package, even though a real shell DOES
+      expand it before the wrapper ever starts — the same class item
+      11's own wrapper-coverage entry describes, one level removed. The
+      second means Go's `filepath.Glob`, unlike a real shell, has no
+      notion of hiding a leading dot from a bare `*`/`?` pattern with no
+      literal leading dot of its own, so this check can occasionally
+      refuse a glob shape (e.g. a bare `*env`) that a real shell would
+      not actually expand to a dotfile at all — over-refusal, not
+      under-refusal, and so not a leak either way. Also direct argv with
+      no shell involved at all (`cpass run -- cat .en?`) is never
+      glob-checked, correctly: Go's `os/exec` performs no globbing of
+      its own, so the reading program receives the glob pattern's
+      literal text and simply fails to find a file by that name — there
+      is nothing to leak in that shape to begin with.
+
+16. **Command Policy is a static guardrail, not a decision procedure for
+    arbitrary shell (see [ADR-0013](adr/0013-command-policy-is-a-static-guardrail.md))
+    — a command can compute what it does at run time in ways no amount of
+    precise syntax modeling reaches, and this is the standing, disclosed
+    residual class every item above is an instance of, not a defect any
+    one of them was supposed to close.** Concretely:
+    - **An interpreter's own `-c`/`-e` string is not shell syntax and this
+      package does not read it as one.** `python3 -c "open('.env').read()"`,
+      `node -e "require('fs').readFileSync('.env')"`, `ruby -e
+      "File.read('.env')"` — none of these are `shells`-map members (only
+      `sh`/`bash`/`zsh`/`dash`/`ksh`/`fish` are), so their own `-c`/`-e`
+      argument is checked only as ordinary argv text (the raw-literal and
+      glob/filename rules still apply to it), never parsed as the
+      language it's actually written in. A language-specific parser for
+      every interpreter an Agent might reach for is not a "cheap, precise
+      addition" — it is a second copy of this package per language, which
+      is not what a static guardrail can be.
+    - **A dynamically constructed string handed to `eval` isn't
+      resolved, per item 14's own dynamic-command-name entry — one level
+      up, at `eval` itself.** `eval "$(printf '%s' Y2F0IC5lbnY= | base64
+      -d)"` decodes and runs `cat .env`, but the text `eval`'s own
+      argument statically shows is a `base64 -d` pipeline's output, not
+      the command that output happens to spell; this package evaluates
+      what a command's own text literally says, not what any program it
+      invokes might later produce.
+    - **A program that opens a file itself, through an argument shape
+      this package has no reason to model as file-like, is invisible to
+      the secretFileGlobs checks.** `mytool --config .env` is checked
+      only if `mytool` is a name in `readers`/`sourceBuiltins`/`shells` —
+      an ordinary CLI tool with its own `--config`/`--input`/`--source`
+      flag pointing at a Secret-bearing file is not, and has no reason to
+      be: enumerating every third-party tool's own file-taking flag is
+      the same unbounded task as the interpreter case above, just per
+      tool instead of per language.
+    - **An unenumerated wrapper this package's own per-word fallback
+      doesn't reach still exists.** `readerWordRefusal`/`hookWalk`'s
+      per-word scans catch a reader or shell name appearing anywhere in
+      a flat argv or word list (`find . -exec cat .env \;`, `xargs cat
+      .env`, `nsenter ... sh -c '...'`), which covers the common,
+      genuinely reachable shapes — but a wrapper that renames its child
+      process, execs through a compiled helper binary with no readable
+      argv text naming the real command, or otherwise obscures what it's
+      about to run from the text of the command line itself is outside
+      what any text-based scan can see, by construction.
+
+    The enforced boundary for this whole residual class is not Command
+    Policy — it is Redaction (a value these programs print still gets
+    stripped from `cpass run`'s own stdout/stderr, per item 3's stated
+    scope) and `cpass import` removing the plaintext Secret file from disk
+    once its values are in the Vault (so there is decreasingly often a
+    `.env`/`id_rsa`/etc. left on disk for one of these to open in the
+    first place). A newly found shape in this class is not a broken
+    Command Policy guarantee; it is confirmation of the boundary ADR-0013
+    already states. A shape that genuinely IS syntax this package could
+    model precisely — a new heredoc form, a redirection this page doesn't
+    yet cover — is a different kind of finding, judged the way items 1–12
+    above already are: a regression (something this package used to catch
+    and now doesn't) is a bug, and a shape it never modeled is a cheap,
+    precise addition when the fix is narrow, or a disclosed edge here when
+    it isn't.
+
+    This round (2026-09-23 audit) also leaves its own narrower disclosed
+    edges: `readerWordRefusal`'s coincidental-subcommand-match
+    over-refusal (a multi-level CLI's own subcommand sharing a name with
+    a reader, e.g. `aws logs tail ...`, is refused the same as a real
+    `tail` invocation — see the function's own doc comment) is a
+    deliberate, accepted trade-off, not a narrowed-then-reopened gap; and
+    the case-statement pattern-arm fix models `case`/`in`/`;;`/`esac`
+    precisely but not bash's `;&`/`;;&` fallthrough operators, which this
+    package's tokenizer still treats as plain `;`-separated command
+    boundaries — a case arm using either form parses as more separate
+    commands than a real shell would run together, which can only ever
+    mean MORE separately-checked text, never less, the same conservative
+    direction every other under-modeled shape in this document already
+    takes.
 
 ## Intercept precision (v0.1.4)
 

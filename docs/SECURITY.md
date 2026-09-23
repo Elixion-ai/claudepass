@@ -213,7 +213,7 @@ that.
   would repeat on every single tool call a broad-root project makes. The
   marker check fails open: if the marker directory cannot be created or
   written, the notice fires again rather than silently disappearing. See
-  `docs/THREATS.md` item 10 for what this warning does not catch (a
+  `docs/THREATS.md` item 12 for what this warning does not catch (a
   merely-large ancestor, a symlinked or bind-mounted equivalent).
 - **`manifest check --effective`'s `MISSING` is deliberately stricter than
   `cpass run`'s own graceful handling of a Global Handle.** The command
@@ -624,14 +624,38 @@ non-Bash `tool_name` or an empty command is a silent pass-through) and, for
 everything else, evaluates `policy.EvaluateHook` against the raw command
 string. It refuses (exit `2`, one stderr line naming the rule and a
 suggested alternative) a command that, at any nesting depth (pipelines,
-`$(...)`, backticks, or a `shell -c '...'` inside it, up to 8 levels):
+`$(...)`, backticks, a `shell -c '...'` inside it, a shell's own
+script-by-path or heredoc body, up to 8 levels — see `docs/THREATS.md`
+for exactly what a shell invocation's argument shape does and does not
+make statically inspectable, and why an unresolvable shape refuses
+rather than runs unchecked):
 
 - would read a Secret-bearing file directly — matched by basename against
   `.env*`, `*.pem`, `id_rsa*`, `*.key`, `credentials*.json`, `.netrc`,
-  `.npmrc` — via a reader program (`cat`, `less`, `more`, `head`, `tail`,
-  `base64`, `xxd`, `od`, `strings`, `hexdump`, `bat`, `tee`, `cp`, `nl`,
-  `tac`, `rev`, `sort`, `uniq`, `cut`, `awk`, `sed`, `grep`, `jq`, `yq`,
-  `dd`, `install`, `rsync`, `scp`) or a shell `source`/`.` builtin;
+  `.npmrc`, except a conventionally non-secret counterpart of one
+  (`*.pub`, `.env.example`, `.env.sample`, `.env.template`, `.env.dist` —
+  CLA-65: neither a public key nor a template dotenv was ever meant to be
+  Vaulted, so refusing one is a dead end, not a protection) — via a
+  reader program (`cat`, `less`, `more`, `head`, `tail`, `base64`, `xxd`,
+  `od`, `strings`, `hexdump`, `bat`, `tee`, `cp`, `nl`, `tac`, `rev`,
+  `sort`, `uniq`, `cut`, `awk`, `sed`, `grep`, `jq`, `yq`, `dd`,
+  `install`, `rsync`, `scp`, or the `read`/`mapfile`/`readarray` shell
+  builtins — 2026-09-22 audit round 3: these load a redirected file's
+  content into a variable rather than taking it as a plain-string
+  argument, but their file operand arrives via the same `<`
+  redirection-target word the other readers already have checked) or a
+  shell `source`/`.` builtin — matched the same way whether the file
+  operand is a literal name, a variable resolved back to one, or a `<&N`/
+  `<&$name` file-descriptor alias resolved back to a same-shell-string
+  `exec N< target`/`exec {name}< target` bind (round 3: `exec 3< .env;
+  cat <&3` and its bash-named-descriptor cousin `exec {fd}< .env; cat
+  <&$fd`), and matched against what a real shell's own filename globbing
+  would expand a glob-shaped argument (`*`, `?`, `[...]`) to, for files
+  that actually exist in the command's own cwd (round 3: `cat .en?`/`cat
+  .e*` against a real `.env`) — not only the argument's own literal
+  text;
+- references a live file-Binding's run-directory path by literal path —
+  the same `$CPASS_HOME/run` root `cpass run` itself protects (CLA-63);
 - carries a raw Secret-shaped literal anywhere in the command text (the
   same entropy/prefix detector Intercept uses);
 - gives `cpass add` a second positional argument — an inline value, which
@@ -645,6 +669,41 @@ suggested alternative) a command that, at any nesting depth (pipelines,
 
 This hook never opens the Vault and makes no network call; it is a pure,
 static judgment over the command text (`internal/policy`).
+
+The shell-string tokenizer behind all of this (`internal/policy/split.go`,
+shared by `EvaluateHook` and `Evaluate` alike, so every fix here applies to
+both) also recognizes: shell reserved words (`if`/`then`/`elif`/`else`/
+`fi`/`while`/`until`/`do`/`done`/`for`/`in`/`case`/`esac`/`select`) as
+starting a fresh command, exactly like `;`/`&&`/`||` already do, rather
+than becoming a bogus program literally named `if`/`then`/etc. — so `if
+cat .env; then true; fi` still has `cat .env` checked as the real command
+it is (2026-09-22 audit round 2); ANSI-C (`$'...'`) and locale (`$"..."`)
+quoting, so `cat $'.env'` still names `.env`; single-level,
+non-nested brace expansion (`{a,b,c}`, `{n..m}`, `{a..z}`), so `cat
+.{env,bashrc}` presents `.env` and `.bashrc` as separately checkable
+words; and an UNQUOTED `$IFS`/`${IFS}` reference glued into a word acts
+as a word-splitting boundary right there, unconditionally (round 3:
+IFS's default value IS whitespace, so `cat${IFS}.env`/`cat$IFS.env`
+tokenize as the two separate words `cat` and `.env`, exactly like real
+shell word-splitting — a quoted `"${IFS}"` is untouched, since quoting
+suppresses word-splitting in a real shell too). See `docs/THREATS.md`'s
+"Known leak paths" items 14 and 15 for the narrower edges each round's
+own fixes leave disclosed (a command substitution or array expansion
+naming the program dynamically, a nested or repeated brace span, a
+reader's file argument arriving over a pipe rather than as literal text,
+a custom non-default `IFS` value relied on through something other than
+a direct `$IFS`/`${IFS}` reference, and a glob-shaped argument hidden
+behind an unenumerated wrapper program).
+
+Separately from the tokenizer, `Evaluate`'s per-word fallback — the
+mechanism that already resolved a reader name appearing anywhere in a
+command's words, not only as the program actually invoked (`find .
+-exec cat .env \;`) — now resolves a SHELL name the same way (round 3):
+a shell invocation behind ANY wrapper program, not only the ones
+`wrappers` enumerates, has its `-c`/script-path content statically
+evaluated the same way a direct shell invocation already is, matching a
+parity `EvaluateHook`'s own per-word scan already had by structural
+accident.
 
 **Scope note**: the secret-file-glob and raw-literal checks above are the
 same rule in `EvaluateHook` and the evaluator `cpass run` and the MCP
@@ -672,15 +731,56 @@ detail.
    `policy.Evaluate` against the command's argv: it refuses the
    environment-dump patterns above; any argument that literally names the
    path of this invocation's own file-Binding temp directory (see next
-   point) passed to a reader program; any argument naming a Secret-bearing
-   file by the same basename glob the PreToolUse hook matches (`.env*`,
-   `*.pem`, `id_rsa*`, `*.key`, `credentials*.json`, `.netrc`, `.npmrc`),
-   passed to the same reader programs or a shell `source`/`.` builtin; and
-   a raw Secret-shaped literal (the same detector Intercept and the hook
-   use) anywhere in the command's arguments — but not in argv[0], the
+   point) passed to a reader program — including a relative argument
+   resolved against the directory the command actually runs in (this
+   process's own `os.Getwd()` for `cpass run`, or a caller-given `cwd` for
+   the MCP server — see below — since its own working directory never
+   follows the Agent's), or against a literal `cd DIR` seen earlier in the
+   same shell string (2026-09-22 audit round 2); any argument naming a
+   Secret-bearing file by the same basename glob the PreToolUse hook
+   matches (`.env*`, `*.pem`, `id_rsa*`, `*.key`, `credentials*.json`,
+   `.netrc`, `.npmrc`, with the same non-secret-counterpart exclusions —
+   see above), passed to the same reader programs — anywhere in the
+   command, not only as the program actually invoked, so a reader behind
+   a wrapper this package doesn't enumerate (`find . -exec cat .env \;`)
+   is still caught the same way the hook's own per-word scan already
+   catches it (2026-09-22 audit round 2 closed this `Evaluate`/
+   `EvaluateHook` parity gap) — or a shell `source`/`.` builtin; a bound
+   or tainted variable given to a reader with no matching file operand —
+   a here-string (`cat <<< $STRIPE_LIVE`) is the live shape, since a
+   reader given no real file argument is functionally "cat used as echo"
+   (2026-09-22 audit round 2); a whole variable reference naming the
+   command itself (`x='cat .env'; $x`) when that variable was earlier
+   assigned a plain string literal in the same shell string, resolved and
+   re-evaluated the same way `eval`'s argument already is (2026-09-22
+   audit round 2 — a command substitution or array expansion naming the
+   program dynamically is not resolved this way, since that needs the
+   substitution's actual runtime output; see `docs/THREATS.md` item 14);
+   and a raw Secret-shaped literal (the same detector Intercept and the
+   hook use) anywhere in the command's arguments — but not in argv[0], the
    program itself, since a Secret value is never the thing being executed
    and a real executable path can otherwise read as high-entropy without
-   being one.
+   being one. **2026-09-22 audit round 3** closed four further shapes,
+   all in the same shared `Evaluate`/`EvaluateHook` code so `cpass run`,
+   the MCP server, and the hook all refuse them identically: an unquoted
+   `$IFS`/`${IFS}` reference gluing a reader to a Secret-bearing file's
+   name (`cat${IFS}.env`, `cat$IFS.env` — IFS's default value is
+   whitespace, so a real shell executes this as the separate words `cat`
+   and `.env`, not one glued, unrecognizable word); the `read`/
+   `mapfile`/`readarray` shell builtins loading a redirected Secret-
+   bearing file into a variable (`read -r line < .env`), and the `exec
+   N< target`/`exec {name}< target` file-descriptor-bind idiom followed
+   by a later `<&N`/`<&$name` alias read of it (`exec 3< .env; cat
+   <&3`); a shell invocation behind ANY wrapper program, not only the
+   ones `wrappers` enumerates (`Evaluate`'s per-word fallback gained the
+   same `shells[prog]` recognition its reader-name fallback already had,
+   closing a parity gap with `EvaluateHook`'s own per-word scan); and a
+   glob-shaped argument (`*`, `?`, `[...]`) resolved against what a real
+   shell's own filename globbing would expand it to for files that
+   actually exist in the command's cwd (`cat .en?`/`cat .e*` against a
+   real `.env`), not only the argument's own literal text. See
+   `docs/THREATS.md` item 15 for the narrower edges this round's fixes
+   leave disclosed.
 3. Builds the child's environment: `os.Environ()` with `CPASS_KEY` itself
    stripped out first (see below), plus one variable per env-bound Handle,
    set to its value. A file-bound Handle instead gets a fresh Secret file,
@@ -760,7 +860,11 @@ the command, against whatever Manifest (if any) sits above wherever the
 server process happened to start, and adds one warning to the result: "cpass:
 no cwd given, so the Manifest was located from this MCP server's own working
 directory, not yours; pass cwd to be sure which project's Handles (and
-Global Handles) are injected."
+Global Handles) are injected." The same `cwd` is also what Command Policy
+resolves a relative reader argument against (`policy.Input.Cwd`, above) —
+without it, that resolution falls back to the server's own working
+directory too, which can equally be the wrong one for a relative-path
+protected-directory check.
 
 ## What Redaction can and cannot guarantee
 

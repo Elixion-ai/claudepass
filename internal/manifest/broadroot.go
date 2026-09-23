@@ -104,7 +104,7 @@ func broadRootWarnedMarkerPath(dir, root string) string {
 // directory, not the caller's cwd) has already drawn the run-time backstop
 // notice, recording it as warned if not. This is what makes Refs's notice
 // actually fire once per Manifest, as CLA-96's acceptance criteria and
-// docs/THREATS.md item 10 both promise, rather than on every call — Refs is
+// docs/THREATS.md item 12 both promise, rather than on every call — Refs is
 // the Handle source for both `cpass run` (runcmd.go forwards every notice
 // straight to stderr) and the MCP `run_with_secrets` tool (internal/mcp
 // rides every notice into the tool_result content block that lands in an

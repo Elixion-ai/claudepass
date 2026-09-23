@@ -447,7 +447,7 @@ func TestAnUnreadableGlobalManifestDoesNotBreakEverything(t *testing.T) {
 // hand-copied rather than through `cpass manifest init`, which would have
 // warned and still written it) must draw the run-time backstop notice on
 // the first `cpass run` and stay silent on every one after, exactly as
-// docs/THREATS.md item 10 promises ("the first time"). Unsuppressed, this
+// docs/THREATS.md item 12 promises ("the first time"). Unsuppressed, this
 // line rides straight into an Agent's own Context on every tool call
 // (runcmd.go forwards every notice to stderr; the MCP `run_with_secrets`
 // tool rides it into the tool_result content block), which is the noise

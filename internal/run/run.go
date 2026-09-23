@@ -101,7 +101,13 @@ func Run(spec Spec) (int, error) {
 	}
 	root, _ := runRoot()
 	if !spec.UnsafeAllow {
-		in := policy.Input{Argv: spec.Argv, ProtectedDirs: []string{root}}
+		// spec.Dir is the directory the command is about to actually run
+		// in (cmd.Dir below) — passed through as Cwd so a relative reader
+		// argument resolves against the same directory the child itself
+		// will see, not this long-lived process's own (the MCP server's
+		// case; cpass run leaves spec.Dir empty, since for it the two
+		// already coincide — see policy.Input.Cwd).
+		in := policy.Input{Argv: spec.Argv, ProtectedDirs: []string{root}, Cwd: spec.Dir}
 		for _, s := range secrets {
 			in.Bound = append(in.Bound, policy.Var{Name: s.Binding.Name, Kind: s.Binding.Kind})
 		}

@@ -1,8 +1,10 @@
 package policy
 
 import (
+	"path/filepath"
 	"strings"
 
+	"github.com/Elixion-ai/claudepass/internal/broker"
 	"github.com/Elixion-ai/claudepass/internal/detect"
 )
 
@@ -18,6 +20,9 @@ import (
 //     the same rule Evaluate applies (see the package doc comment),
 //     checked here too so it catches a wrapped `cpass run` invocation
 //     before that subprocess ever starts, not only once it does;
+//   - references a live file-Binding's run-directory path by literal path
+//     (ProtectedDirs, the same rule `cpass run` itself applies — see
+//     runProtectedDirs);
 //   - carries a raw Secret-shaped literal (the CLA-10 detector) — again
 //     the same rule Evaluate applies, checked here unconditionally for the
 //     same reason;
@@ -25,65 +30,111 @@ import (
 //     one rule with no equivalent in Evaluate, since only the hook
 //     inspects a raw command line before cpass has parsed anything; or
 //   - trips one of the ordinary Bound-independent Command Policy rules
-//     (env/printenv/set/export dumps, /proc/*/environ, shell tracing) and
-//     is not itself a `cpass run` invocation — one that is will have those
-//     same rules applied again at execution time, with cpass run's actual
-//     Bound vars.
+//     that need the command's real argv[0] to fire (env/printenv/set/
+//     export dumps) and is itself a `cpass run` invocation with the
+//     rule-tripping program buried inside its wrapped command (`cpass run
+//     -- env`, where "env" is never argv[0] of anything this hook's own
+//     per-word scan or Evaluate's shell-string parse treats as a command
+//     position) — cpass run's own execution-time re-check (with the real,
+//     unwrapped argv) still catches these; every other rule below,
+//     including a file read at any depth, is checked here regardless of
+//     whether command wraps `cpass run`, not only once cpass run itself
+//     starts.
 func EvaluateHook(command string) error {
 	if strings.TrimSpace(command) == "" {
 		return nil
 	}
-	if r := hookWalk(command, 0); r != nil {
+	if r := hookWalk(command, 0, map[string]string{}); r != nil {
 		return r
 	}
 	// Same raw-literal rule Evaluate applies (see the package doc
-	// comment), checked here unconditionally — including when command
-	// wraps a `cpass run` invocation, unlike the ordinary rules below —
-	// since no Bound var is needed to judge a literal.
+	// comment), checked here unconditionally — since no Bound var is
+	// needed to judge a literal.
 	if len(detect.ScanStrict(command)) > 0 {
 		return &Refusal{
 			Rule:   "the command carries a raw Secret-shaped value",
 			Advice: "store it first (`cpass capture`, or paste it so it's Intercepted) and reference it by Handle",
 		}
 	}
-	if !wrapsCpassRun(command) {
-		if err := Evaluate(Input{Argv: []string{"sh", "-c", command}}); err != nil {
-			return err
-		}
+	// The full Evaluate — including the fd-alias and glob-expansion
+	// mechanisms hookWalk's own lighter per-word scan does not implement
+	// — runs unconditionally, including when command wraps a `cpass run`
+	// invocation: hookWalk alone previously missed those two mechanisms
+	// for a wrapped invocation specifically (`cpass run -- bash -c 'exec
+	// 3< .env; cat <&3'`), a real gap between what this hook is documented
+	// to catch and what it actually did, closed by always running this
+	// check rather than deferring it to cpass run's own execution-time
+	// Evaluate call (internal/run.Run makes that call too, so this is
+	// deliberately redundant for a wrapped invocation, not newly
+	// expensive in any way that matters: it is the same catch, just made
+	// to also happen before the cpass run subprocess starts, matching
+	// this function's own doc comment above).
+	in := Input{Argv: []string{"sh", "-c", command}, ProtectedDirs: runProtectedDirs()}
+	if err := Evaluate(in); err != nil {
+		return err
 	}
 	return nil
 }
 
-// wrapsCpassRun reports whether any top-level simple command in command is
-// a `cpass run` invocation. Command Policy's Bound-independent rules need
-// not be pre-applied by the hook for one, since cpass run applies them
-// again at execution time with its real Bound vars.
-func wrapsCpassRun(command string) bool {
-	for _, words := range splitCommands(command) {
-		if len(words) >= 2 && base(words[0].raw) == "cpass" && words[1].raw == "run" {
-			return true
-		}
+// runProtectedDirs returns the file-Binding run-directory root ProtectedDirs
+// guards ($CPASS_HOME/run), the same root internal/run.Run itself passes to
+// Evaluate — so a raw Bash call the Agent makes directly (not through
+// cpass run) can't cat a live file-Binding's plaintext Secret by literal
+// path either. This replicates internal/run's own runRoot logic locally
+// rather than importing internal/run, which itself imports internal/policy
+// (CLA-38); importing internal/broker here instead avoids that cycle. A
+// broker.Home error (unreadable config dir) yields no protected dirs rather
+// than failing the whole hook closed on an unrelated I/O problem — the
+// secret-file-glob and raw-literal rules above still apply regardless.
+func runProtectedDirs() []string {
+	home, err := broker.Home()
+	if err != nil {
+		return nil
 	}
-	return false
+	return []string{filepath.Join(home, "run")}
 }
 
 // hookWalk recurses through command the same way splitCommands' consumers
 // elsewhere in this package do — into command substitutions and nested
-// `shell -c STRING` invocations — checking every simple command for a
-// Secret-file read or a `cpass add` given an inline value. It does not
-// touch the Bound/tainted evaluator: those hook-independent checks have no
-// Bound vars to work from at this point.
-func hookWalk(command string, depth int) *Refusal {
+// `shell -c STRING`/script-by-path/heredoc-body invocations — checking
+// every simple command for a Secret-file read or a `cpass add` given an
+// inline value. It does not touch the Bound/tainted evaluator (no Bound
+// vars exist yet at this point), but it does track plain-string variable
+// literals (`G=script.sh`) the same narrow way ev.simple's own
+// ev.literals does, via the literals map threaded through every
+// recursive call in one EvaluateHook pass — needed to resolve a shell
+// invocation's own script-path/-c argument back to a real, checkable
+// path when it's a whole-word reference to one
+// (command-policy:shell-script-path-literal-variable): `G=deploy.sh;
+// bash $G` should read exactly like `bash deploy.sh` already does, not
+// refuse "$G" as an unresolvable, nonexistent path.
+func hookWalk(command string, depth int, literals map[string]string) *Refusal {
 	if depth > maxDepth {
-		return nil
+		return maxDepthRefusal
 	}
 	for _, words := range splitCommands(command) {
 		if len(words) == 0 {
 			continue
 		}
+		// Leading VAR=value assignments (a plain string literal, no `$`
+		// of its own): recorded the same way ev.simple's identical loop
+		// records ev.literals, so a later bare $VAR/${VAR} in THIS
+		// simple command's own shell-invocation words can be resolved
+		// back to it, below.
+		j := 0
+		for j < len(words) {
+			m := assignment.FindStringSubmatch(words[j].raw)
+			if m == nil {
+				break
+			}
+			if !strings.ContainsRune(m[2], '$') {
+				literals[m[1]] = m[2]
+			}
+			j++
+		}
 		for _, w := range words {
 			for _, sub := range w.subs {
-				if r := hookWalk(sub, depth+1); r != nil {
+				if r := hookWalk(sub, depth+1, literals); r != nil {
 					return r
 				}
 			}
@@ -95,7 +146,11 @@ func hookWalk(command string, depth int) *Refusal {
 					return r
 				}
 			}
-			if readers[prog] || sourceBuiltins[prog] {
+			// The `.`/`source` builtins only mean "execute this file's
+			// content" at an actual command position — elsewhere `.` is
+			// just an ordinary argument (find .'s current-directory
+			// argument, ls .'s target, ...), never a Secret-file read.
+			if sourceBuiltins[prog] && commandStart(words, i) {
 				for _, arg := range words[i+1:] {
 					if matchesSecretFile(arg.raw) {
 						return &Refusal{
@@ -105,20 +160,147 @@ func hookWalk(command string, depth int) *Refusal {
 					}
 				}
 			}
-			if shells[prog] {
-				raw := make([]string, len(words[i+1:]))
-				for j, ww := range words[i+1:] {
-					raw[j] = ww.raw
+			if readers[prog] {
+				// A pure-output program's own arguments are data it
+				// prints, not programs it runs: `echo cat .env` never
+				// executes cat. This exempts only an argument of
+				// echo/printf/print's own command line — word 0 of this
+				// simple command, or the first word after a leading run of
+				// VAR=value assignments, so a printer prefixed with one (e.g.
+				// DEBUG=1 echo ...) is exempted the same way (printerArg,
+				// CLA-64 review) — a reader named anywhere else is still
+				// caught, exactly as before, which is what keeps a reader
+				// behind a wrapper this list doesn't enumerate (`find .
+				// -exec cat .env \;`, `timeout 5 cat .env`, `nice cat
+				// .env`, `xargs cat < .env`, `sudo cat .env`) refused
+				// without narrowing detection to argv[0] plus an
+				// allowlist of wrappers.
+				if !printerArg(words, i) {
+					rest := words[i+1:]
+					restRaw := make([]string, len(rest))
+					for k, ww := range rest {
+						restRaw[k] = ww.raw
+					}
+					patIdx := readerPatternIndex(prog, restRaw)
+					for k, arg := range rest {
+						// command-policy:read-builtin-destination-name-not-
+						// a-filename: read/mapfile/readarray's own
+						// positional words are destination variable/array
+						// names, never a file path — only a `< target`
+						// redirection word (arg.redirTarget) can be one
+						// for these three builtins (see policy.go's
+						// readBuiltins and ev.simple's identical guard),
+						// unlike every other `readers` entry, whose
+						// ordinary positional words genuinely are file
+						// arguments.
+						if readBuiltins[prog] && !arg.redirTarget {
+							continue
+						}
+						// command-policy:reader-pattern-argument-not-a-
+						// filename: grep/sed/awk/jq/yq's own PATTERN/
+						// FILTER/SCRIPT argument (see readerPatternIndex)
+						// is never a filename.
+						if k == patIdx {
+							continue
+						}
+						if matchesSecretFile(arg.raw) {
+							return &Refusal{
+								Rule:   w.raw + " would read " + arg.raw + ", a Secret-bearing file",
+								Advice: "use `cpass run` (or the Manifest) instead of reading the file directly",
+							}
+						}
+					}
 				}
-				if s, ok := shellCommandString(raw); ok {
-					if r := hookWalk(s, depth+1); r != nil {
+			}
+			if shells[prog] {
+				// Resolve what this shell invocation actually executes
+				// the same way regardless of an attached heredoc — a
+				// `-c STRING` or script-by-path argument, when present,
+				// is what a real shell runs; an attached heredoc is just
+				// stdin data for that invocation (see policy.go's
+				// identical shells[prog] case). shellCommandString is
+				// tried first, over raw with the heredoc placeholder
+				// word filtered out so it can never be mistaken for -c's
+				// value or a script path; only when neither resolves
+				// does the heredoc's body become the executed script.
+				// Previously the heredoc was checked first and, when
+				// present, evaluated instead of a real -c/script-path
+				// argument alongside it — a full, silent bypass (CLA-62
+				// review).
+				rest := words[i+1:]
+				raw := make([]string, 0, len(rest))
+				for _, ww := range rest {
+					if !ww.hasHeredoc {
+						// command-policy:shell-script-path-literal-variable:
+						// resolve a whole-word $VAR/${VAR} script-path or -c
+						// argument back to an earlier plain-string literal
+						// assignment in this same command, the same way
+						// policy.go's identical shells[prog] case does via
+						// ev.resolveLiteral — `G=deploy.sh; bash $G` reads
+						// like `bash deploy.sh`, not an unresolvable "$G".
+						raw = append(raw, resolveLiteralIn(ww.raw, literals))
+					}
+				}
+				content, refuse := shellCommandString(raw)
+				if !refuse {
+					if r := hookWalk(content, depth+1, literals); r != nil {
 						return r
 					}
+					continue
+				}
+				if hd, ok := heredocArg(rest); ok {
+					if r := hookWalk(hd.body, depth+1, literals); r != nil {
+						return r
+					}
+					continue
+				}
+				return &Refusal{
+					Rule:   w.raw + "'s invocation shape can't be checked statically",
+					Advice: `use -c "..." or a readable script file under 1 MiB (cpass reads and checks it) instead`,
 				}
 			}
 		}
 	}
 	return nil
+}
+
+// commandStart reports whether word position i in words is where a shell
+// command name is expected: position 0, right after a leading run of
+// VAR=value assignments, or right after command/builtin/exec. Only there
+// does a bare "." mean the source builtin.
+func commandStart(words []word, i int) bool {
+	if i == 0 {
+		return true
+	}
+	prev := base(words[i-1].raw)
+	if prev == "command" || prev == "builtin" || prev == "exec" {
+		return true
+	}
+	if !assignment.MatchString(words[i-1].raw) {
+		return false
+	}
+	for j := 0; j < i; j++ {
+		if !assignment.MatchString(words[j].raw) {
+			return false
+		}
+	}
+	return true
+}
+
+// printerArg reports whether word position i in words is an argument
+// printed by this simple command's own echo/printf/print: its command word
+// (word 0, or the first word after a leading run of VAR=value assignments,
+// found the same way commandStart finds one) must itself be a printer, and
+// i must come strictly after it. This is what exempts `echo cat .env` and
+// `DEBUG=1 echo cat .env` alike (CLA-64, and CLA-64's review fix for the
+// leading-assignment case) — a reader word here is data the printer
+// prints, not a program that runs.
+func printerArg(words []word, i int) bool {
+	j := 0
+	for j < len(words) && assignment.MatchString(words[j].raw) {
+		j++
+	}
+	return j < len(words) && i > j && printers[base(words[j].raw)]
 }
 
 // addInlineValueRefusal reports whether args (the words after `cpass add`)

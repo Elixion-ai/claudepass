@@ -388,7 +388,7 @@ func TestRefsBroadRootStaysQuietWhenProjectOverridesEveryGlobalHandle(t *testing
 
 // TestRefsWarnsAboutBroadRootOnlyOnce is the regression test for CLA-96's
 // major finding: the ticket's own acceptance criteria and docs/THREATS.md
-// item 10 both promise the run-time backstop fires "the first time" a
+// item 12 both promise the run-time backstop fires "the first time" a
 // broad-root Manifest actually hands a directory a Global Handle, not on
 // every call. Three consecutive Refs calls against the same broad-root
 // Manifest — mirroring three consecutive `cpass run` invocations — must
