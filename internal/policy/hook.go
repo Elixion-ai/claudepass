@@ -69,11 +69,64 @@ func EvaluateHook(command string) error {
 	// expensive in any way that matters: it is the same catch, just made
 	// to also happen before the cpass run subprocess starts, matching
 	// this function's own doc comment above).
-	in := Input{Argv: []string{"sh", "-c", command}, ProtectedDirs: runProtectedDirs()}
+	//
+	// EnvAllowlist: true opts the well-known non-secret variable names in
+	// hookEnvAllowlist below out of the printenv reveal refusal — see
+	// Input.EnvAllowlist's own doc comment (CLA-102) for why this is set
+	// here and nowhere else Evaluate is called from.
+	in := Input{Argv: []string{"sh", "-c", command}, ProtectedDirs: runProtectedDirs(), EnvAllowlist: true}
 	if err := Evaluate(in); err != nil {
 		return err
 	}
 	return nil
+}
+
+// hookEnvAllowlist is the small, fixed set of well-known, non-secret
+// variable names `printenv NAME` may name at the PreToolUse hook layer
+// without being refused (CLA-102): ordinary shell/session/toolchain
+// variables no cpass user has ever Bound a Secret to, whose value an
+// Agent routinely needs for everyday debugging (what's on PATH, which Go
+// toolchain, which virtualenv is active, ...). LC_* and XDG_* are
+// recognised by prefix (hookEnvAllowed below) rather than listed
+// individually, matching how a real shell environment actually
+// populates them (LC_ALL, LC_CTYPE, LC_COLLATE, ...; XDG_CONFIG_HOME,
+// XDG_CACHE_HOME, XDG_DATA_HOME, ...). Documented in docs/SECURITY.md —
+// the two must never diverge.
+var hookEnvAllowlist = map[string]bool{
+	"PATH": true, "HOME": true, "USER": true, "SHELL": true,
+	"PWD": true, "OLDPWD": true, "LANG": true, "TERM": true,
+	"TMPDIR": true, "GOPATH": true, "GOROOT": true, "GOBIN": true,
+	"NODE_ENV": true, "VIRTUAL_ENV": true, "CONDA_PREFIX": true,
+	"JAVA_HOME": true, "EDITOR": true, "PAGER": true, "HOSTNAME": true,
+}
+
+// hookEnvAllowed reports whether name is on hookEnvAllowlist above, or
+// matches one of its two recognised prefixes (LC_*/XDG_*).
+func hookEnvAllowed(name string) bool {
+	if hookEnvAllowlist[name] {
+		return true
+	}
+	return strings.HasPrefix(name, "LC_") || strings.HasPrefix(name, "XDG_")
+}
+
+// printenvAllowlisted reports whether args — the words following
+// `printenv` — are one or more bare NAME arguments, every one of them
+// hookEnvAllowed: `printenv` with NO arguments dumps every variable
+// (still refused, matching bare env/printenv elsewhere in this package),
+// and a single non-allow-listed name anywhere in the list — mixed in
+// with allow-listed ones or not — keeps the whole invocation refused
+// rather than silently printing just that one (`printenv PATH
+// AWS_SECRET_ACCESS_KEY` stays refused).
+func printenvAllowlisted(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	for _, a := range args {
+		if !hookEnvAllowed(a) {
+			return false
+		}
+	}
+	return true
 }
 
 // runProtectedDirs returns the file-Binding run-directory root ProtectedDirs
@@ -160,7 +213,20 @@ func hookWalk(command string, depth int, literals map[string]string) *Refusal {
 					}
 				}
 			}
-			if readers[prog] {
+			if readers[prog] && !isCoincidentalReaderSubcommand(rawWordAt(words), commandStartIndex(words), i) {
+				// isCoincidentalReaderSubcommand (policy.go, CLA-101
+				// review) is what keeps a reader behind a wrapper this
+				// list doesn't enumerate (`find . -exec cat .env \;`,
+				// `timeout 5 cat .env`, `nice cat .env`, `xargs cat <
+				// .env`, `sudo cat .env`, `docker exec c cat .env`,
+				// `chroot / cat .env`, `strace -f cat .env`, `setsid cat
+				// .env`, `unshare cat .env`, `stdbuf -oL cat .env`, ...)
+				// refused at ANY word position, while excluding only the
+				// small, specific set of multi-level CLI subcommands that
+				// merely share a reader's name without behaving like one
+				// (`aws logs tail ...`, `kubectl cp ...`) — see its own
+				// doc comment.
+				//
 				// A pure-output program's own arguments are data it
 				// prints, not programs it runs: `echo cat .env` never
 				// executes cat. This exempts only an argument of
@@ -168,13 +234,7 @@ func hookWalk(command string, depth int, literals map[string]string) *Refusal {
 				// simple command, or the first word after a leading run of
 				// VAR=value assignments, so a printer prefixed with one (e.g.
 				// DEBUG=1 echo ...) is exempted the same way (printerArg,
-				// CLA-64 review) — a reader named anywhere else is still
-				// caught, exactly as before, which is what keeps a reader
-				// behind a wrapper this list doesn't enumerate (`find .
-				// -exec cat .env \;`, `timeout 5 cat .env`, `nice cat
-				// .env`, `xargs cat < .env`, `sudo cat .env`) refused
-				// without narrowing detection to argv[0] plus an
-				// allowlist of wrappers.
+				// CLA-64 review).
 				if !printerArg(words, i) {
 					rest := words[i+1:]
 					restRaw := make([]string, len(rest))
@@ -285,6 +345,37 @@ func commandStart(words []word, i int) bool {
 		}
 	}
 	return true
+}
+
+// commandStartIndex returns the index of a command's own program-name
+// word within words: position 0, or the first word after a leading run
+// of VAR=value assignments — the same position commandStart (above) and
+// printerArg (below) each locate for their own purposes, but as an
+// index rather than a boolean, since isCoincidentalReaderSubcommand
+// (policy.go) needs to know which word is a multi-level CLI's own
+// program name to look it up in coincidentalReaderSubcommands.
+func commandStartIndex(words []word) int {
+	j := 0
+	for j < len(words) && assignment.MatchString(words[j].raw) {
+		j++
+	}
+	return j
+}
+
+// rawWordAt adapts a []word list to the wordAt(int) string shape
+// isCoincidentalReaderSubcommand (policy.go) takes, so hookWalk's
+// per-word reader scan can share that exact same coincidental-
+// subcommand denylist logic with readerWordRefusal's flat-argv
+// equivalent — out-of-range indices (a path that would reach past
+// either end of words) return "", which never equals a real subcommand
+// segment, matching wordAt's existing contract.
+func rawWordAt(words []word) func(int) string {
+	return func(k int) string {
+		if k < 0 || k >= len(words) {
+			return ""
+		}
+		return words[k].raw
+	}
 }
 
 // printerArg reports whether word position i in words is an argument

@@ -1239,8 +1239,17 @@ func TestReaderPatternArgumentNotAFilename(t *testing.T) {
 		// (readerWordRefusal) paths.
 		{"paired bypass: id_rsa as a genuine second positional file argument is still refused",
 			[]string{"sh", "-c", `grep -l pattern id_rsa`}, true},
-		{"paired bypass: git grep's own trailing file argument is still checked",
-			[]string{"sh", "-c", `git grep pattern .env`}, true},
+		// CLA-101: a real wrapper (find -exec) in front of grep exercises
+		// readerWordRefusal's own patIdx handling — the earlier version
+		// of this test used `git grep pattern .env` for the same
+		// purpose, but CLA-101 stopped treating a bare multi-level CLI
+		// subcommand (`git grep`, sharing a name with the reader `grep`
+		// but preceded by neither a wrapper nor an exec-style flag) as a
+		// program position at all; see
+		// TestReaderWordRefusalCoincidentalSubcommand below for that
+		// collateral, disclosed change on its own.
+		{"paired bypass: find -exec grep's own trailing file argument is still checked",
+			[]string{"sh", "-c", `find . -exec grep pattern .env \;`}, true},
 		// Paired bypass: -f's own file-consuming flag value is a real
 		// file argument, not the implicit bare pattern position, and
 		// must stay checked.
@@ -1250,6 +1259,122 @@ func TestReaderPatternArgumentNotAFilename(t *testing.T) {
 		// (no shell), through the top-of-ev.argv readers[prog] loop.
 		{"direct argv: grep's own PATTERN argument is not a filename",
 			[]string{"grep", "id_rsa", "README.md"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: c.argv})
+			if (err != nil) != c.refused {
+				t.Fatalf("argv %v: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestReaderWordRefusalCoincidentalSubcommand is CLA-101's acceptance
+// case, updated by CLA-101's own review fix: readerWordRefusal's flat
+// per-word scan (and hookWalk's identical one) matches a reader name at
+// ANY word position again, exactly like before CLA-101, EXCEPT for the
+// small, specific set of multi-level CLI subcommands that merely share a
+// reader's name without behaving like one at all
+// (coincidentalReaderSubcommands) — `aws logs tail`, `aws s3 cp` and
+// `kubectl cp` here. CLA-101's original fix instead required a genuine
+// trigger word (a known wrapper, an exec-style flag, xargs, or --)
+// immediately before a reader-name word, which also closed these three
+// false positives, but as its own review found, silently stopped
+// catching every OTHER wrapper this package doesn't happen to enumerate
+// too (see TestEvaluateReaderBehindUnenumeratedWrapper below) — a
+// regression this denylist-based fix does not reintroduce: a reader name
+// behind a wrapper, real or synthetic, unrelated to this denylist stays
+// caught regardless of what precedes it.
+func TestReaderWordRefusalCoincidentalSubcommand(t *testing.T) {
+	cases := []struct {
+		name    string
+		argv    []string
+		refused bool
+	}{
+		{"aws logs tail's own subcommand is not the tail(1) reader",
+			[]string{"aws", "logs", "tail", "/aws/lambda/f", "--filter-pattern", ".env"}, false},
+		{"aws s3 cp's own subcommand is not the cp(1) reader",
+			[]string{"aws", "s3", "cp", "s3://bucket/.env", "."}, false},
+		{"kubectl cp's own subcommand is not the cp(1) reader",
+			[]string{"kubectl", "cp", "pod:/x", ".env"}, false},
+		// Reverted collateral effect of CLA-101's own narrowing: git's
+		// own grep subcommand genuinely reads the named file — unlike
+		// the coincidental cases above — and is not on the denylist, so
+		// it is refused again exactly as it was before CLA-101, which is
+		// correct: this was always a real read, not a false positive.
+		{"git grep's own subcommand genuinely reads the file and is refused",
+			[]string{"sh", "-c", `git grep pattern .env`}, true},
+		// The denylist matches only the CLI's own subcommand path in its
+		// exact, contiguous position right after the CLI name — a reader
+		// name that merely follows an unrelated word, even one that
+		// happens to also be a denylisted CLI's name, is not exempted.
+		{"aws logs tail exemption does not match a different aws subcommand path",
+			[]string{"aws", "ec2", "tail", ".env"}, true},
+		{"kubectl cp exemption does not apply once kubectl isn't argv[0]",
+			[]string{"find", ".", "-exec", "kubectl", "cp", "pod:/x", ".env", ";"}, true},
+		// Paired: the same reader names, genuinely invoked at any word
+		// position (trigger word or not), still refuse.
+		{"cpass run's own -- separator still triggers",
+			[]string{"cpass", "run", "--", "cat", ".env"}, true},
+		{"find -exec still triggers",
+			[]string{"find", ".", "-exec", "tail", ".env", ";"}, true},
+		{"bare xargs still triggers",
+			[]string{"xargs", "cat", ".env"}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: c.argv})
+			if (err != nil) != c.refused {
+				t.Fatalf("argv %v: refused=%v want %v (err=%v)", c.argv, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestEvaluateReaderBehindUnenumeratedWrapper is CLA-101's own review
+// finding (round 2): CLA-101's original fix collapsed readerWordRefusal
+// / hookWalk's broad per-word reader scan down to "only right after a
+// known trigger word (a wrapper, an exec-style flag, xargs, or --)" —
+// closing the aws/kubectl coincidental-subcommand false positive, but
+// also silently dropping every OTHER wrapper name this package's own
+// `wrappers` map doesn't happen to enumerate, even though its argv text
+// plainly, unambiguously names the reader right there. This mirrors
+// TestEvaluateShellBehindUnenumeratedWrapper's own made-up-wrapper-name
+// pattern above (same doc comment rationale: the list of real-world
+// wrapper/tracing/namespacing utilities can never be exhaustively
+// enumerated), but for a bare READER, not a shell — proving a reader
+// behind ANY unenumerated wrapper, not only the specific ones named in
+// the review, is refused again.
+func TestEvaluateReaderBehindUnenumeratedWrapper(t *testing.T) {
+	dotenv := "." + "env"
+	cases := []struct {
+		name    string
+		argv    []string
+		refused bool
+	}{
+		{"docker exec hides a reader invocation",
+			[]string{"docker", "exec", "mycontainer", "cat", dotenv}, true},
+		{"chroot hides a reader invocation",
+			[]string{"chroot", "/", "cat", dotenv}, true},
+		{"strace hides a reader invocation",
+			[]string{"strace", "-f", "cat", dotenv}, true},
+		{"setsid hides a reader invocation",
+			[]string{"setsid", "cat", dotenv}, true},
+		{"unshare hides a reader invocation",
+			[]string{"unshare", "cat", dotenv}, true},
+		{"stdbuf hides a reader invocation",
+			[]string{"stdbuf", "-oL", "cat", dotenv}, true},
+		// A made-up wrapper name, standing in for the whole unenumerable
+		// class this fallback exists to catch in the first place.
+		{"a totally unenumerated wrapper name, same shape",
+			[]string{"totally-unenumerable-shim", "cat", dotenv}, true},
+		// Paired benign: the same wrapper shapes, pointed at nothing
+		// dangerous, stay allowed — this is Command Policy correctly
+		// checking the real argument, not refusing every wrapper shape
+		// on sight.
+		{"docker exec with a benign argument is allowed",
+			[]string{"docker", "exec", "mycontainer", "cat", "notes.txt"}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1471,5 +1596,24 @@ func TestMaxDepthFailsClosed(t *testing.T) {
 	shallow := strings.Repeat("eval ", maxDepth-4) + "cat notes.txt"
 	if err := Evaluate(Input{Argv: []string{"sh", "-c", shallow}}); err != nil {
 		t.Fatalf("a command within maxDepth with nothing dangerous should stay allowed: %v", err)
+	}
+}
+
+// TestEnvAllowlistIsHookOnly is CLA-102's own stated scope: the
+// printenv allowlist is opted into by Input.EnvAllowlist, which only
+// EvaluateHook ever sets. A direct Evaluate call — the one cpass run and
+// the MCP server's run_with_secrets/capture tools actually gate real
+// execution with — leaves EnvAllowlist false by default and so keeps
+// refusing `printenv PATH` even though PATH is on hookEnvAllowlist: real
+// execution has real Bound Secret values sitting in the same process
+// environment as PATH, so this package deliberately does not extend the
+// hook's allowlist there (see Input.EnvAllowlist's own doc comment).
+func TestEnvAllowlistIsHookOnly(t *testing.T) {
+	argv := []string{"printenv", "PATH"}
+	if err := Evaluate(Input{Argv: argv}); err == nil {
+		t.Fatalf("argv %v: printenv PATH should still be refused when EnvAllowlist is left unset (the cpass run / MCP path)", argv)
+	}
+	if err := Evaluate(Input{Argv: argv, EnvAllowlist: true}); err != nil {
+		t.Fatalf("argv %v: printenv PATH should be allowed once EnvAllowlist is explicitly set: %v", argv, err)
 	}
 }

@@ -15,9 +15,11 @@
 // bind — the Claude Code PreToolUse hook, so these rules are the same
 // everywhere with the small number of disclosed exceptions
 // docs/THREATS.md's own list states precisely (the hook's own `cpass add`
-// inline-value check, and the argv[0] exclusion from the raw-literal
-// scan): consult that list rather than assuming this comment enumerates
-// them, since a fix can close one without this file ever changing.
+// inline-value check, the argv[0] exclusion from the raw-literal scan,
+// and the hook-only printenv allowlist for well-known non-secret
+// variable names, CLA-102): consult that list rather than assuming this
+// comment enumerates them, since a fix can close one without this file
+// ever changing.
 package policy
 
 import (
@@ -53,6 +55,19 @@ type Input struct {
 	// own directory already IS where the command runs), Evaluate falls
 	// back to os.Getwd() itself.
 	Cwd string
+	// EnvAllowlist opts a small, fixed set of well-known non-secret
+	// variable names (hookEnvAllowlist, internal/policy/hook.go) out of
+	// the `printenv` reveal refusal below — set only by EvaluateHook
+	// (CLA-102). The hook has no Bound-variable knowledge at all, so
+	// without this it must refuse ANY `printenv NAME` conservatively,
+	// even an utterly ordinary `printenv PATH`/`printenv HOME` lookup,
+	// which is needless friction for everyday debugging. cpass run and
+	// the MCP server's own Evaluate calls never set this: real execution
+	// DOES have real Bound Secret values sitting in the same process
+	// environment as PATH/HOME, so this package keeps its stricter,
+	// allowlist-free printenv refusal there rather than assuming a name
+	// is safe just because it looks like an ordinary one.
+	EnvAllowlist bool
 }
 
 // Refusal explains why a command was refused. It is an error so the run
@@ -97,12 +112,13 @@ func Evaluate(in Input) error {
 		cwd, _ = os.Getwd()
 	}
 	ev := &evaluator{
-		bound:     map[string]vault.BindingKind{},
-		tainted:   map[string]bool{},
-		literals:  map[string]string{},
-		fds:       map[string]string{},
-		protected: in.ProtectedDirs,
-		cwd:       cwd,
+		bound:        map[string]vault.BindingKind{},
+		tainted:      map[string]bool{},
+		literals:     map[string]string{},
+		fds:          map[string]string{},
+		protected:    in.ProtectedDirs,
+		cwd:          cwd,
+		envAllowlist: in.EnvAllowlist,
 	}
 	for _, v := range in.Bound {
 		ev.bound[v.Name] = v.Kind
@@ -138,6 +154,10 @@ type evaluator struct {
 	// same "resolve only what's statically knowable" default
 	// ev.literals/ev.cwd already apply to a variable/cd target.
 	fds map[string]string
+	// envAllowlist mirrors Input.EnvAllowlist (see its own doc comment):
+	// true only for the evaluator EvaluateHook builds, never for a real
+	// cpass run / MCP server invocation.
+	envAllowlist bool
 }
 
 func (ev *evaluator) underProtected(w string) bool {
@@ -383,6 +403,15 @@ func (ev *evaluator) argv(argv []string, depth int) error {
 	}
 	switch {
 	case revealPrograms[prog]:
+		// CLA-102: at the hook layer only (ev.envAllowlist), printenv
+		// naming exclusively well-known, non-secret variables (PATH,
+		// HOME, ...) is not a reveal worth blocking everyday debugging
+		// over — see hookEnvAllowlist (hook.go) and Input.EnvAllowlist's
+		// own doc comment for why this is scoped to the hook and no
+		// further.
+		if prog == "printenv" && ev.envAllowlist && printenvAllowlisted(argv[1:]) {
+			return nil
+		}
 		return &Refusal{Rule: prog + " prints environment variables", Advice: "pass the variable to the tool that needs it instead"}
 	case prog == "env":
 		// env alone dumps; env [VAR=x]... cmd runs cmd.
@@ -464,49 +493,151 @@ func (ev *evaluator) shellWordRefusal(argv []string, depth int) error {
 	return nil
 }
 
+// coincidentalReaderSubcommands enumerates the specific, known {multi-
+// level CLI, subcommand path} pairs whose own subcommand text happens to
+// share a name with a `readers` entry without genuinely invoking (or
+// even resembling) the real reader program of that name: the AWS CLI's
+// own `aws logs tail` (streams remote CloudWatch log events; "tail" is
+// AWS's own subcommand, not tail(1)) and `aws s3 cp` (AWS's own S3 copy
+// operation, not cp(1)); kubectl's and docker's own `cp` subcommand
+// (copies to/from a container, not a local read via cp(1)). Only a
+// subcommand that is itself a `readers` name belongs here — the callers
+// consult this list only at a word that already matched `readers`. This list
+// is deliberately small and specific, not a general "does this word look
+// like a subcommand" heuristic: readerWordRefusal/hookWalk below match a
+// path here only by its EXACT, contiguous position starting right after
+// the CLI's own program name (isCoincidentalReaderSubcommand), so it can
+// only ever narrow detection for the precise shapes named here, never
+// for a reader name appearing anywhere else — including behind a real
+// wrapper this package doesn't otherwise enumerate (`docker exec`,
+// `chroot`, `strace -f`, `setsid`, `unshare`, `stdbuf`, ...), which is
+// exactly the class CLA-101's own trigger-word narrowing wrongly swept
+// in along with these coincidental subcommands (CLA-101 review). Add to
+// this list only a specific, verified {CLI, subcommand path} pair that
+// is genuinely not a local file read — never a whole wrapper program or
+// a broader pattern, which would silently reopen that same regression.
+//
+// DISCLOSED, PRE-EXISTING EDGE this exemption shares with CLA-101's own
+// trigger-word version of it (not a new gap this fix introduces): the
+// `cp` entries are direction-blind. `kubectl cp`/`docker cp` copy in
+// either direction (`kubectl cp LOCAL pod:PATH` uploads and genuinely
+// reads LOCAL off disk; `kubectl cp pod:PATH LOCAL` downloads and writes
+// LOCAL instead), and this exemption skips the secretFileGlobs check for
+// every argument once the subcommand path matches, in either direction —
+// so `kubectl cp .env mypod:/root/.env`, a genuine local read, is no
+// longer caught either, the same as it wasn't under CLA-101's own
+// trigger-word gate (`kubectl` is neither a wrapper nor an exec-style
+// flag there either). Telling "LOCAL argument" from "container:PATH
+// argument" precisely enough to re-check only the genuinely local one
+// would mean modeling each CLI's own copy-argument syntax, the same
+// unbounded per-tool task docs/THREATS.md item 16 already declines
+// generally; Redaction and `cpass import` remain the enforced boundary
+// for this narrower shape, exactly as for the disclosed edges around it.
+var coincidentalReaderSubcommands = map[string][][]string{
+	"aws":     {{"logs", "tail"}, {"s3", "cp"}},
+	"kubectl": {{"cp"}},
+	"docker":  {{"cp"}},
+}
+
+// isCoincidentalReaderSubcommand reports whether the reader-name word at
+// index i — wordAt(i) returning its raw text, already known by the
+// caller to match a `readers` entry — is actually one of
+// coincidentalReaderSubcommands' own known false-positive shapes rather
+// than a genuine reader-program invocation. cmdStart is the index of the
+// enclosing command's own program name (position 0 for a flat argv;
+// commandStartIndex's result — position 0, or the first word after a
+// leading run of VAR=value assignments — for a shell word list), and the
+// words immediately following it up to and including i must match one
+// of that CLI's own listed subcommand paths exactly, word for word, with
+// nothing else in between: `aws --profile x logs tail ...` or `find .
+// -exec aws logs tail .env \;` do NOT match (the path isn't contiguous
+// from cmdStart, or cmdStart isn't the reader word's own enclosing
+// command at all), so this stays a narrow exemption for the literal,
+// reported shapes rather than a broad heuristic that could itself hide a
+// real read (CLA-101 review).
+func isCoincidentalReaderSubcommand(wordAt func(int) string, cmdStart, i int) bool {
+	paths, ok := coincidentalReaderSubcommands[base(wordAt(cmdStart))]
+	if !ok {
+		return false
+	}
+	for _, path := range paths {
+		if len(path) == 0 || cmdStart+len(path) != i {
+			continue
+		}
+		match := true
+		for k, seg := range path {
+			if wordAt(cmdStart+1+k) != seg {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
 // readerWordRefusal mirrors hookWalk's per-word reader-name fallback
 // (internal/policy/hook.go) for a flat argv with no shell involved: even
 // when argv[0] isn't itself a reader, a reader name appearing anywhere
 // else in argv — the tail of a wrapper neither `wrappers` nor `shells`
-// enumerates, e.g. `find . -exec cat .env \;` — is still a real
-// subprocess invocation a real exec family call (execvp inside -exec, in
-// find's own case) will make, and its own file-argument words are still
-// checkable text sitting right there in argv. Before this, Evaluate (the
-// function cpass run and the MCP server actually gate real execution
-// with) special-cased only the fixed `wrappers` map plus `timeout`,
-// leaving every other wrapper completely unchecked — a parity gap with
-// EvaluateHook's hookWalk, which already scans every word position for
-// exactly this reason
+// enumerates, e.g. `find . -exec cat .env \;`, `docker exec c cat .env`,
+// `chroot / cat .env`, `strace -f cat .env`, `setsid cat .env`, `unshare
+// cat .env`, `stdbuf -oL cat .env`, or a bare `xargs`'s own first
+// argument, e.g. `xargs cat < .env` — is still a real subprocess
+// invocation a real exec family call will make, and its own
+// file-argument words are still checkable text sitting right there in
+// argv. Before CLA-99, Evaluate (the function cpass run and the MCP
+// server actually gate real execution with) special-cased only the
+// fixed `wrappers` map plus `timeout`, leaving every other wrapper
+// completely unchecked — a parity gap with EvaluateHook's hookWalk,
+// which already scanned every word position for exactly this reason
 // (command-policy:evaluate-missing-hook-per-word-wrapper-coverage).
 // argv[0] itself is exempt when it is a pure-output printer
 // (echo/printf/print): the remaining words are then data it prints, never
 // programs it runs — the same exemption hookWalk's printerArg applies.
 //
-// KNOWN, ACCEPTED OVER-REFUSAL (disclosed in docs/THREATS.md): this is a
-// flat per-word scan with no notion of argv structure, so a word that
-// merely coincides with a reader's name is treated the same as a genuine
-// invocation of it — including a multi-level CLI's own SUBCOMMAND that
-// happens to share a name with a reader utility, e.g. `aws logs tail
-// /aws/lambda/f --filter-pattern .env`: "tail" here is the AWS CLI's own
-// subcommand, never the tail(1) reader, and ".env" is a filter-pattern
-// string, not a file argument, yet this loop cannot tell the two apart
-// from "tail" behind a real wrapper (`find . -exec tail .env \;`), which
-// is the shape this fallback exists to catch and must keep catching.
-// Scoping the check to only the argv position right after a known
-// exec-taking flag (`find`'s `-exec`) would lose the equally-legitimate
-// `xargs cat .env` shape, which has no such flag at all — narrowing this
-// enough to exclude the coincidental-subcommand case would reopen one of
-// those two, not close a gap, so this stays a deliberate, disclosed
-// trade-off rather than a narrower heuristic guessing at which shape a
-// given wrapper is (command-policy:reader-name-coincidental-subcommand-
-// match).
+// CLA-101 narrowed this from "any word position at all" to "only right
+// after a known trigger word (a wrapper, an exec-style flag, xargs, or
+// --)", closing the multi-level-CLI-subcommand false positive
+// (`aws logs tail`, `kubectl cp`) this ticket names — but, as CLA-101's
+// own review found, that also silently dropped every OTHER wrapper name
+// this package doesn't happen to enumerate (`docker exec`, `chroot`,
+// `strace`, `setsid`, `unshare`, `stdbuf`, and any other passthrough
+// shim), which is exactly the class this fallback exists to catch in
+// the first place — a substantial, undisclosed reduction of Command
+// Policy's primary enforcement path, not a narrower version of the
+// ticket's own disclosed trade-off. The review's fix restores the
+// original "any word position" scan and instead excludes only the
+// specific, small set of known coincidental {CLI, subcommand} pairs
+// (coincidentalReaderSubcommands/isCoincidentalReaderSubcommand above) —
+// a reader name anywhere else, trigger word or not, is still caught,
+// exactly as it was before CLA-101.
+//
+// This also restores catching a multi-level CLI subcommand that
+// genuinely DOES read a local file the way a real reader would (`git
+// grep PATTERN .env`) as a side effect — CLA-101's own narrowing had
+// disclosed losing that as an accepted, unavoidable cost of requiring a
+// trigger word; it isn't unavoidable once the fix is a specific denylist
+// instead, and refusing a command that really would read the file is
+// correct, not a new false positive.
 func readerWordRefusal(argv []string) *Refusal {
 	if len(argv) == 0 || printers[base(argv[0])] {
 		return nil
 	}
+	wordAt := func(k int) string {
+		if k < 0 || k >= len(argv) {
+			return ""
+		}
+		return argv[k]
+	}
 	for i := 1; i < len(argv); i++ {
 		prog := base(argv[i])
 		if !readers[prog] || readBuiltins[prog] {
+			continue
+		}
+		if isCoincidentalReaderSubcommand(wordAt, 0, i) {
 			continue
 		}
 		patIdx := readerPatternIndex(prog, argv[i+1:])

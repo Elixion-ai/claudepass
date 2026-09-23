@@ -152,34 +152,47 @@ value can still end up somewhere it shouldn't, today:
    other completes a match risks over-redaction and race conditions
    between the two streams' writers — so this is recorded here as a
    disclosed limitation rather than attempted in this pass.
-5. **Two narrow, deliberate differences remain between the PreToolUse hook
-   and the other two surfaces** (closed for the file-glob and raw-literal
-   rules themselves by CLA-38 — see below). `cpass policy --hook` alone
-   refuses `cpass add <handle> <value>` (an inline second positional
-   argument defeats the terminal gate `cpass add`'s own hidden prompt
-   enforces): there is no equivalent check in `cpass run` or the MCP
-   server, since only the hook inspects a raw Bash command line before
-   `cpass` has parsed anything, and `cpass add` is not a command either of
-   them wraps. Separately, the hook's raw-literal scan (`internal/detect`)
-   covers a command's entire text, including its program's own path,
-   while the shared `Evaluate` (used by `cpass run`, the MCP server's
-   `run_with_secrets`/`capture` tools, and the hook itself) deliberately
-   excludes argv[0] from that scan: a real executable path — a build
-   artifact under a randomly named temp directory, a versioned tool under
-   a hashed store path — routinely reads as high-entropy to the same
-   heuristic without being a Secret, and a Secret value is never itself
-   the program being executed, so nothing is actually missed by excluding
-   it. Before CLA-38, the secret-file-glob rule (`.env*`, `*.pem`,
-   `id_rsa*`, `*.key`, `credentials*.json`, `.netrc`, `.npmrc`) and the
-   raw-literal rule applied only to the hook: `cpass run -- cat .env` and
-   an MCP `run_with_secrets` call with `command: ["cat", ".env"]` were
-   **not** refused, even though the functionally identical Bash tool call
-   inside Claude Code was — and `internal/policy`'s package doc comment
+5. **Three narrow, deliberate differences remain between the PreToolUse
+   hook and the other two surfaces** (closed for the file-glob and
+   raw-literal rules themselves by CLA-38 — see below). `cpass policy
+   --hook` alone refuses `cpass add <handle> <value>` (an inline second
+   positional argument defeats the terminal gate `cpass add`'s own
+   hidden prompt enforces): there is no equivalent check in `cpass run`
+   or the MCP server, since only the hook inspects a raw Bash command
+   line before `cpass` has parsed anything, and `cpass add` is not a
+   command either of them wraps. Separately, the hook's raw-literal scan
+   (`internal/detect`) covers a command's entire text, including its
+   program's own path, while the shared `Evaluate` (used by `cpass run`,
+   the MCP server's `run_with_secrets`/`capture` tools, and the hook
+   itself) deliberately excludes argv[0] from that scan: a real
+   executable path — a build artifact under a randomly named temp
+   directory, a versioned tool under a hashed store path — routinely
+   reads as high-entropy to the same heuristic without being a Secret,
+   and a Secret value is never itself the program being executed, so
+   nothing is actually missed by excluding it. A third difference,
+   narrower still and added by CLA-102: `cpass policy --hook` alone
+   allows `printenv NAME` when every `NAME` given is on a small, fixed
+   allowlist of well-known, non-secret variables (`PATH`, `HOME`, `LANG`,
+   `GOPATH`, ... — see `docs/SECURITY.md`'s full list). This exists
+   because the hook has no Bound-variable knowledge at all — unlike
+   `cpass run` and the MCP server, which run with real Bound Secret
+   values already sitting in the same process environment as `PATH`/
+   `HOME` — so it would otherwise refuse even an utterly ordinary
+   `printenv PATH` lookup; those two other surfaces deliberately keep the
+   stricter, allowlist-free refusal, since assuming a name is safe there
+   just because it looks like an ordinary one is a different, higher-cost
+   bet once real Secret values are actually present. Before CLA-38, the
+   secret-file-glob rule (`.env*`, `*.pem`, `id_rsa*`, `*.key`,
+   `credentials*.json`, `.netrc`, `.npmrc`) and the raw-literal rule
+   applied only to the hook: `cpass run -- cat .env` and an MCP
+   `run_with_secrets` call with `command: ["cat", ".env"]` were **not**
+   refused, even though the functionally identical Bash tool call inside
+   Claude Code was — and `internal/policy`'s package doc comment
    overclaimed "the same evaluator serves `cpass run`, the ... hook, and
    the MCP server, so behaviour is identical everywhere." Both rules now
    live in the shared `Evaluate`, so all three surfaces refuse the same
    file reads and raw literals; the package doc comment states precisely
-   the two differences left above.
+   the three differences left above.
 6. **The `!!` Intercept bypass is a deliberate escape hatch, not a filter
    that got weaker.** It exists so a false positive never blocks real
    work; using it on an actual Secret sends that value into the Agent's
@@ -485,14 +498,19 @@ value can still end up somewhere it shouldn't, today:
       tool instead of per language.
     - **An unenumerated wrapper this package's own per-word fallback
       doesn't reach still exists.** `readerWordRefusal`/`hookWalk`'s
-      per-word scans catch a reader or shell name appearing anywhere in
-      a flat argv or word list (`find . -exec cat .env \;`, `xargs cat
-      .env`, `nsenter ... sh -c '...'`), which covers the common,
-      genuinely reachable shapes — but a wrapper that renames its child
-      process, execs through a compiled helper binary with no readable
-      argv text naming the real command, or otherwise obscures what it's
-      about to run from the text of the command line itself is outside
-      what any text-based scan can see, by construction.
+      per-word scans catch a reader or shell name appearing at ANY
+      position in a flat argv or word list (`find . -exec cat .env \;`,
+      `xargs cat .env`, `cpass run -- cat .env`, `docker exec c cat
+      .env`, `nsenter ... sh -c '...'`), except for the small, specific
+      set of multi-level CLI subcommands that merely share a reader's
+      name without behaving like one (`coincidentalReaderSubcommands`,
+      `internal/policy/policy.go` — see CLA-101's own entry below), which
+      covers the common, genuinely reachable shapes — but a wrapper that
+      renames its child process, execs through a compiled helper binary
+      with no readable argv text naming the real command, or otherwise
+      obscures what it's about to run from the text of the command line
+      itself is outside what any text-based scan can see, by
+      construction.
 
     The enforced boundary for this whole residual class is not Command
     Policy — it is Redaction (a value these programs print still gets
@@ -511,12 +529,7 @@ value can still end up somewhere it shouldn't, today:
     it isn't.
 
     This round (2026-09-23 audit) also leaves its own narrower disclosed
-    edges: `readerWordRefusal`'s coincidental-subcommand-match
-    over-refusal (a multi-level CLI's own subcommand sharing a name with
-    a reader, e.g. `aws logs tail ...`, is refused the same as a real
-    `tail` invocation — see the function's own doc comment) is a
-    deliberate, accepted trade-off, not a narrowed-then-reopened gap; and
-    the case-statement pattern-arm fix models `case`/`in`/`;;`/`esac`
+    edges: the case-statement pattern-arm fix models `case`/`in`/`;;`/`esac`
     precisely but not bash's `;&`/`;;&` fallthrough operators, which this
     package's tokenizer still treats as plain `;`-separated command
     boundaries — a case arm using either form parses as more separate
@@ -524,6 +537,56 @@ value can still end up somewhere it shouldn't, today:
     mean MORE separately-checked text, never less, the same conservative
     direction every other under-modeled shape in this document already
     takes.
+
+    **CLA-101 (2026-09-23 audit follow-up)** fixed that same round's own
+    disclosed `readerWordRefusal` coincidental-subcommand-match
+    over-refusal: a multi-level CLI's own subcommand that merely shares a
+    name with a reader utility and does not itself read a local file
+    (`aws logs tail ...`, `kubectl cp pod:/x .env` — AWS's `tail`
+    streams remote CloudWatch logs, and this `kubectl cp` invocation
+    WRITES a local file) is not treated as a reader invocation. CLA-101's
+    first version of this fix required a genuine trigger word (a wrapper,
+    one of find's own exec-style flags, a bare `xargs`, or `--`)
+    immediately before ANY reader-name word — closing the aws/kubectl
+    false positive, but, as CLA-101's own follow-up review found (round
+    2), also silently dropping detection for every OTHER wrapper program
+    this package doesn't happen to enumerate (`docker exec`, `chroot`,
+    `strace`, `setsid`, `unshare`, `stdbuf`, and any other passthrough
+    shim) — a substantial, undisclosed reduction of this fallback's whole
+    reason to exist, not a narrower version of the disclosed trade-off
+    below. **CLA-101's review fix (round 2)** replaced that trigger-word
+    gate with a small, specific denylist instead
+    (`coincidentalReaderSubcommands`/`isCoincidentalReaderSubcommand`,
+    `internal/policy/policy.go`): a reader name is caught at ANY word
+    position again, exactly as before CLA-101, except for the exact,
+    contiguous `{CLI, subcommand path}` pairs on that list (`aws logs
+    tail`, `aws s3 cp`, `kubectl cp`, `docker cp`) — restoring detection for every unenumerated-wrapper shape
+    without reopening the aws/kubectl false positive. As a side effect,
+    this also restores catching a multi-level CLI subcommand that
+    genuinely DOES read a local file the way a real reader would (`git
+    grep PATTERN .env`), which CLA-101's first version had disclosed
+    losing as an unavoidable cost of the trigger-word approach — it isn't
+    unavoidable with a denylist instead, and refusing a command that
+    really would read the file is correct, not a new false positive. The
+    denylist's own `cp` entries stay direction-blind (`kubectl cp
+    LOCAL pod:PATH` genuinely reads LOCAL off disk on upload,
+    `kubectl cp pod:PATH LOCAL` only writes LOCAL on download, and this
+    exemption skips every argument's secretFileGlobs check either way,
+    the same edge CLA-101's own trigger-word version already had for
+    this shape) — telling those two argument shapes apart precisely
+    enough to re-check only the genuinely local one would mean modeling
+    each CLI's own copy-argument syntax, the same unbounded per-tool task
+    this item already declines generally. Redaction and `cpass import`
+    remain the enforced boundary for both disclosed edges.
+
+    **CLA-102 (2026-09-23 audit follow-up)** is not a residual-class item
+    on its own — it is the hook-only `printenv` allowlist documented in
+    item 5 above — but is noted here too since it is the same kind of
+    "narrow the check, disclose what narrowing costs" trade-off: a
+    `printenv` call naming only well-known, non-secret variables no
+    longer refuses at the hook layer, and the fixed, small allowlist
+    (`docs/SECURITY.md`) is itself the disclosed boundary — a name not on
+    it stays refused exactly as before, by design, not by omission.
 
 ## Intercept precision (v0.1.4)
 

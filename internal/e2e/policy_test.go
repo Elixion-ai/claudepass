@@ -533,6 +533,60 @@ func TestPolicyRunShellBehindUnenumeratedWrapper(t *testing.T) {
 	}
 }
 
+// TestPolicyRunReaderBehindUnenumeratedWrapper is CLA-101's own review
+// finding (round 2)'s e2e proof, driven against a real built cpass
+// binary: CLA-101's original fix required a genuine trigger word
+// immediately before a reader-name word, which — unlike its intended
+// aws/kubectl coincidental-subcommand fix — also silently stopped
+// catching a reader behind ANY other wrapper program this package's own
+// `wrappers` map doesn't enumerate, even though its argv text plainly,
+// unambiguously names the reader right there. Proved the same way
+// TestPolicyRunShellBehindUnenumeratedWrapper above proves the parallel
+// shell case: a synthetic `exec "$@"` passthrough shim standing in for
+// the whole unenumerable class (docker exec, chroot, strace, setsid,
+// unshare, stdbuf, ...), in both argv and shell-string form — this is
+// the actual execution gate `cpass run` and the MCP server's
+// run_with_secrets/capture use, not only the advisory PreToolUse hook.
+func TestPolicyRunReaderBehindUnenumeratedWrapper(t *testing.T) {
+	ve := leakVault(t)
+	dir := t.TempDir()
+	shim := filepath.Join(dir, "passthrough-shim")
+	if err := os.WriteFile(shim, []byte("#!/bin/sh\nexec \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	notes := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(notes, []byte("hi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Argv form: the shim is argv[0], the real reader invocation follows.
+	r := ve.run(nil, "run", "--with", "stripe/live", "--", shim, "cat", ".env")
+	if r.code != 3 || !strings.Contains(r.stderr, "Secret-bearing file") {
+		t.Fatalf("a reader invocation behind an unenumerated wrapper (argv form) must be refused: %s", r)
+	}
+	if strings.Contains(r.stdout+r.stderr, leakVal) {
+		t.Fatalf("leaked: %s", r)
+	}
+
+	// Shell-string form: the whole wrapped invocation is itself one
+	// shell string handed to `cpass run -- sh -c '...'`.
+	r = sh(ve, shim+" cat .env")
+	if r.code != 3 || !strings.Contains(r.stderr, "Secret-bearing file") {
+		t.Fatalf("a reader invocation behind an unenumerated wrapper (shell-string form) must be refused: %s", r)
+	}
+	if strings.Contains(r.stdout+r.stderr, leakVal) {
+		t.Fatalf("leaked: %s", r)
+	}
+
+	// Paired benign: the same wrapper shape, pointed at a real benign
+	// file, must still run — proving the real argument is being checked,
+	// not every wrapper shape refused on sight.
+	r = ve.run(nil, "run", "--with", "stripe/live", "--", shim, "cat", notes)
+	if r.code != 0 || !strings.Contains(r.stdout, "hi") {
+		t.Fatalf("a reader invocation behind the same wrapper reading a benign file should run normally: %s", r)
+	}
+}
+
 // TestPolicyRunSecretFileGlobExpansion is
 // command-policy:shell-glob-expansion-hides-filename's e2e proof
 // (2026-09-22 audit, round 3), driven against a real built cpass binary

@@ -411,20 +411,145 @@ func TestEvaluateHookWrappedCpassRunFullParity(t *testing.T) {
 	}
 }
 
-// TestEvaluateHookReaderNameCoincidentalSubcommandMatch pins a KNOWN,
-// ACCEPTED over-refusal (see readerWordRefusal's own doc comment and
-// docs/THREATS.md): a multi-level CLI's own subcommand that happens to
-// share a name with a reader program (`aws logs tail`) is
-// indistinguishable, by this package's flat per-word scan, from a
-// genuine invocation of that reader behind an unenumerated wrapper
-// (`find . -exec tail .env \;`) — narrowing the check enough to
-// exclude one would reopen the other, so this stays a deliberate,
-// disclosed trade-off. This test exists so a future change to that
-// trade-off is a conscious edit here, not a silent behavior change.
+// TestEvaluateHookReaderNameCoincidentalSubcommandMatch is CLA-101's
+// acceptance case at the hook layer: a multi-level CLI's own subcommand
+// that happens to share a name with a reader program (`aws logs tail`,
+// `kubectl cp`) is not treated as a genuine reader invocation —
+// hookWalk's per-word fallback excludes exactly these known {CLI,
+// subcommand} pairs (coincidentalReaderSubcommands, policy.go, CLA-101's
+// own review fix), not a reader name generally. Before CLA-101 both
+// commands below were refused — an over-refusal, not a caught leak,
+// since AWS's `tail` streams remote CloudWatch logs and kubectl's `cp`
+// here WRITES a local file, neither of which reads anything through the
+// local filesystem the way a real `tail`/`cp` invocation would.
 func TestEvaluateHookReaderNameCoincidentalSubcommandMatch(t *testing.T) {
-	command := `aws logs tail /aws/lambda/myfunction --filter-pattern .env`
-	if err := EvaluateHook(command); err == nil {
-		t.Fatalf("command %q: expected the documented, accepted over-refusal (readerWordRefusal treats \"tail\" as a reader invocation), got allowed", command)
+	cases := []string{
+		`aws logs tail /aws/lambda/myfunction --filter-pattern .env`,
+		`kubectl cp pod:/x .env.example`,
+		`kubectl cp pod:/x .env`,
+	}
+	for _, command := range cases {
+		t.Run(command, func(t *testing.T) {
+			if err := EvaluateHook(command); err != nil {
+				t.Fatalf("command %q: expected the coincidental-subcommand-name case to be allowed, got refused: %v", command, err)
+			}
+		})
+	}
+}
+
+// TestEvaluateHookReaderTriggerStillCatchesRealWrappers is the paired
+// benign-vs-refused check for the coincidental-subcommand denylist: a
+// reader name genuinely invoked anywhere else — behind `cpass run`'s own
+// `--` separator, find's `-exec`, or a bare `xargs` — must stay refused
+// exactly as before, by far the most common shape this whole mechanism
+// exists to catch, and the one a too-narrow fix would most easily break.
+func TestEvaluateHookReaderTriggerStillCatchesRealWrappers(t *testing.T) {
+	cases := []string{
+		`cpass run -- cat .env`,
+		`find . -exec cat .env \;`,
+		`xargs cat < .env`,
+	}
+	for _, command := range cases {
+		t.Run(command, func(t *testing.T) {
+			if err := EvaluateHook(command); err == nil {
+				t.Fatalf("command %q: expected a refusal, got allowed", command)
+			}
+		})
+	}
+}
+
+// TestEvaluateHookReaderBehindUnenumeratedWrapper is CLA-101's own
+// review finding (round 2) at the hook layer: CLA-101's original fix
+// required a genuine trigger word (a known wrapper, an exec-style flag,
+// xargs, or --) immediately before a reader-name word, which silently
+// stopped catching a reader behind any OTHER wrapper program this
+// package's own `wrappers` map doesn't happen to enumerate — even though
+// its argv text plainly, unambiguously names the reader right there, no
+// renaming or obscuring involved. Mirrors
+// TestEvaluateReaderBehindUnenumeratedWrapper (policy_test.go) at the
+// hook layer, proving hookWalk's own per-word scan — not only Evaluate's
+// — catches this class again.
+func TestEvaluateHookReaderBehindUnenumeratedWrapper(t *testing.T) {
+	cases := []struct {
+		command string
+		refused bool
+	}{
+		{`docker exec mycontainer cat .env`, true},
+		{`chroot / cat .env`, true},
+		{`strace -f cat .env`, true},
+		{`setsid cat .env`, true},
+		{`unshare cat .env`, true},
+		{`stdbuf -oL cat .env`, true},
+		{`totally-unenumerable-shim cat .env`, true},
+		// Paired benign: the same wrapper shape, pointed at nothing
+		// dangerous, stays allowed.
+		{`docker exec mycontainer cat notes.txt`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.command, func(t *testing.T) {
+			err := EvaluateHook(c.command)
+			if (err != nil) != c.refused {
+				t.Fatalf("command %q: refused=%v want %v (err=%v)", c.command, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestEvaluateHookPrintenvAllowlist is CLA-102's acceptance case: at the
+// hook layer only, `printenv NAME` naming exclusively well-known,
+// non-secret variables (hookEnvAllowlist) is allowed — the hook has no
+// Bound-variable knowledge at all, so refusing an ordinary `printenv
+// PATH`/`printenv HOME` lookup was needless friction, not a caught
+// reveal. `echo $NAME`/`echo "${NAME}"` were already unaffected either
+// way (pinned here too, so that stays a conscious fact): the hook's own
+// synthetic Evaluate call has no Bound Secret to compare a variable
+// reference against, so a printer's argument is never refused there
+// regardless of which name it prints — the allowlist exists specifically
+// because `printenv`'s revealPrograms rule, unlike a printer's own
+// reference check, fires on the PROGRAM alone, with no Bound-variable
+// gate to already exempt an ordinary name.
+func TestEvaluateHookPrintenvAllowlist(t *testing.T) {
+	allowed := []string{
+		"printenv PATH",
+		"printenv HOME",
+		"printenv PATH HOME",
+		"printenv GOPATH",
+		"printenv LC_ALL",
+		"printenv XDG_CONFIG_HOME",
+		"echo $HOME",
+		`echo "${HOME}"`,
+		// echo of a name NOT on the allowlist is unaffected either way —
+		// the hook has no Bound Secret to check a printer's argument
+		// against at all (see this test's own doc comment) — pinned so a
+		// future change that starts gating echo the same way printenv is
+		// gated is a conscious edit, not a silent behavior change.
+		"echo $AWS_SECRET_ACCESS_KEY",
+	}
+	for _, command := range allowed {
+		t.Run(command, func(t *testing.T) {
+			if err := EvaluateHook(command); err != nil {
+				t.Fatalf("command %q: expected allowed, got refused: %v", command, err)
+			}
+		})
+	}
+
+	refused := []string{
+		"printenv",
+		"printenv AWS_SECRET_ACCESS_KEY",
+		// An allow-listed name wrapped around a non-allow-listed one:
+		// the whole invocation stays refused rather than silently
+		// printing just the allow-listed one.
+		"printenv PATH AWS_SECRET_ACCESS_KEY",
+		"printenv AWS_SECRET_ACCESS_KEY PATH",
+		"env | grep PATH",
+		"env",
+	}
+	for _, command := range refused {
+		t.Run(command, func(t *testing.T) {
+			if err := EvaluateHook(command); err == nil {
+				t.Fatalf("command %q: expected a refusal, got allowed", command)
+			}
+		})
 	}
 }
 

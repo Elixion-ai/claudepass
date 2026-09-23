@@ -666,6 +666,23 @@ rather than runs unchecked):
   `/proc/*/environ`, or a shell/`set -x` trace flag — unless the command is
   itself a `cpass run` invocation, since that one re-applies the equivalent
   checks at execution time against its real Bound variables (see below).
+  **Exception (CLA-102, hook layer only):** `printenv NAME` is allowed
+  when every `NAME` given is on a small, fixed allowlist of well-known,
+  non-secret variables — `PATH`, `HOME`, `USER`, `SHELL`, `PWD`,
+  `OLDPWD`, `LANG`, `LC_*`, `TERM`, `TMPDIR`, `GOPATH`, `GOROOT`,
+  `GOBIN`, `NODE_ENV`, `VIRTUAL_ENV`, `CONDA_PREFIX`, `JAVA_HOME`,
+  `EDITOR`, `PAGER`, `HOSTNAME`, and `XDG_*` — since the hook has no
+  Bound-variable knowledge at all and would otherwise refuse even an
+  utterly ordinary `printenv PATH`/`printenv HOME` lookup. Bare
+  `printenv`/`env`, any name not on that list (`printenv
+  AWS_SECRET_ACCESS_KEY`), an allow-listed name mixed with a
+  non-allow-listed one (`printenv PATH AWS_SECRET_ACCESS_KEY`), and any
+  pipeline that dumps the whole environment (`env | grep PATH`) all stay
+  refused. This allowlist applies only to `cpass policy --hook`'s own
+  `Evaluate` call (`Input.EnvAllowlist`): `cpass run` and the MCP
+  server's `run_with_secrets`/`capture` tools never set it, since real
+  execution has real Bound Secret values sitting in the same process
+  environment as `PATH`/`HOME`.
 
 This hook never opens the Vault and makes no network call; it is a pure,
 static judgment over the command text (`internal/policy`).
@@ -696,14 +713,38 @@ a direct `$IFS`/`${IFS}` reference, and a glob-shaped argument hidden
 behind an unenumerated wrapper program).
 
 Separately from the tokenizer, `Evaluate`'s per-word fallback — the
-mechanism that already resolved a reader name appearing anywhere in a
-command's words, not only as the program actually invoked (`find .
--exec cat .env \;`) — now resolves a SHELL name the same way (round 3):
-a shell invocation behind ANY wrapper program, not only the ones
+mechanism that already resolved a reader name appearing at ANY word
+position in a command's words, not only as the program actually invoked
+(`find . -exec cat .env \;`, `xargs cat < .env`, or `cpass run`'s own
+`--` separator) — now resolves a SHELL name the same way (round 3): a
+shell invocation behind ANY wrapper program, not only the ones
 `wrappers` enumerates, has its `-c`/script-path content statically
 evaluated the same way a direct shell invocation already is, matching a
 parity `EvaluateHook`'s own per-word scan already had by structural
 accident.
+
+**CLA-101** first narrowed the reader-name half of this fallback from
+matching a reader's name at ANY word position to only right after a
+known wrapper, one of find's own exec-style flags
+(`-exec`/`-execdir`/`-ok`/`-okdir`), a bare `xargs`, or `--`: this closed
+a multi-level CLI's own subcommand that merely shares a reader's name
+(`aws logs tail ...`, `kubectl cp ...`) being treated as a genuine
+invocation — over-refusal, not a caught leak — but, as CLA-101's own
+follow-up review found, it also silently stopped catching a reader
+behind any OTHER wrapper this package's `wrappers` map doesn't
+enumerate (`docker exec`, `chroot`, `strace`, `setsid`, `unshare`,
+`stdbuf`, ...), the exact class this fallback exists to catch in the
+first place. **CLA-101's review fix** replaced the trigger-word gate
+with a small, specific denylist instead
+(`coincidentalReaderSubcommands`, `internal/policy/policy.go`): a
+reader name is matched at ANY word position again, exactly as before
+CLA-101, except for the specific `{CLI, subcommand path}` pairs on that
+list (`aws logs tail`, `aws s3 cp`, `kubectl cp`, `docker cp`) — restoring the unenumerated-wrapper coverage
+without reopening the aws/kubectl false positive. The shell-name half
+of this fallback was never affected by any of this and still matches at
+any position — see `docs/THREATS.md` item 16 for the narrower,
+disclosed edges the denylist itself still leaves (`kubectl cp`/`docker
+cp`'s own direction-blindness).
 
 **Scope note**: the secret-file-glob and raw-literal checks above are the
 same rule in `EvaluateHook` and the evaluator `cpass run` and the MCP
@@ -740,12 +781,18 @@ detail.
    Secret-bearing file by the same basename glob the PreToolUse hook
    matches (`.env*`, `*.pem`, `id_rsa*`, `*.key`, `credentials*.json`,
    `.netrc`, `.npmrc`, with the same non-secret-counterpart exclusions —
-   see above), passed to the same reader programs — anywhere in the
-   command, not only as the program actually invoked, so a reader behind
-   a wrapper this package doesn't enumerate (`find . -exec cat .env \;`)
-   is still caught the same way the hook's own per-word scan already
-   catches it (2026-09-22 audit round 2 closed this `Evaluate`/
-   `EvaluateHook` parity gap) — or a shell `source`/`.` builtin; a bound
+   see above), passed to the same reader programs — at any word
+   position, not only as the program actually invoked, except the small,
+   specific set of multi-level CLI subcommands that merely share a
+   reader's name without behaving like one (`aws logs tail`, `aws s3
+   cp`, `kubectl cp`, `docker cp` —
+   `coincidentalReaderSubcommands`, CLA-101's review fix; see
+   `docs/THREATS.md` item 16), so a reader behind a wrapper this package
+   doesn't enumerate (`find . -exec cat .env \;`, `docker exec c cat
+   .env`) is still caught the same way the hook's own per-word scan
+   already catches it (2026-09-22 audit round 2 closed this
+   `Evaluate`/`EvaluateHook` parity gap) — or a shell `source`/`.`
+   builtin; a bound
    or tainted variable given to a reader with no matching file operand —
    a here-string (`cat <<< $STRIPE_LIVE`) is the live shape, since a
    reader given no real file argument is functionally "cat used as echo"
