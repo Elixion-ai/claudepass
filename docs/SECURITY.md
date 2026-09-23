@@ -739,8 +739,7 @@ with a small, specific denylist instead
 (`coincidentalReaderSubcommands`, `internal/policy/policy.go`): a
 reader name is matched at ANY word position again, exactly as before
 CLA-101, except for the specific `{CLI, subcommand path}` pairs on that
-list (`aws logs tail`, `aws s3 cp`, `kubectl cp`, `docker cp`, `gh run
-view`, `git show`) — restoring the unenumerated-wrapper coverage
+list (`aws logs tail`, `aws s3 cp`, `kubectl cp`, `docker cp`) — restoring the unenumerated-wrapper coverage
 without reopening the aws/kubectl false positive. The shell-name half
 of this fallback was never affected by any of this and still matches at
 any position — see `docs/THREATS.md` item 16 for the narrower,
@@ -786,7 +785,7 @@ detail.
    position, not only as the program actually invoked, except the small,
    specific set of multi-level CLI subcommands that merely share a
    reader's name without behaving like one (`aws logs tail`, `aws s3
-   cp`, `kubectl cp`, `docker cp`, `gh run view`, `git show` —
+   cp`, `kubectl cp`, `docker cp` —
    `coincidentalReaderSubcommands`, CLA-101's review fix; see
    `docs/THREATS.md` item 16), so a reader behind a wrapper this package
    doesn't enumerate (`find . -exec cat .env \;`, `docker exec c cat

@@ -500,12 +500,9 @@ func (ev *evaluator) shellWordRefusal(argv []string, depth int) error {
 // own `aws logs tail` (streams remote CloudWatch log events; "tail" is
 // AWS's own subcommand, not tail(1)) and `aws s3 cp` (AWS's own S3 copy
 // operation, not cp(1)); kubectl's and docker's own `cp` subcommand
-// (copies to/from a container, not a local read via cp(1)); gh's own
-// `run view` subcommand (shows a CI run's status — kept for parity with
-// CLA-101's own reported examples even though "view" is not itself a
-// `readers` entry today, so this entry currently never matches anything,
-// on purpose); and git's own `show` subcommand (shows a commit/object —
-// same parity note, "show" is not a `readers` entry either). This list
+// (copies to/from a container, not a local read via cp(1)). Only a
+// subcommand that is itself a `readers` name belongs here — the callers
+// consult this list only at a word that already matched `readers`. This list
 // is deliberately small and specific, not a general "does this word look
 // like a subcommand" heuristic: readerWordRefusal/hookWalk below match a
 // path here only by its EXACT, contiguous position starting right after
@@ -540,8 +537,6 @@ var coincidentalReaderSubcommands = map[string][][]string{
 	"aws":     {{"logs", "tail"}, {"s3", "cp"}},
 	"kubectl": {{"cp"}},
 	"docker":  {{"cp"}},
-	"gh":      {{"run", "view"}},
-	"git":     {{"show"}},
 }
 
 // isCoincidentalReaderSubcommand reports whether the reader-name word at

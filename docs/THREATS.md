@@ -560,8 +560,7 @@ value can still end up somewhere it shouldn't, today:
     `internal/policy/policy.go`): a reader name is caught at ANY word
     position again, exactly as before CLA-101, except for the exact,
     contiguous `{CLI, subcommand path}` pairs on that list (`aws logs
-    tail`, `aws s3 cp`, `kubectl cp`, `docker cp`, `gh run view`, `git
-    show`) — restoring detection for every unenumerated-wrapper shape
+    tail`, `aws s3 cp`, `kubectl cp`, `docker cp`) — restoring detection for every unenumerated-wrapper shape
     without reopening the aws/kubectl false positive. As a side effect,
     this also restores catching a multi-level CLI subcommand that
     genuinely DOES read a local file the way a real reader would (`git
