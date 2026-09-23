@@ -1617,3 +1617,116 @@ func TestEnvAllowlistIsHookOnly(t *testing.T) {
 		t.Fatalf("argv %v: printenv PATH should be allowed once EnvAllowlist is explicitly set: %v", argv, err)
 	}
 }
+
+// TestTraceAllowlistIsHookOnly is CLA-103's own stated scope, the same
+// shape as CLA-102's TestEnvAllowlistIsHookOnly above: `set -x` is opted
+// out of its refusal by Input.TraceAllowlist, which only EvaluateHook
+// ever sets. A direct Evaluate call — the one cpass run and the MCP
+// server's run_with_secrets/capture tools actually gate real execution
+// with — leaves TraceAllowlist false by default and so keeps refusing
+// `set -x` even though nothing in this particular argv is Bound: real
+// execution DOES have real Bound Secret values sitting in the process a
+// traced script would echo, so this package deliberately does not extend
+// the hook's allowlist there (see Input.TraceAllowlist's own doc
+// comment).
+func TestTraceAllowlistIsHookOnly(t *testing.T) {
+	argv := []string{"sh", "-c", "set -x; true"}
+	if err := Evaluate(Input{Argv: argv}); err == nil {
+		t.Fatalf("argv %v: set -x should still be refused when TraceAllowlist is left unset (the cpass run / MCP path)", argv)
+	}
+	if err := Evaluate(Input{Argv: argv, TraceAllowlist: true}); err != nil {
+		t.Fatalf("argv %v: set -x should be allowed once TraceAllowlist is explicitly set: %v", argv, err)
+	}
+	// Paired bypass: TraceAllowlist opts out the tracing rule specifically
+	// — it must not become a blanket "set is fine now" exemption. A bare
+	// `set` (no arguments, which prints every variable unconditionally)
+	// stays refused regardless.
+	bare := []string{"sh", "-c", "set"}
+	if err := Evaluate(Input{Argv: bare, TraceAllowlist: true}); err == nil {
+		t.Fatalf("argv %v: bare set should stay refused even with TraceAllowlist set", bare)
+	}
+	// Paired bypass: TraceAllowlist reached through a nested `bash -c
+	// 'set -x; ...'` invocation (not just a top-level `set -x`) is the
+	// same rule, checked the same way, at any nesting depth.
+	nested := []string{"sh", "-c", "bash -c 'set -x; true'"}
+	if err := Evaluate(Input{Argv: nested, TraceAllowlist: true}); err != nil {
+		t.Fatalf("argv %v: nested set -x should also be allowed once TraceAllowlist is set: %v", nested, err)
+	}
+	if err := Evaluate(Input{Argv: nested}); err == nil {
+		t.Fatalf("argv %v: nested set -x should still be refused without TraceAllowlist", nested)
+	}
+}
+
+// TestWriteThenRun is CLA-103's write-then-run pattern: a `cat > PATH
+// <<DELIM ... DELIM` (or the `<<DELIM > PATH` reordering, `>>` append, or
+// `tee [-a] PATH <<DELIM`) that writes a script, immediately followed by
+// a shell invocation of that identical literal path within the SAME
+// shell string, must resolve to the heredoc's own body rather than
+// refusing because the file genuinely isn't on disk yet — this whole
+// check runs before either the write or the run has actually executed.
+// This exercises Evaluate directly (the cpass run / MCP server path);
+// TestEvaluateHookWriteThenRun below is the same pattern at the hook
+// layer, plus the shapes only reachable there.
+func TestWriteThenRun(t *testing.T) {
+	cases := []struct {
+		name    string
+		command string
+		refused bool
+	}{
+		{"a benign script written then run is allowed",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\nbash t.sh", false},
+		{"the <<DELIM > PATH reordering resolves identically",
+			"cat <<'EOF' > t.sh\necho ok\nEOF\nbash t.sh", false},
+		{"tee writes the same way cat does",
+			"tee t.sh <<'EOF'\necho ok\nEOF\nbash t.sh", false},
+		// Paired bypass: a script written then run that itself reads a
+		// secret file is still refused — this is Command Policy
+		// correctly resolving and checking the real script content, not
+		// merely allowing every write-then-run shape on sight.
+		{"paired bypass: a dangerous script written then run is refused",
+			"cat > t.sh <<'EOF'\ncat .env\nEOF\nbash t.sh", true},
+		{"paired bypass: the tee variant is refused the same way",
+			"tee t.sh <<'EOF'\ncat .env\nEOF\nbash t.sh", true},
+		// >> append prepends whatever this same shell string already
+		// wrote to that identical path — not a real (nonexistent, at
+		// check time) on-disk read — so content from an earlier write is
+		// never silently dropped from what gets checked.
+		{"a dangerous write followed by a safe-looking append is still refused",
+			"cat > t.sh <<'EOF'\ncat .env\nEOF\ncat >> t.sh <<'EOF'\necho ok\nEOF\nbash t.sh", true},
+		{"a safe write followed by a dangerous append is refused",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\ncat >> t.sh <<'EOF'\ncat .env\nEOF\nbash t.sh", true},
+		{"tee -a appends the same way >> does",
+			"cat > t.sh <<'EOF'\ncat .env\nEOF\ntee -a t.sh <<'EOF'\necho ok\nEOF\nbash t.sh", true},
+		// A second, truncating write to the same path replaces the
+		// first entirely, exactly like a real `>` would.
+		{"a later truncating rewrite replaces a dangerous first write",
+			"cat > t.sh <<'EOF'\ncat .env\nEOF\ncat > t.sh <<'EOF'\necho ok\nEOF\nbash t.sh", false},
+		// A `cd` between the write and the run invalidates the mapping
+		// entirely — the safety valve for anything this package can't
+		// otherwise resolve precisely — falling back to the ordinary
+		// fail-closed refusal (the file genuinely isn't readable from
+		// disk at check time either).
+		{"an intervening cd between write and run fails closed",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\ncd /tmp\nbash t.sh", true},
+		// A `cd` before BOTH the write and the run, with nothing in
+		// between them, does not invalidate anything written afterward.
+		{"a cd before both write and run is unaffected",
+			"cd /tmp && cat > t2.sh <<'EOF'\necho ok\nEOF\nbash t2.sh", false},
+		// A path that differs from the one actually executed even
+		// trivially — a `./` prefix here — is a different literal word
+		// and so is never matched; this package deliberately does not
+		// attempt path normalization, and falls back to its ordinary
+		// fail-closed refusal instead of guessing the two are the same
+		// file.
+		{"a ./ prefix mismatch fails closed rather than guessing",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\nbash ./t.sh", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Evaluate(Input{Argv: []string{"sh", "-c", c.command}})
+			if (err != nil) != c.refused {
+				t.Fatalf("command %q: refused=%v want %v (err=%v)", c.command, err != nil, c.refused, err)
+			}
+		})
+	}
+}

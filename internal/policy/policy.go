@@ -16,10 +16,11 @@
 // everywhere with the small number of disclosed exceptions
 // docs/THREATS.md's own list states precisely (the hook's own `cpass add`
 // inline-value check, the argv[0] exclusion from the raw-literal scan,
-// and the hook-only printenv allowlist for well-known non-secret
-// variable names, CLA-102): consult that list rather than assuming this
-// comment enumerates them, since a fix can close one without this file
-// ever changing.
+// the hook-only printenv allowlist for well-known non-secret variable
+// names (CLA-102), and the hook-only `set -x`/shell-tracing allowlist
+// (CLA-103)): consult that list rather than assuming this comment
+// enumerates them, since a fix can close one without this file ever
+// changing.
 package policy
 
 import (
@@ -68,6 +69,25 @@ type Input struct {
 	// allowlist-free printenv refusal there rather than assuming a name
 	// is safe just because it looks like an ordinary one.
 	EnvAllowlist bool
+	// TraceAllowlist opts `set -x`/`set -o xtrace`/a combined short-flag
+	// group containing `x` (`-euxo pipefail`, ...) out of the "set -x
+	// echoes expanded variables" refusal below — set only by
+	// EvaluateHook (CLA-103), the same hook-only shape EnvAllowlist
+	// above already is. At the hook layer nothing is ever Bound yet (see
+	// EnvAllowlist's own doc comment: the hook judges a raw Bash call
+	// before cpass has parsed anything, let alone resolved a Handle), so
+	// tracing a debugging script there can only ever echo the Agent's
+	// own already-visible commands and its own process environment,
+	// never a Vault Secret — refusing it is needless friction for the
+	// extremely common `set -euxo pipefail` script preamble. cpass run
+	// and the MCP server's own Evaluate calls never set this: real
+	// execution DOES have real Bound Secret values sitting in the
+	// process a traced script's own `+ echo $STRIPE_LIVE`-style line
+	// would echo, so this package keeps its stricter, allowlist-free
+	// refusal there. A bare `set` with no arguments is unaffected either
+	// way — it prints every variable unconditionally, which has nothing
+	// to do with tracing specifically and stays refused everywhere.
+	TraceAllowlist bool
 }
 
 // Refusal explains why a command was refused. It is an error so the run
@@ -112,13 +132,15 @@ func Evaluate(in Input) error {
 		cwd, _ = os.Getwd()
 	}
 	ev := &evaluator{
-		bound:        map[string]vault.BindingKind{},
-		tainted:      map[string]bool{},
-		literals:     map[string]string{},
-		fds:          map[string]string{},
-		protected:    in.ProtectedDirs,
-		cwd:          cwd,
-		envAllowlist: in.EnvAllowlist,
+		bound:          map[string]vault.BindingKind{},
+		tainted:        map[string]bool{},
+		literals:       map[string]string{},
+		fds:            map[string]string{},
+		written:        map[string]string{},
+		protected:      in.ProtectedDirs,
+		cwd:            cwd,
+		envAllowlist:   in.EnvAllowlist,
+		traceAllowlist: in.TraceAllowlist,
 	}
 	for _, v := range in.Bound {
 		ev.bound[v.Name] = v.Kind
@@ -154,10 +176,34 @@ type evaluator struct {
 	// same "resolve only what's statically knowable" default
 	// ev.literals/ev.cwd already apply to a variable/cd target.
 	fds map[string]string
+	// written maps a literal file path (resolved through ev.resolveLiteral,
+	// the same as every other file-argument path in this package) to the
+	// content CLA-103's write-then-run tracking recorded for it from an
+	// earlier `cat > PATH <<DELIM`/`cat <<DELIM > PATH`/`cat >> PATH
+	// <<DELIM`/`tee [-a] PATH <<DELIM` in THIS SAME shell string
+	// (heredocToFileWrite, populated by ev.simple) — so a LATER `<shell>
+	// PATH` invocation of the identical literal path can resolve to that
+	// body (ev.shellScriptContent) instead of failing the on-disk read
+	// that hasn't happened yet, since this whole evaluation runs BEFORE
+	// either write or run has actually executed. Cleared entirely the
+	// instant a `cd` is seen anywhere in this shell string (see the "cd"
+	// case in simple) — deliberately blanket/conservative rather than
+	// reasoning precisely about which entries a particular cd target
+	// would or wouldn't invalidate, matching this package's existing
+	// "refuse/resolve rather than guess" default: a path that differs
+	// from the one actually executed even trivially (a `./` prefix, a
+	// different quoting) is a different map key and so is never matched,
+	// falling through to this package's ordinary fail-closed refusal
+	// unchanged.
+	written map[string]string
 	// envAllowlist mirrors Input.EnvAllowlist (see its own doc comment):
 	// true only for the evaluator EvaluateHook builds, never for a real
 	// cpass run / MCP server invocation.
 	envAllowlist bool
+	// traceAllowlist mirrors Input.TraceAllowlist (see its own doc
+	// comment): true only for the evaluator EvaluateHook builds, never
+	// for a real cpass run / MCP server invocation.
+	traceAllowlist bool
 }
 
 func (ev *evaluator) underProtected(w string) bool {
@@ -431,15 +477,15 @@ func (ev *evaluator) argv(argv []string, depth int) error {
 	case wrappers[prog]:
 		return ev.argv(argv[1:], depth+1)
 	case shells[prog]:
-		content, refuse := shellCommandString(argv[1:])
-		if refuse {
+		content, ok, refusal := ev.shellScriptContent(argv[1:])
+		if refusal != nil {
+			return refusal
+		}
+		if !ok {
 			return &Refusal{
 				Rule:   prog + "'s invocation shape can't be checked statically",
 				Advice: `use -c "..." or a readable script file under 1 MiB (cpass reads and checks it) instead`,
 			}
-		}
-		if hasTraceFlag(argv[1:]) {
-			return &Refusal{Rule: "shell tracing (-x) echoes expanded variables", Advice: "drop -x"}
 		}
 		return ev.shell(content, depth+1)
 	}
@@ -476,15 +522,15 @@ func (ev *evaluator) shellWordRefusal(argv []string, depth int) error {
 		if !shells[prog] {
 			continue
 		}
-		content, refuse := shellCommandString(argv[i+1:])
-		if refuse {
+		content, ok, refusal := ev.shellScriptContent(argv[i+1:])
+		if refusal != nil {
+			return refusal
+		}
+		if !ok {
 			return &Refusal{
 				Rule:   prog + "'s invocation shape can't be checked statically",
 				Advice: `use -c "..." or a readable script file under 1 MiB (cpass reads and checks it) instead`,
 			}
-		}
-		if hasTraceFlag(argv[i+1:]) {
-			return &Refusal{Rule: "shell tracing (-x) echoes expanded variables", Advice: "drop -x"}
 		}
 		if err := ev.shell(content, depth+1); err != nil {
 			return err
@@ -682,6 +728,15 @@ const maxStaticScriptSize = 1 << 20 // 1 MiB
 // resolve is refuse, not allow (see docs/THREATS.md's "what is and is not
 // statically inspected").
 //
+// scriptPath, whenever this resolved to a script-by-path argument at all
+// (whether or not its on-disk content could actually be read), is that
+// argument's own literal text — "" for the -c STRING form, which never
+// names a path. A caller with CLA-103's write-then-run tracking
+// (evaluator.shellScriptContent/hookResolveScript) uses this to resolve a
+// same-shell-string heredoc-to-file write before falling back to refuse
+// on the on-disk read failure alone; a caller with no such tracking
+// simply ignores it, exactly as before this return value existed.
+//
 // Recognised options, matching real shells' own getopt-style parsing (see
 // shell.c's parse_shell_options for the real thing this mirrors): -e -u -x
 // -l -i -n -v -p -s -a -b -f -h -k -m -t (any combination, e.g. -euo
@@ -699,7 +754,7 @@ const maxStaticScriptSize = 1 << 20 // 1 MiB
 // word immediately after 'c' the instant it saw the letter, so `-co
 // pipefail 'cat .env'` read "pipefail" as the command string and the real
 // command never got evaluated at all).
-func shellCommandString(args []string) (content string, refuse bool) {
+func shellCommandString(args []string) (content string, scriptPath string, refuse bool) {
 	i := 0
 	cSeen := false
 	for i < len(args) {
@@ -716,11 +771,11 @@ func shellCommandString(args []string) (content string, refuse bool) {
 			i++
 		case strings.HasPrefix(a, "--"):
 			// An unrecognised long option: fail closed rather than guess.
-			return "", true
+			return "", "", true
 		default:
 			letters := strings.TrimPrefix(strings.TrimPrefix(a, "-"), "+")
 			if letters == "" {
-				return "", true
+				return "", "", true
 			}
 			i++
 			// Walk this token's letters left to right: o/O each claim the
@@ -739,28 +794,29 @@ func shellCommandString(args []string) (content string, refuse bool) {
 					cSeen = true
 				case 'o', 'O':
 					if i >= len(args) {
-						return "", true
+						return "", "", true
 					}
 					i++
 				default:
 					// An unrecognised letter: fail closed rather than guess.
-					return "", true
+					return "", "", true
 				}
 			}
 		}
 	}
 	if cSeen {
 		if i >= len(args) {
-			return "", true
+			return "", "", true
 		}
-		return args[i], false
+		return args[i], "", false
 	}
 	if i >= len(args) {
 		// No -c, no script path: nothing statically visible to check (an
 		// interactive shell, or one truly reading piped stdin).
-		return "", true
+		return "", "", true
 	}
-	return scriptFileContent(args[i])
+	content, refuse = scriptFileContent(args[i])
+	return content, args[i], refuse
 }
 
 // scriptFileContent reads path as the shell script a bare `<shell>
@@ -823,6 +879,115 @@ func hasTraceFlag(args []string) bool {
 		}
 	}
 	return false
+}
+
+// heredocToFileWrite recognizes the write half of a write-then-run pattern
+// within one simple command (CLA-103) — `cat > PATH <<DELIM`, `cat <<DELIM
+// > PATH` (splitCommands always appends the heredoc word last regardless
+// of which came first on the line, so both spellings tokenize identically
+// — see word.outRedirTarget's own doc comment), `cat >> PATH <<DELIM`
+// (append), or `tee [-a|--append] PATH <<DELIM` — returning the literal
+// path written, the heredoc body that becomes its new content, and
+// whether this is an append (so the caller prepends PATH's existing
+// on-disk content, matching what a real `>>`/`tee -a` actually produces)
+// rather than a truncating write. ok is false for anything else at all —
+// no heredoc attached, more than one candidate target word, a real read
+// argument alongside the redirect (`cat existing.txt > p <<D`, genuinely
+// a different shape), or any other program or flag this narrow, exact
+// list doesn't name — and the caller keeps its existing fail-closed
+// refusal unchanged in that case, exactly as before this function
+// existed: this is deliberately a small, exact denylist of known write
+// shapes, not a guess at what "looks like" one.
+func heredocToFileWrite(words []word) (path, body string, appendMode bool, ok bool) {
+	if len(words) == 0 {
+		return "", "", false, false
+	}
+	hd, hasHD := heredocArg(words)
+	if !hasHD {
+		return "", "", false, false
+	}
+	switch base(words[0].raw) {
+	case "cat":
+		var target *word
+		for i := 1; i < len(words); i++ {
+			w := &words[i]
+			if w.hasHeredoc {
+				continue
+			}
+			if !w.outRedirTarget || target != nil {
+				// Anything that isn't the redirect's own target — a real
+				// read argument, a flag, a second target — is not this
+				// exact shape.
+				return "", "", false, false
+			}
+			target = w
+		}
+		if target == nil {
+			return "", "", false, false
+		}
+		return target.raw, hd.body, target.outRedirAppend, true
+	case "tee":
+		var target *word
+		for i := 1; i < len(words); i++ {
+			w := &words[i]
+			if w.hasHeredoc {
+				continue
+			}
+			if w.raw == "-a" || w.raw == "--append" {
+				appendMode = true
+				continue
+			}
+			if target != nil {
+				return "", "", false, false
+			}
+			target = w
+		}
+		if target == nil {
+			return "", "", false, false
+		}
+		return target.raw, hd.body, appendMode, true
+	}
+	return "", "", false, false
+}
+
+// shellScriptContent resolves what a shell invocation whose already-
+// flattened, resolveLiteral'd flags/args are raw statically executes:
+// shellCommandString's own -c STRING / on-disk script-by-path result when
+// that succeeds, or — when a script-by-path argument was named but isn't
+// (yet) readable from disk — the body CLA-103's write-then-run tracking
+// (ev.written) recorded for that identical literal path earlier in this
+// same shell string. ok is false for every other unresolvable shape (an
+// interactive/piped-stdin invocation, an unrecognised flag, or a
+// script-by-path argument neither on disk nor in ev.written), so the
+// caller falls back to its own heredoc-body/final-refusal handling
+// exactly as it did before this existed. refusal, when non-nil, is a
+// trace-flag refusal (raw itself carries -x/xtrace on the shell
+// invocation, e.g. `bash -x script.sh`) — checked here, once, rather than
+// once per caller, since it applies identically regardless of whether the
+// resolved content came from disk or from ev.written.
+//
+// The four ev.simple/ev.argv/shellWordRefusal/shellWordRefusalWords call
+// sites that used to each repeat "shellCommandString, then hasTraceFlag,
+// then a heredoc fallback" now all share this one resolution step instead
+// of duplicating the written-map fallback four times over.
+func (ev *evaluator) shellScriptContent(raw []string) (content string, ok bool, refusal *Refusal) {
+	content, scriptPath, refuse := shellCommandString(raw)
+	if !refuse {
+		if hasTraceFlag(raw) {
+			return "", false, &Refusal{Rule: "shell tracing (-x) echoes expanded variables", Advice: "drop -x"}
+		}
+		return content, true, nil
+	}
+	if scriptPath == "" {
+		return "", false, nil
+	}
+	if wc, found := ev.written[scriptPath]; found {
+		if hasTraceFlag(raw) {
+			return "", false, &Refusal{Rule: "shell tracing (-x) echoes expanded variables", Advice: "drop -x"}
+		}
+		return wc, true, nil
+	}
+	return "", false, nil
 }
 
 // shell judges a shell command string by splitting it into simple commands
@@ -919,6 +1084,63 @@ func (ev *evaluator) simple(words []word, depth int) error {
 	}
 	rest := words[i:]
 	args := rest[1:]
+	// CLA-103: `cd` anywhere in this simple command invalidates every
+	// pending write-then-run candidate (ev.written) — the safety valve
+	// stream guidance calls "no intervening cd", kept blanket and
+	// conservative (ANY cd, not only one whose own target this evaluator
+	// can resolve to a literal) rather than reasoning precisely about
+	// which entries a particular cd would or wouldn't invalidate. This
+	// runs before the dynamic-command-name resolution just below so a
+	// `cd` reached only through a resolved literal command name still
+	// invalidates — though in practice `cd` itself is never spelled that
+	// indirectly.
+	if base(rest[0].raw) == "cd" {
+		ev.written = map[string]string{}
+	}
+	// CLA-103: record a heredoc-to-file write (`cat > p <<D`, `cat <<D >
+	// p`, `cat >> p <<D`, `tee [-a] p <<D`) in THIS same shell string, so
+	// a LATER script-by-path shell invocation of the identical literal
+	// path — before this hook/run has actually created the file on disk
+	// — can resolve to its body (ev.shellScriptContent) instead of
+	// failing the on-disk read that hasn't happened yet.
+	// heredocToFileWrite's own doc comment has the full, deliberately
+	// narrow shape this recognizes and the reasons it declines anything
+	// else.
+	if path, body, appendMode, ok := heredocToFileWrite(rest); ok {
+		resolved := ev.resolveLiteral(path)
+		if appendMode {
+			// A real `>>`/`tee -a` appends to whatever is already
+			// there. An EARLIER write to this identical path already
+			// tracked in ev.written (a `cat > FILE <<D` truncate,
+			// or a prior append, seen earlier in this same shell
+			// string) is checked FIRST and takes priority over a
+			// real on-disk read: the whole point of ev.written is
+			// that this hook/run's own check happens BEFORE either
+			// write has actually executed, so the real file on disk
+			// right now reflects neither — reading it instead of the
+			// tracked state would silently drop an earlier write's
+			// own content from what gets checked here (a `cat >
+			// FILE <<D` of dangerous content, followed by `cat >>
+			// FILE <<D` of a second, safe-looking body, must still
+			// carry the first write's content forward, not launder
+			// it away). Only when NO earlier write in this shell
+			// string touched this path at all does this fall back to
+			// a best-effort real on-disk read (the genuine "append to
+			// a file that already existed before this command ran"
+			// case); an unreadable/nonexistent path there is treated
+			// as nothing to prepend, not a reason to fail this whole
+			// command closed over an unrelated I/O problem — the
+			// SUBSEQUENT script-by-path read, if this path is later
+			// actually run, still applies every rule below to
+			// whatever content this recorded.
+			if existing, ok := ev.written[resolved]; ok {
+				body = existing + body
+			} else if diskExisting, err := os.ReadFile(resolved); err == nil {
+				body = string(diskExisting) + body
+			}
+		}
+		ev.written[resolved] = body
+	}
 	// command-policy:dynamic-command-name-not-resolved — the cheapest,
 	// highest-value case: a whole variable reference ($x/${x}) naming the
 	// command itself, where x was earlier assigned a plain string literal
@@ -976,9 +1198,19 @@ func (ev *evaluator) simple(words []word, depth int) error {
 		if len(args) == 0 {
 			return &Refusal{Rule: "set with no arguments prints all variables", Advice: "use set -e or similar with explicit flags"}
 		}
-		for _, a := range args {
-			if (strings.HasPrefix(a.raw, "-") && !strings.HasPrefix(a.raw, "--") && strings.Contains(a.raw, "x")) || a.raw == "xtrace" {
-				return &Refusal{Rule: "set -x echoes expanded variables", Advice: "drop -x"}
+		// CLA-103: at the hook layer only (ev.traceAllowlist), `set -x`/
+		// `set -o xtrace`/a combined short-flag group containing `x` is not
+		// a reveal worth blocking everyday debugging over — see
+		// Input.TraceAllowlist's own doc comment for why this is scoped to
+		// the hook and no further (cpass run / the MCP server keep this
+		// refusal unconditionally, since real execution DOES have real
+		// Bound Secret values sitting in the process a traced script would
+		// echo).
+		if !ev.traceAllowlist {
+			for _, a := range args {
+				if (strings.HasPrefix(a.raw, "-") && !strings.HasPrefix(a.raw, "--") && strings.Contains(a.raw, "x")) || a.raw == "xtrace" {
+					return &Refusal{Rule: "set -x echoes expanded variables", Advice: "drop -x"}
+				}
 			}
 		}
 		return nil
@@ -1138,11 +1370,11 @@ func (ev *evaluator) simple(words []word, depth int) error {
 				raw = append(raw, ev.resolveLiteral(a.raw))
 			}
 		}
-		content, refuse := shellCommandString(raw)
-		if !refuse {
-			if hasTraceFlag(raw) {
-				return &Refusal{Rule: "shell tracing (-x) echoes expanded variables", Advice: "drop -x"}
-			}
+		content, ok, refusal := ev.shellScriptContent(raw)
+		if refusal != nil {
+			return refusal
+		}
+		if ok {
 			return ev.shell(content, depth+1)
 		}
 		if hd, ok := heredocArg(args); ok {
@@ -1209,11 +1441,11 @@ func (ev *evaluator) shellWordRefusalWords(words []word, depth int) error {
 				raw = append(raw, ev.resolveLiteral(w.raw))
 			}
 		}
-		content, refuse := shellCommandString(raw)
-		if !refuse {
-			if hasTraceFlag(raw) {
-				return &Refusal{Rule: "shell tracing (-x) echoes expanded variables", Advice: "drop -x"}
-			}
+		content, ok, refusal := ev.shellScriptContent(raw)
+		if refusal != nil {
+			return refusal
+		}
+		if ok {
 			if err := ev.shell(content, depth+1); err != nil {
 				return err
 			}

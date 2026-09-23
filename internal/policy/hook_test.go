@@ -184,6 +184,119 @@ func TestEvaluateHook(t *testing.T) {
 	}
 }
 
+// TestEvaluateHookSetAsDataNotShellBuiltin is CLA-103's own reported
+// trigger: the owner's transcripts showed the hook reading Python's
+// `set(...)` (and other languages'/tools' unrelated uses of the bare word
+// "set") as the shell `set` builtin and blocking real work. Every case
+// here already passed before this ticket's own code changes — the
+// tokenizer correctly treats an interpreter's own `-c`/`-e` string, and a
+// quoted heredoc fed to a non-shell program, as opaque data rather than
+// re-parsing it as shell commands (`python3`/`node`/`ruby` are not
+// `shells` map members at all — see docs/THREATS.md item 16's own
+// interpreter-string entry) — but the owner's report is exactly the
+// regression this locks in permanently, not merely the two shapes this
+// ticket's own code changes address (see
+// TestEvaluateHookXtraceAllowlist/TestEvaluateHookWriteThenRun below for
+// those).
+func TestEvaluateHookSetAsDataNotShellBuiltin(t *testing.T) {
+	cases := []struct {
+		name    string
+		command string
+	}{
+		{"python -c printing a set literal", `python3 -c "print(set([1, 2]))"`},
+		{"python -c assigning a set literal", "python3 -c \"x = set()\nprint(x)\""},
+		{"python -c naming set as a bare identifier", "python3 -c 'import sys\nset\nprint(1)'"},
+		{"python heredoc, quoted delimiter, building a set", "python3 - <<'EOF'\nitems = set()\nfor x in set([1, 2]):\n    items.add(x)\nEOF"},
+		{"python heredoc, unquoted delimiter, no secret involved", "python3 - <<EOF\nitems = set()\nprint(sorted(set('abc')))\nEOF"},
+		{"a bare python heredoc calling set()", "python3 <<'EOF'\nset()\nEOF"},
+		{"python using collections.defaultdict(set)", "python3 - <<'EOF'\nimport collections\nd = collections.defaultdict(set)\nEOF"},
+		{"uv run python heredoc", "uv run python - <<'EOF'\ns = set()\nEOF"},
+		{"node -e constructing a Set", `node -e "console.log(new Set([1]))"`},
+		{"ruby -e requiring the set library", `ruby -e 'require "set"; p Set.new'`},
+		{"awk's own associative-array idiom named seen, not set", `awk '{seen[$1]=1} END {for (k in seen) print k}' data.txt`},
+		{"tmux's own set subcommand", "tmux set -g mouse on"},
+		{"redis-cli's own SET command", "redis-cli set foo bar"},
+		{"kubectl set image, an ordinary kubectl subcommand", "kubectl set image deploy/web web=nginx:1.27"},
+		{"npm config set, an ordinary npm subcommand", "npm config set registry https://registry.npmjs.org"},
+		{"a git config key that happens to be named set.foo", "git config --global set.foo bar"},
+		{"a make target named set-version", "make set-version V=1"},
+		{"psql's own SQL SET keyword inside a -c string", `psql -c "UPDATE users SET active = true"`},
+		{"sqlite3's own SQL SET keyword", `sqlite3 app.db "update t set a = 1"`},
+		{"gnuplot's own set command inside its own heredoc script", "gnuplot <<'EOF'\nset terminal png\nset output 'x.png'\nplot sin(x)\nEOF"},
+		{"echo printing the literal word set", "echo set"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if err := EvaluateHook(c.command); err != nil {
+				t.Fatalf("command %q should be allowed (set/SET here is data, not the shell builtin): %v", c.command, err)
+			}
+		})
+	}
+}
+
+// TestEvaluateHookXtraceAllowlist is CLA-103's hook-only allowance for
+// shell tracing: `set -x`, `set -o xtrace`, and a combined short-flag
+// group containing `x` (`-euxo pipefail`) are not a reveal worth blocking
+// everyday debugging over at the hook layer, where nothing is ever Bound
+// yet — see Input.TraceAllowlist's own doc comment (policy.go). A bare
+// `set` with no arguments is a different rule (it prints every variable
+// unconditionally) and stays refused regardless.
+func TestEvaluateHookXtraceAllowlist(t *testing.T) {
+	cases := []struct {
+		name    string
+		command string
+		refused bool
+	}{
+		{"set -x alone is allowed at the hook layer", "set -x\nls -la", false},
+		{"a combined short-flag group containing x is allowed", "set -euxo pipefail\nls", false},
+		{"set -x reached through a nested bash -c is allowed", "bash -c 'set -x; ls'", false},
+		{"set -o xtrace is allowed the same way", "set -o xtrace\nls", false},
+		{"bare set with no arguments still refuses", "set", true},
+		{"set piped to grep still refuses (the bare-set rule, not tracing)", "set | grep KEY", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := EvaluateHook(c.command)
+			if (err != nil) != c.refused {
+				t.Fatalf("command %q: refused=%v want %v (err=%v)", c.command, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
+// TestEvaluateHookWriteThenRun is CLA-103's write-then-run pattern at the
+// hook layer: writing a script via a heredoc-to-file redirect and running
+// it in the same Bash tool call — `cat > t.sh <<'EOF' ... EOF; bash
+// t.sh` — must not be refused just because the file genuinely isn't on
+// disk yet (this hook runs before either the write or the run has
+// actually executed). See TestWriteThenRun (policy_test.go) for the same
+// pattern exercised directly through Evaluate, including the append/cd/
+// path-mismatch edges this table doesn't repeat.
+func TestEvaluateHookWriteThenRun(t *testing.T) {
+	cases := []struct {
+		name    string
+		command string
+		refused bool
+	}{
+		{"a benign script written then run in one call is allowed",
+			"cat > /tmp/t.sh <<'EOF'\n#!/usr/bin/env bash\nset -e\necho ok\nEOF\nbash /tmp/t.sh", false},
+		{"a cd before both write and run is unaffected",
+			"cd /tmp && cat > t2.sh <<'EOF'\necho ok\nEOF\nbash t2.sh", false},
+		// Paired bypass: a script written then run that itself reads a
+		// secret file is still refused.
+		{"paired bypass: a dangerous script written then run is refused",
+			"cat > /tmp/t3.sh <<'EOF'\ncat .env\nEOF\nbash /tmp/t3.sh", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := EvaluateHook(c.command)
+			if (err != nil) != c.refused {
+				t.Fatalf("command %q: refused=%v want %v (err=%v)", c.command, err != nil, c.refused, err)
+			}
+		})
+	}
+}
+
 func TestEvaluateHookEmptyCommand(t *testing.T) {
 	if err := EvaluateHook(""); err != nil {
 		t.Fatalf("empty command should be allowed: %v", err)

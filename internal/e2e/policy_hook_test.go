@@ -290,3 +290,99 @@ func TestPolicyHookSecretFileGlobExpansion(t *testing.T) {
 		})
 	}
 }
+
+// TestPolicyHookSetAsDataNotShellBuiltin is CLA-103's own reported
+// trigger, driven against a real built `cpass policy --hook` invocation:
+// the owner's transcripts showed the hook reading Python's `set(...)`
+// (and other languages'/tools' unrelated uses of the bare word "set") as
+// the shell `set` builtin and blocking real work.
+func TestPolicyHookSetAsDataNotShellBuiltin(t *testing.T) {
+	ve := newVault(t)
+	cases := []string{
+		`python3 -c "print(set([1, 2]))"`,
+		"python3 - <<'EOF'\nitems = set()\nfor x in set([1, 2]):\n    items.add(x)\nEOF",
+		`node -e "console.log(new Set([1]))"`,
+		"kubectl set image deploy/web web=nginx:1.27",
+		`psql -c "UPDATE users SET active = true"`,
+		"echo set",
+	}
+	for _, cmd := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			r := ve.run(preToolUseJSON(cmd), "policy", "--hook")
+			if r.code != 0 {
+				t.Fatalf("command %q should be allowed (set/SET here is data, not the shell builtin): %s", cmd, r)
+			}
+		})
+	}
+}
+
+// TestPolicyHookXtraceAllowlist is CLA-103's hook-only allowance for
+// shell tracing, driven against a real built `cpass policy --hook`
+// invocation: `set -x` and a combined short-flag group containing `x`
+// are not a reveal worth blocking everyday debugging over at the hook
+// layer, where nothing is ever Bound yet. A bare `set` (a different
+// rule — it prints every variable unconditionally) still refuses.
+func TestPolicyHookXtraceAllowlist(t *testing.T) {
+	ve := newVault(t)
+	cases := []struct {
+		name    string
+		command string
+		blocked bool
+	}{
+		{"set -x alone is allowed", "set -x\nls -la", false},
+		{"a combined short-flag group containing x is allowed", "set -euxo pipefail\nls", false},
+		{"set -x reached through a nested bash -c is allowed", "bash -c 'set -x; ls'", false},
+		{"bare set with no arguments still refuses", "set", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := ve.run(preToolUseJSON(c.command), "policy", "--hook")
+			if c.blocked {
+				if r.code != 2 || !strings.HasPrefix(r.stderr, "cpass: refused: ") {
+					t.Fatalf("want a refused message on stderr: %s", r)
+				}
+			} else if r.code != 0 {
+				t.Fatalf("want exit 0, got %s", r)
+			}
+		})
+	}
+}
+
+// TestPolicyHookWriteThenRun is CLA-103's write-then-run pattern, driven
+// against a real built `cpass policy --hook` invocation: writing a
+// script via a heredoc-to-file redirect and running it in the same Bash
+// tool call must not be refused just because the file genuinely isn't on
+// disk yet — this hook runs before either the write or the run has
+// actually executed. Resolved through a real temp directory (a same-
+// command `cd`, matching TestPolicyHookSecretFileGlobExpansion above) so
+// the write and the run share an unambiguous literal path.
+func TestPolicyHookWriteThenRun(t *testing.T) {
+	ve := newVault(t)
+	dir := t.TempDir()
+	cases := []struct {
+		name    string
+		command string
+		blocked bool
+	}{
+		{"a benign script written then run in one call is allowed",
+			"cd " + dir + " && cat > t.sh <<'EOF'\n#!/usr/bin/env bash\nset -e\necho ok\nEOF\nbash t.sh", false},
+		// Paired bypass: a script written then run that itself reads a
+		// secret file is still refused — this is Command Policy
+		// correctly resolving and checking the real script content, not
+		// merely allowing every write-then-run shape on sight.
+		{"paired bypass: a dangerous script written then run is refused",
+			"cd " + dir + " && cat > t3.sh <<'EOF'\ncat .env\nEOF\nbash t3.sh", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := ve.run(preToolUseJSON(c.command), "policy", "--hook")
+			if c.blocked {
+				if r.code != 2 || !strings.Contains(r.stderr, "Secret-bearing file") {
+					t.Fatalf("want a refused message mentioning the secret file: %s", r)
+				}
+			} else if r.code != 0 {
+				t.Fatalf("want exit 0, got %s", r)
+			}
+		})
+	}
+}

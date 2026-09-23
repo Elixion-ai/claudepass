@@ -135,7 +135,7 @@ func FuzzShellCommandString(f *testing.F) {
 		f.Add(s[0], s[1])
 	}
 	f.Fuzz(func(t *testing.T, a, b string) {
-		_, _ = shellCommandString([]string{a, b})
-		_, _ = shellCommandString([]string{a, b, "-c", "cat .env"})
+		_, _, _ = shellCommandString([]string{a, b})
+		_, _, _ = shellCommandString([]string{a, b, "-c", "cat .env"})
 	})
 }

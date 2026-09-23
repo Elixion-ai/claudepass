@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -44,7 +45,7 @@ func EvaluateHook(command string) error {
 	if strings.TrimSpace(command) == "" {
 		return nil
 	}
-	if r := hookWalk(command, 0, map[string]string{}); r != nil {
+	if r := hookWalk(command, 0, map[string]string{}, map[string]string{}); r != nil {
 		return r
 	}
 	// Same raw-literal rule Evaluate applies (see the package doc
@@ -73,8 +74,10 @@ func EvaluateHook(command string) error {
 	// EnvAllowlist: true opts the well-known non-secret variable names in
 	// hookEnvAllowlist below out of the printenv reveal refusal — see
 	// Input.EnvAllowlist's own doc comment (CLA-102) for why this is set
-	// here and nowhere else Evaluate is called from.
-	in := Input{Argv: []string{"sh", "-c", command}, ProtectedDirs: runProtectedDirs(), EnvAllowlist: true}
+	// here and nowhere else Evaluate is called from. TraceAllowlist: true
+	// is the same shape for `set -x`/shell tracing (CLA-103) — see
+	// Input.TraceAllowlist's own doc comment.
+	in := Input{Argv: []string{"sh", "-c", command}, ProtectedDirs: runProtectedDirs(), EnvAllowlist: true, TraceAllowlist: true}
 	if err := Evaluate(in); err != nil {
 		return err
 	}
@@ -149,7 +152,7 @@ func runProtectedDirs() []string {
 
 // hookWalk recurses through command the same way splitCommands' consumers
 // elsewhere in this package do — into command substitutions and nested
-// `shell -c STRING`/script-by-path/heredoc-body invocations — checking
+// `shell -c STRING`/script-path/heredoc-body invocations — checking
 // every simple command for a Secret-file read or a `cpass add` given an
 // inline value. It does not touch the Bound/tainted evaluator (no Bound
 // vars exist yet at this point), but it does track plain-string variable
@@ -160,8 +163,13 @@ func runProtectedDirs() []string {
 // path when it's a whole-word reference to one
 // (command-policy:shell-script-path-literal-variable): `G=deploy.sh;
 // bash $G` should read exactly like `bash deploy.sh` already does, not
-// refuse "$G" as an unresolvable, nonexistent path.
-func hookWalk(command string, depth int, literals map[string]string) *Refusal {
+// refuse "$G" as an unresolvable, nonexistent path. written mirrors
+// evaluator.written (policy.go) for CLA-103's write-then-run tracking —
+// a `cat > PATH <<DELIM ... DELIM` seen earlier in this same
+// EvaluateHook pass, so a LATER `bash PATH` in the same command can
+// resolve to that body instead of failing the on-disk read that hasn't
+// happened yet (see hookResolveScript below).
+func hookWalk(command string, depth int, literals, written map[string]string) *Refusal {
 	if depth > maxDepth {
 		return maxDepthRefusal
 	}
@@ -185,9 +193,46 @@ func hookWalk(command string, depth int, literals map[string]string) *Refusal {
 			}
 			j++
 		}
+		// CLA-103: `cd` anywhere in this simple command invalidates every
+		// pending write-then-run candidate — see evaluator.written's own
+		// doc comment (policy.go) for why this is blanket/conservative
+		// rather than precise about which entries a particular cd would
+		// or wouldn't invalidate.
+		if j < len(words) && base(words[j].raw) == "cd" {
+			for k := range written {
+				delete(written, k)
+			}
+		}
+		// CLA-103: record a heredoc-to-file write (`cat > p <<D`, `cat
+		// <<D > p`, `cat >> p <<D`, `tee [-a] p <<D`) in THIS same
+		// command, so a LATER script-by-path shell invocation of the
+		// identical literal path can resolve to its body instead of
+		// failing the on-disk read that hasn't happened yet
+		// (hookResolveScript below; heredocToFileWrite's own doc comment,
+		// policy.go, has the full shape).
+		if path, body, appendMode, ok := heredocToFileWrite(words[j:]); ok {
+			resolved := resolveLiteralIn(path, literals)
+			if appendMode {
+				// An earlier write to this identical path tracked in
+				// written already (from earlier in this same command)
+				// takes priority over a real on-disk read — see
+				// evaluator's identical case (policy.go) for why:
+				// this whole check runs before either write has
+				// actually executed, so the real file on disk right
+				// now reflects neither, and reading it instead of the
+				// tracked state would silently drop an earlier
+				// write's own content from what gets checked here.
+				if existing, ok := written[resolved]; ok {
+					body = existing + body
+				} else if diskExisting, err := os.ReadFile(resolved); err == nil {
+					body = string(diskExisting) + body
+				}
+			}
+			written[resolved] = body
+		}
 		for _, w := range words {
 			for _, sub := range w.subs {
-				if r := hookWalk(sub, depth+1, literals); r != nil {
+				if r := hookWalk(sub, depth+1, literals, written); r != nil {
 					return r
 				}
 			}
@@ -301,15 +346,15 @@ func hookWalk(command string, depth int, literals map[string]string) *Refusal {
 						raw = append(raw, resolveLiteralIn(ww.raw, literals))
 					}
 				}
-				content, refuse := shellCommandString(raw)
-				if !refuse {
-					if r := hookWalk(content, depth+1, literals); r != nil {
+				content, ok := hookResolveScript(raw, written)
+				if ok {
+					if r := hookWalk(content, depth+1, literals, written); r != nil {
 						return r
 					}
 					continue
 				}
 				if hd, ok := heredocArg(rest); ok {
-					if r := hookWalk(hd.body, depth+1, literals); r != nil {
+					if r := hookWalk(hd.body, depth+1, literals, written); r != nil {
 						return r
 					}
 					continue
@@ -322,6 +367,29 @@ func hookWalk(command string, depth int, literals map[string]string) *Refusal {
 		}
 	}
 	return nil
+}
+
+// hookResolveScript mirrors evaluator.shellScriptContent (policy.go) for
+// hookWalk's own, evaluator-less recursion: shellCommandString's own -c
+// STRING / on-disk script-by-path result when that succeeds, or — when a
+// script-by-path argument was named but isn't yet readable from disk —
+// the body CLA-103's write-then-run tracking (written) recorded for that
+// identical literal path earlier in this same shell string. ok is false
+// for every other unresolvable shape, exactly like shellScriptContent.
+// Unlike shellScriptContent, this never itself refuses on a trace flag
+// (`bash -x script.sh`): hookWalk has no such rule of its own — see its
+// own doc comment — the full Evaluate call EvaluateHook always also
+// makes re-parses the same command text and applies that rule there.
+func hookResolveScript(raw []string, written map[string]string) (content string, ok bool) {
+	content, scriptPath, refuse := shellCommandString(raw)
+	if !refuse {
+		return content, true
+	}
+	if scriptPath == "" {
+		return "", false
+	}
+	wc, found := written[scriptPath]
+	return wc, found
 }
 
 // commandStart reports whether word position i in words is where a shell

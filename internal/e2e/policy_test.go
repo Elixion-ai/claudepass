@@ -637,3 +637,51 @@ func TestProductionBinaryHasNoTestHooks(t *testing.T) {
 		t.Fatalf("release unsafe-allow must refuse without a real terminal: %s", r)
 	}
 }
+
+// TestPolicyRunWriteThenRun is CLA-103's write-then-run pattern at the
+// cpass run e2e layer, driven against a real built cpass binary with
+// real execution: writing a script via a heredoc-to-file redirect and
+// running it in the same wrapped command must not be refused just
+// because the file genuinely isn't on disk yet when Evaluate runs,
+// before the child process (which does the actual writing) has even
+// started — and the underlying script must still genuinely run,
+// this package's own core use case.
+func TestPolicyRunWriteThenRun(t *testing.T) {
+	ve := leakVault(t)
+	dir := t.TempDir()
+	safe := "cd " + dir + " && cat > t.sh <<'EOF'\n#!/bin/sh\necho ok\nEOF\nbash t.sh"
+	r := ve.run(nil, "run", "--with", "stripe/live", "--", "bash", "-c", safe)
+	if r.code != 0 {
+		t.Fatalf("a benign script written then run in one call must still run: %s", r)
+	}
+	if !strings.Contains(r.stdout, "ok") {
+		t.Fatalf("the written script's own output should reach stdout: %s", r)
+	}
+	// Paired bypass: a script written then run that itself reads a secret
+	// file is still refused.
+	dangerous := "cd " + dir + " && cat > t2.sh <<'EOF'\ncat .env\nEOF\nbash t2.sh"
+	r = ve.run(nil, "run", "--with", "stripe/live", "--", "bash", "-c", dangerous)
+	if r.code != 3 || !strings.Contains(r.stderr, "Secret-bearing file") {
+		t.Fatalf("a dangerous script written then run must still be refused: %s", r)
+	}
+	if strings.Contains(r.stdout+r.stderr, leakVal) {
+		t.Fatalf("leaked: %s", r)
+	}
+}
+
+// TestPolicyRunXtraceStillRefused is CLA-103's own stated scope: the
+// hook-only shell-tracing allowlist (Input.TraceAllowlist) must never
+// leak into cpass run's own Evaluate call, which runs with real Bound
+// Secret values already sitting in the child's environment — unlike
+// the PreToolUse hook, which allows this (TestPolicyHookXtraceAllowlist,
+// internal/e2e/policy_hook_test.go).
+func TestPolicyRunXtraceStillRefused(t *testing.T) {
+	ve := leakVault(t)
+	r := ve.run(nil, "run", "--with", "stripe/live", "--", "bash", "-c", "set -x; echo hi")
+	if r.code != 3 || !strings.Contains(r.stderr, "echoes expanded variables") {
+		t.Fatalf("set -x must still be refused under cpass run: %s", r)
+	}
+	if strings.Contains(r.stdout+r.stderr, leakVal) {
+		t.Fatalf("leaked: %s", r)
+	}
+}

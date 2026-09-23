@@ -181,7 +181,21 @@ value can still end up somewhere it shouldn't, today:
    `printenv PATH` lookup; those two other surfaces deliberately keep the
    stricter, allowlist-free refusal, since assuming a name is safe there
    just because it looks like an ordinary one is a different, higher-cost
-   bet once real Secret values are actually present. Before CLA-38, the
+   bet once real Secret values are actually present. A fourth, sibling
+   difference, added by CLA-103: `cpass policy --hook` alone also allows
+   `set -x`/`set -o xtrace`/a combined short-flag group containing `x`
+   (`-euxo pipefail`) — the same "the hook has no Bound-variable
+   knowledge at all" reasoning applies just as directly to tracing as it
+   does to `printenv`: nothing is ever Bound yet at hook-check time, so
+   there is no Secret value for a trace line to echo in the first place,
+   only the Agent's own already-visible commands and its own process
+   environment. `cpass run` and the MCP server again deliberately keep
+   the stricter, allowlist-free refusal, since real execution DOES have
+   real Bound Secret values sitting in the same process a traced
+   script's own `+ echo $STRIPE_LIVE`-style line would echo. A bare
+   `set` with no arguments is a different rule entirely (it prints every
+   variable unconditionally, which has nothing to do with tracing) and
+   is unaffected — it stays refused on all three surfaces. Before CLA-38, the
    secret-file-glob rule (`.env*`, `*.pem`, `id_rsa*`, `*.key`,
    `credentials*.json`, `.netrc`, `.npmrc`) and the raw-literal rule
    applied only to the hook: `cpass run -- cat .env` and an MCP
@@ -303,6 +317,42 @@ value can still end up somewhere it shouldn't, today:
       `#comment` lines (including a shebang) are recognised and skipped:
       without that, a script's own `#!/bin/sh` line would misparse as a
       bare invocation of `sh` and refuse the whole script.
+    - **Write-then-run (CLA-103): when script-path is not (yet) a
+      readable file on disk, a heredoc-to-file write recorded earlier in
+      the SAME wrapped command is tried before falling back to refuse.**
+      A single Bash tool call, or a single `cpass run -- bash -c '...'`
+      invocation, routinely both writes a script and immediately runs it
+      (`cat > script.sh <<'EOF' ... EOF; bash script.sh`) — and this
+      whole check runs *before* either the write or the run has actually
+      executed, so `os.Stat` genuinely finds nothing there yet, even
+      though the invocation is completely ordinary. `cat > PATH
+      <<DELIM`, `cat <<DELIM > PATH` (splitCommands always appends the
+      heredoc word last regardless of which came first on the line, so
+      both spellings tokenize identically), `cat >> PATH <<DELIM`
+      (append — prepending whatever this SAME shell string already
+      wrote to that identical path, checked before falling back to a
+      real, best-effort on-disk read, so an earlier write's own content
+      is never silently dropped from what gets checked), and `tee [-a]
+      PATH <<DELIM` are the four exact shapes recognised
+      (`heredocToFileWrite`, `internal/policy/policy.go`) — a real read
+      argument alongside the redirect, more than one candidate target
+      word, or any other program or flag is not this shape and falls
+      through to the ordinary refusal unchanged. The identical literal
+      path (resolved through the same plain-string-variable tracking a
+      script path already gets, `G=script.sh; bash $G`) must name the
+      SAME word later in the SAME command — a `cd` anywhere between the
+      write and the run invalidates every pending write-then-run
+      candidate entirely, a deliberately blanket/conservative safety
+      valve rather than reasoning precisely about which entries a
+      particular `cd` would or wouldn't affect, and a path that differs
+      from the one actually run even trivially (a `./` prefix, different
+      quoting) is a different literal word and is never matched — both
+      fall back to this package's ordinary fail-closed refusal, not a
+      guess that the two might be the same file. A script whose written
+      body itself reads a Secret file is still refused exactly as if
+      that content had come from a real file on disk, since the
+      resolved content re-enters the same recursive evaluation every
+      other script-by-path/heredoc body already goes through.
     - A heredoc (`<<[-]DELIM ... DELIM`) attached to a shell — `sh
       <<'EOF'` or `bash <<EOF`, quoted delimiter or not — has its body
       evaluated as the script it is, since the target shell runs it as
@@ -587,6 +637,32 @@ value can still end up somewhere it shouldn't, today:
     longer refuses at the hook layer, and the fixed, small allowlist
     (`docs/SECURITY.md`) is itself the disclosed boundary — a name not on
     it stays refused exactly as before, by design, not by omission.
+
+    **CLA-103 (owner report, 2026-09-23)** fixed the false-positive class
+    the hook's own `set` rules had been silently accumulating: the
+    owner's own Claude Code transcripts on this machine showed the hook
+    blocking 40 distinct real commands across 89 transcripts by
+    misreading Python's `set(...)` (and other languages'/tools'
+    unrelated uses of the bare word "set") as the shell `set` builtin,
+    refusing `set -x`/a combined short-flag group containing `x`
+    unconditionally even though nothing is ever Bound at the hook layer
+    to trace-reveal, and refusing a script written and run in the same
+    Bash tool call because the file genuinely wasn't on disk yet at
+    check time. The Python/other-language misreading turned out to
+    already be fixed by CLA-99/CLA-100/CLA-101's own tokenizer and
+    per-word-scan work — an interpreter's own `-c`/`-e` string and a
+    heredoc fed to a non-`shells`-map program were already opaque data,
+    not re-parsed as shell commands (see item 16's own interpreter-
+    string entry above) — so this ticket's own code changes are the
+    other two: the hook-only `set -x` allowlist (item 5's fourth
+    difference, above) and the write-then-run resolution (item 13's own
+    sub-bullet, above). Like CLA-102, both are "narrow the check,
+    disclose what narrowing costs" trade-offs, not residual-class items
+    on their own: the trace allowlist's own fixed scope (tracing only,
+    never a bare `set`, hook-only) and the write-then-run resolution's
+    own fixed scope (four exact heredoc-to-file shapes, invalidated by
+    any intervening `cd`, matched only by an exactly identical literal
+    path) are each the disclosed boundary, not an omission.
 
 ## Intercept precision (v0.1.4)
 
