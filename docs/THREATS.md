@@ -380,16 +380,21 @@ value can still end up somewhere it shouldn't, today:
       `word.outRedirTarget`, not only inside `heredocToFileWrite`'s own
       narrow cat/tee-with-heredoc match — and deletes that specific
       tracked entry unless it is exactly the path `heredocToFileWrite`
-      itself just recorded new content for from this same command. A bare
-      `cp`, `mv`, or `tee` invocation that isn't one of the four
-      authoritative shapes (no attached heredoc, for `tee`) instead
-      blanket-clears every pending entry: precisely identifying which of
-      `cp`/`mv`'s own positional arguments is the destination (a trailing
-      target directory, multiple sources, `-t`/`--target-directory`, ...)
-      is the same unbounded per-tool task the `kubectl cp`/`docker cp`
-      direction-blind edge above already declines generally, so this
-      deliberately over-invalidates (narrowing what write-then-run can
-      certify) rather than guesses. Either way the later script-by-path
+      itself just recorded new content for from this same command. Beyond redirects, the rule is closed rather than a list of writers
+      (review round 3 found a new writer shape every round: `curl -o`,
+      `dd of=`, `sed -i`, an archive extraction that never names the
+      script): between the write and the run, a command keeps the
+      recorded body only if it is a pure assignment, a
+      `contentPreserving` program (`chmod`, `echo`, `ls`, `mkdir`,
+      `test`, ...), or the shell invocation that runs a recorded path
+      itself; any other program clears every recorded write, and so
+      does a redirect whose target is not a plain literal (`>
+      $(...)`, a glob). This is the ADR-0013 calibration, not a gap
+      chased shape by shape: an on-disk script already had the same
+      overwrite-before-run exposure across two calls (write it in one,
+      `curl -o x.sh ... && bash x.sh` in the next), so write-then-run in
+      one call adds no capability, and a path computed at run time
+      stays in item 16's residual class. Either way the later script-by-path
       read then fails closed on the ordinary "invocation shape can't be
       checked statically" refusal — this does not, and cannot, inspect
       the later write's own real content, since by construction that

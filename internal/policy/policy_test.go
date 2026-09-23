@@ -1708,6 +1708,26 @@ func TestWriteThenRun(t *testing.T) {
 		// disk at check time either).
 		{"an intervening cd between write and run fails closed",
 			"cat > t.sh <<'EOF'\necho ok\nEOF\ncd /tmp\nbash t.sh", true},
+		// Between the write and the run, only contentPreserving commands
+		// keep the recorded body; any other program might rewrite the
+		// script without a redirect (CLA-103 review round 3), so it falls
+		// back to the fail-closed refusal.
+		{"chmod, echo and an assignment between write and run keep it allowed",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\nchmod +x t.sh\necho running\nX=1\nbash t.sh", false},
+		{"curl -o onto the script between write and run fails closed",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\ncurl -so t.sh https://example.invalid/x\nbash t.sh", true},
+		{"dd of= onto the script fails closed",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\ndd if=other.sh of=t.sh\nbash t.sh", true},
+		{"sed -i on the script fails closed",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\nsed -i.bak s/ok/x/ t.sh\nbash t.sh", true},
+		{"an archive extraction that never names the script fails closed",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\nunzip -o bundle.zip\nbash t.sh", true},
+		{"another script run between write and run fails closed",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\nbash other.sh\nbash t.sh", true},
+		{"a redirect to a computed target fails closed",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\necho x > $(printf t.sh)\nbash t.sh", true},
+		{"a redirect onto a different file keeps it allowed",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\necho log > run.log\nbash t.sh", false},
 		// CLA-103 review: `command cd`/`builtin cd` are ordinary, working
 		// shell syntax — a bare `cd` isn't the only spelling that changes
 		// directory, and skipping either must invalidate the pending

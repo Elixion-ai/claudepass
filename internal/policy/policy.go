@@ -950,70 +950,56 @@ func heredocToFileWrite(words []word) (path, body string, appendMode bool, ok bo
 	return "", "", false, false
 }
 
-// nonRedirectWriters are argv[0] program names (after skipCommandPrefix)
-// that overwrite a destination path named as a plain positional argument
-// rather than through a `>`/`>>` shell redirection target word — cp, mv,
-// and a bare `tee` invocation with no attached heredoc (heredocToFileWrite's
-// own tee shape above requires one) are the three ordinary, widely-used
-// ones. Modeling precisely which of cp/mv's own positional arguments is
-// the destination (a trailing target directory, multiple sources, cp/mv's
-// own -t/--target-directory flag, ...) is the same unbounded per-tool task
-// docs/THREATS.md's own kubectl-cp/docker-cp direction-blind edge already
-// declines generally, so instead — matching evaluator.written's own stated
-// preference for conservative-over-precise, the same one the `cd` safety
-// valve already uses — invalidateOverwrittenWrites below treats ANY
-// invocation of one of these three (that heredocToFileWrite itself didn't
-// just authoritatively record) as untrackable and blanket-clears every
-// pending write-then-run candidate, rather than guessing which specific
-// entry it would or wouldn't overwrite.
-var nonRedirectWriters = map[string]bool{"cp": true, "mv": true, "tee": true}
+// contentPreserving are programs and builtins that never change an
+// existing file's content through their own arguments: permission and
+// metadata tools, readers, printers and shell state builtins. Between a
+// heredoc write and the shell invocation that runs it, only these (and
+// the cases invalidateOverwrittenWrites lists) keep the recorded body
+// trustworthy. Any other program might write the script through a
+// positional argument (`curl -o`, `dd of=`, `sed -i`, `cp`), through an
+// archive or checkout that never names it (`unzip`, `tar x`, `git
+// checkout .`), or through a script of its own, and enumerating writers
+// is the unbounded task ADR-0013 declines. So the default is the safe
+// one: an unlisted program clears every recorded write. A `>`/`>>`
+// redirection on one of these still counts as a write (see below).
+var contentPreserving = map[string]bool{
+	"echo": true, "printf": true, "true": true, "false": true, ":": true, "test": true, "[": true,
+	"chmod": true, "chown": true, "chgrp": true, "touch": true, "mkdir": true,
+	"ls": true, "stat": true, "file": true, "wc": true, "cat": true, "head": true, "tail": true,
+	"grep": true, "diff": true, "cmp": true, "md5": true, "md5sum": true, "shasum": true,
+	"sha256sum": true, "shellcheck": true, "sleep": true, "date": true, "pwd": true, "which": true,
+	"type": true, "set": true, "export": true, "unset": true, "local": true, "readonly": true,
+}
 
-// invalidateOverwrittenWrites drops a stale written[path] entry (CLA-103
-// review finding) whenever THIS simple command (words, starting at the
-// command's own program name — the same slice ev.simple's "rest"/
-// hookWalk's "words[j:]" already pass to heredocToFileWrite) writes to a
-// tracked path through any shape OTHER than the one heredocToFileWrite
-// itself just recorded as recordedPath (the resolved literal path
-// heredocToFileWrite authoritatively recorded new content for from this
-// same command — "" when this command didn't match one of its four exact
-// shapes at all). resolve resolves a word's raw text through the same
-// plain-string-literal tracking (ev.resolveLiteral / resolveLiteralIn)
-// every other file-argument path in this package already goes through.
+// invalidateOverwrittenWrites keeps written (CLA-103's write-then-run
+// record) honest for one more simple command. words starts at the
+// command's program name, the same slice heredocToFileWrite sees, and
+// recordedPath is the resolved path this very command just recorded ("" if
+// it recorded nothing). resolve maps a word to its literal value.
 //
-// Two shapes are recognised:
+// The rule is deliberately closed rather than a list of writers (CLA-103
+// review found a new writer shape every round): a command leaves the
+// recorded entries alone only when it is
 //
-//   - any word tagged word.outRedirTarget — the target of a `>`/`>>`
-//     redirection on ANY program (`echo x > t.sh`, `sed ... >> t.sh`,
-//     `cat > t.sh` with no heredoc attached at all) — tagged generically
-//     by splitCommands for every output redirection, not only
-//     heredocToFileWrite's own narrow cat/tee-with-heredoc match, but
-//     never previously consulted outside it. Its resolved literal path is
-//     deleted from written unless it is exactly recordedPath, which must
-//     survive since it is the very entry heredocToFileWrite just set.
-//   - a bare invocation of a nonRedirectWriters program (cp, mv, or tee
-//     with no heredoc) that heredocToFileWrite didn't just authoritatively
-//     record (recordedPath == "") — blanket-clears every pending entry
-//     (see nonRedirectWriters' own doc comment for why blanket rather
-//     than precise).
+//   - the heredoc write that recorded them,
+//   - a pure assignment (no program runs),
+//   - a contentPreserving program, or
+//   - a shell invocation naming a recorded path, which is the run itself;
 //
-// Without this, a benign heredoc write recorded earlier in the same shell
-// string stayed in written and went on to certify a LATER script-by-path
-// run of that identical path even after this later, unrecognized write
-// had silently replaced its real on-disk content with something never
-// checked at all — the exact regression this closes. A `cd` anywhere
-// already blanket-clears the whole map (the check just above this
-// function's own call site in both ev.simple and hookWalk); this only
-// ever narrows an entry (or, for a nonRedirectWriters program, the whole
-// map) further — it never restores one a `cd` already dropped.
+// and even then a `>`/`>>` redirection target deletes the entry for the
+// path it names, or clears everything when its target is not a plain
+// literal (`> $(...)`, a glob), since nothing static says what it writes.
+// Every other command clears every entry, so the later run falls back to
+// the on-disk read, which for a not-yet-written script is the fail-closed
+// refusal. A `cd` clears everything too (checked at the call sites).
 func invalidateOverwrittenWrites(words []word, written map[string]string, recordedPath string, resolve func(string) string) {
-	if len(words) == 0 {
+	if len(words) == 0 || len(written) == 0 {
 		return
 	}
-	if cmd := skipCommandPrefix(words, 0); recordedPath == "" && cmd < len(words) && nonRedirectWriters[base(words[cmd].raw)] {
+	clearAll := func() {
 		for k := range written {
 			delete(written, k)
 		}
-		return
 	}
 	for i := range words {
 		w := &words[i]
@@ -1024,8 +1010,31 @@ func invalidateOverwrittenWrites(words []word, written map[string]string, record
 		if resolved == recordedPath {
 			continue
 		}
+		if strings.ContainsAny(resolved, "$`*?[") {
+			clearAll()
+			return
+		}
 		delete(written, resolved)
 	}
+	if recordedPath != "" {
+		return
+	}
+	cmd := skipCommandPrefix(words, 0)
+	if cmd >= len(words) {
+		return // only VAR=value assignments: no program runs
+	}
+	prog := base(words[cmd].raw)
+	if contentPreserving[prog] {
+		return
+	}
+	if shells[prog] {
+		for _, w := range words[cmd+1:] {
+			if _, ok := written[resolve(w.raw)]; ok {
+				return // the run of a recorded script itself
+			}
+		}
+	}
+	clearAll()
 }
 
 // shellScriptContent resolves what a shell invocation whose already-

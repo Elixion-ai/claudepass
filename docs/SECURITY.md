@@ -740,14 +740,15 @@ even after a subsequent, unrecognised write had silently replaced
 `>`/`>>` redirection target word in a simple command (on any program, not
 only the cat/tee-with-heredoc shape above) drops that specific path's
 tracked entry unless it is the exact path the heredoc-to-file tracking
-itself just recorded; and a bare `cp`, `mv`, or `tee` invocation that
-isn't one of the four authoritative shapes blanket-clears every pending
-entry instead — precisely modeling which of `cp`/`mv`'s own positional
-arguments is the destination (a trailing target directory, multiple
-sources, `-t`/`--target-directory`, ...) is the same unbounded per-tool
-task the `kubectl cp`/`docker cp` direction-blind edge below already
-declines generally, so this deliberately over-invalidates rather than
-guesses. Either way the later, real script-by-path read then fails
+itself just recorded. Beyond redirects the rule is closed rather than a list of writers:
+between the write and the run, a command keeps the recorded body only if
+it is a pure assignment, a `contentPreserving` program (`chmod`, `echo`,
+`ls`, `mkdir`, `test`, ...), or the shell invocation that runs a recorded
+path itself. Any other program (`cp`, `curl -o`, `sed -i`, `unzip`, another
+script) clears every recorded write, and so does a redirect whose target
+is not a plain literal. This is proportionate per ADR-0013: an on-disk
+script already had the same overwrite-before-run exposure across two
+calls, so a write-then-run in one call adds no capability. Either way the later, real script-by-path read then fails
 closed on the ordinary "invocation shape can't be checked statically"
 refusal, exactly as if no write had ever been tracked for that path — it
 does not (and cannot) inspect the later write's own real content, since
