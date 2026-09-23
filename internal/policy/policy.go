@@ -1093,8 +1093,12 @@ func (ev *evaluator) simple(words []word, depth int) error {
 	// runs before the dynamic-command-name resolution just below so a
 	// `cd` reached only through a resolved literal command name still
 	// invalidates — though in practice `cd` itself is never spelled that
-	// indirectly.
-	if base(rest[0].raw) == "cd" {
+	// indirectly. skipCommandPrefix (hook.go) resolves past a
+	// `command`/`builtin`/`exec` prefix first (CLA-103 review) so
+	// `command cd ...`/`builtin cd ...` invalidate exactly like a bare
+	// `cd` already does, rather than silently leaving a stale written
+	// entry pointing at a directory this command never actually ran in.
+	if cmd := skipCommandPrefix(rest, 0); cmd < len(rest) && base(rest[cmd].raw) == "cd" {
 		ev.written = map[string]string{}
 	}
 	// CLA-103: record a heredoc-to-file write (`cat > p <<D`, `cat <<D >

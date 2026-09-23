@@ -197,8 +197,13 @@ func hookWalk(command string, depth int, literals, written map[string]string) *R
 		// pending write-then-run candidate — see evaluator.written's own
 		// doc comment (policy.go) for why this is blanket/conservative
 		// rather than precise about which entries a particular cd would
-		// or wouldn't invalidate.
-		if j < len(words) && base(words[j].raw) == "cd" {
+		// or wouldn't invalidate. skipCommandPrefix resolves past a
+		// `command`/`builtin`/`exec` prefix first (CLA-103 review) so
+		// `command cd ...`/`builtin cd ...` invalidate exactly like a
+		// bare `cd` already does, rather than silently leaving a stale
+		// written entry pointing at a directory this command never
+		// actually ran in.
+		if cmd := skipCommandPrefix(words, j); cmd < len(words) && base(words[cmd].raw) == "cd" {
 			for k := range written {
 				delete(written, k)
 			}
@@ -413,6 +418,35 @@ func commandStart(words []word, i int) bool {
 		}
 	}
 	return true
+}
+
+// skipCommandPrefix returns the index, starting the search at i, of the
+// word in words that names the command actually being run — skipping
+// over any leading run of `command`/`builtin`/`exec` prefix words, the
+// same prefix commandStart (above) already recognizes a single one of at
+// a specific position. CLA-103 review: the write-then-run `cd`-
+// invalidation checks in both hookWalk (this file) and evaluator.simple
+// (policy.go) compared the word at this position to "cd" directly,
+// missing `command cd ...`/`builtin cd ...` — both ordinary, working
+// shell syntax — so a real `cd` reached through either prefix silently
+// left a stale ev.written/written entry pointing at a directory the
+// command never actually ran in, letting a later same-named write-then-
+// run resolve to the wrong file's tracked body. Chained prefixes
+// (`command builtin cd`) are followed all the way through, matching real
+// shell semantics: `command` and `builtin` each unambiguously name their
+// own next word as the command to run, however many are stacked. The
+// returned index may equal len(words); every caller already checks that
+// bound itself before indexing, the same contract commandStartIndex
+// (below) and ev.simple's own leading-assignment index already have.
+func skipCommandPrefix(words []word, i int) int {
+	for i < len(words) {
+		p := base(words[i].raw)
+		if p != "command" && p != "builtin" && p != "exec" {
+			break
+		}
+		i++
+	}
+	return i
 }
 
 // commandStartIndex returns the index of a command's own program-name

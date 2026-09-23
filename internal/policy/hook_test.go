@@ -286,6 +286,15 @@ func TestEvaluateHookWriteThenRun(t *testing.T) {
 		// secret file is still refused.
 		{"paired bypass: a dangerous script written then run is refused",
 			"cat > /tmp/t3.sh <<'EOF'\ncat .env\nEOF\nbash /tmp/t3.sh", true},
+		// CLA-103 review: `command cd`/`builtin cd` are ordinary, working
+		// shell syntax and must invalidate a pending write-then-run
+		// candidate exactly like a bare `cd` already does — see
+		// TestWriteThenRun (policy_test.go) for the same case exercised
+		// directly through Evaluate.
+		{"an intervening `command cd` between write and run fails closed",
+			"cat > t4.sh <<'EOF'\necho ok\nEOF\ncommand cd /tmp\nbash t4.sh", true},
+		{"an intervening `builtin cd` between write and run fails closed",
+			"cat > t5.sh <<'EOF'\necho ok\nEOF\nbuiltin cd /tmp\nbash t5.sh", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

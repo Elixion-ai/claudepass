@@ -344,9 +344,19 @@ value can still end up somewhere it shouldn't, today:
       write and the run invalidates every pending write-then-run
       candidate entirely, a deliberately blanket/conservative safety
       valve rather than reasoning precisely about which entries a
-      particular `cd` would or wouldn't affect, and a path that differs
-      from the one actually run even trivially (a `./` prefix, different
-      quoting) is a different literal word and is never matched — both
+      particular `cd` would or wouldn't affect. This recognizes `cd`
+      reached through a `command`/`builtin` prefix (`command cd
+      ...`/`builtin cd ...`) exactly like a bare `cd` (`skipCommandPrefix`,
+      `internal/policy/hook.go`) — a review round of this same ticket
+      caught the first pass comparing only the bare word, which let
+      `command cd`/`builtin cd` silently leave a stale write-then-run
+      entry pointing at a directory the command never actually ran in,
+      resolving a later same-named script-by-path invocation to the
+      wrong (tracked, benign) body instead of the real, differently-owned
+      file actually sitting at the new directory — a genuine bypass of
+      this whole safety valve, not merely a missed refusal. A path that
+      differs from the one actually run even trivially (a `./` prefix,
+      different quoting) is a different literal word and is never matched — both
       fall back to this package's ordinary fail-closed refusal, not a
       guess that the two might be the same file. A script whose written
       body itself reads a Secret file is still refused exactly as if

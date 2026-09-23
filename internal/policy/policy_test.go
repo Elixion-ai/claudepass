@@ -1708,10 +1708,23 @@ func TestWriteThenRun(t *testing.T) {
 		// disk at check time either).
 		{"an intervening cd between write and run fails closed",
 			"cat > t.sh <<'EOF'\necho ok\nEOF\ncd /tmp\nbash t.sh", true},
+		// CLA-103 review: `command cd`/`builtin cd` are ordinary, working
+		// shell syntax — a bare `cd` isn't the only spelling that changes
+		// directory, and skipping either must invalidate the pending
+		// write-then-run candidate exactly like a bare `cd` already does,
+		// not let it silently resolve to a same-named file the command
+		// never actually wrote.
+		{"an intervening `command cd` between write and run fails closed",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\ncommand cd /tmp\nbash t.sh", true},
+		{"an intervening `builtin cd` between write and run fails closed",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\nbuiltin cd /tmp\nbash t.sh", true},
 		// A `cd` before BOTH the write and the run, with nothing in
-		// between them, does not invalidate anything written afterward.
+		// between them, does not invalidate anything written afterward —
+		// including when reached through `command`/`builtin`.
 		{"a cd before both write and run is unaffected",
 			"cd /tmp && cat > t2.sh <<'EOF'\necho ok\nEOF\nbash t2.sh", false},
+		{"a `command cd` before both write and run is unaffected",
+			"command cd /tmp && cat > t4.sh <<'EOF'\necho ok\nEOF\nbash t4.sh", false},
 		// A path that differs from the one actually executed even
 		// trivially — a `./` prefix here — is a different literal word
 		// and so is never matched; this package deliberately does not

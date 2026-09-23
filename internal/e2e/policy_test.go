@@ -669,6 +669,76 @@ func TestPolicyRunWriteThenRun(t *testing.T) {
 	}
 }
 
+// TestPolicyRunCommandCdInvalidatesWriteThenRun is CLA-103's review fix:
+// the write-then-run `cd`-invalidation safety valve only recognized a
+// BARE `cd`, missing `command cd`/`builtin cd` — both ordinary, working
+// shell syntax. Reproduced against real execution at this e2e layer,
+// mirroring the review's own live finding exactly: a benign heredoc is
+// written to one directory, then `command cd`/`builtin cd` moves into a
+// SECOND directory that already holds a differently-owned, genuinely
+// dangerous same-named script — before this fix, Command Policy resolved
+// the later `bash t.sh` against the tracked BENIGN body from the first
+// write (believing it had vetted what would run) and let cpass actually
+// execute the real, never-inspected file at the new directory
+// unchecked — a full bypass of the write-then-run guarantee, not merely
+// a missed refusal. The real script prints a marker no refused run could
+// ever produce, so a regression here is caught even if the exit code
+// were ever accidentally relaxed.
+func TestPolicyRunCommandCdInvalidatesWriteThenRun(t *testing.T) {
+	ve := leakVault(t)
+	dir := t.TempDir()
+	realtarget := filepath.Join(dir, "realtarget")
+	if err := os.MkdirAll(realtarget, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The real, pre-existing file at the cd target: genuinely dangerous
+	// (reads a Secret-bearing file) and, if actually run unchecked, prints
+	// a marker proving so.
+	if err := os.WriteFile(filepath.Join(realtarget, "t.sh"), []byte("cat .env\necho REAL_EXECUTION_RAN_UNCHECKED_SCRIPT\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realtarget, ".env"), []byte("DUMMY=not-the-bound-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prefixes := []string{"command", "builtin"}
+	for _, prefix := range prefixes {
+		t.Run(prefix+" cd", func(t *testing.T) {
+			// The heredoc write itself is to a DIFFERENT path (dir/t.sh,
+			// benign) than the one the command actually cds into and runs
+			// (realtarget/t.sh, dangerous) — exactly the review's own
+			// shape, not a simplified same-path stand-in.
+			cmd := "cd " + dir + " && cat > t.sh <<'EOF'\necho benign\nEOF\n" + prefix + " cd " + realtarget + " && bash t.sh"
+			r := ve.run(nil, "run", "--with", "stripe/live", "--", "bash", "-c", cmd)
+			if r.code != 3 || !strings.Contains(r.stderr, "invocation shape can't be checked statically") {
+				t.Fatalf("%s cd between a write-then-run write and its run must invalidate the tracked body and fail closed: %s", prefix, r)
+			}
+			if strings.Contains(r.stdout, "REAL_EXECUTION_RAN_UNCHECKED_SCRIPT") {
+				t.Fatalf("%s cd let the real, unvetted script at the new directory actually execute: %s", prefix, r)
+			}
+			if strings.Contains(r.stdout+r.stderr, leakVal) {
+				t.Fatalf("leaked: %s", r)
+			}
+		})
+	}
+	// Sanity: a BARE cd between the same write and run is still refused
+	// the same way (no regression from this fix), and the ordinary,
+	// no-intervening-cd write-then-run case still genuinely runs.
+	t.Run("bare cd (no regression)", func(t *testing.T) {
+		cmd := "cd " + dir + " && cat > t2.sh <<'EOF'\necho benign\nEOF\ncd " + realtarget + " && bash t2.sh"
+		r := ve.run(nil, "run", "--with", "stripe/live", "--", "bash", "-c", cmd)
+		if r.code != 3 || !strings.Contains(r.stderr, "invocation shape can't be checked statically") {
+			t.Fatalf("a bare cd between write and run must still fail closed: %s", r)
+		}
+	})
+	t.Run("no intervening cd still runs", func(t *testing.T) {
+		cmd := "cd " + dir + " && cat > t3.sh <<'EOF'\necho benign\nEOF\nbash t3.sh"
+		r := ve.run(nil, "run", "--with", "stripe/live", "--", "bash", "-c", cmd)
+		if r.code != 0 || !strings.Contains(r.stdout, "benign") {
+			t.Fatalf("write-then-run with no intervening cd must still genuinely run: %s", r)
+		}
+	})
+}
+
 // TestPolicyRunXtraceStillRefused is CLA-103's own stated scope: the
 // hook-only shell-tracing allowlist (Input.TraceAllowlist) must never
 // leak into cpass run's own Evaluate call, which runs with real Bound

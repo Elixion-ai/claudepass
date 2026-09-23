@@ -291,6 +291,50 @@ func TestPolicyHookSecretFileGlobExpansion(t *testing.T) {
 	}
 }
 
+// TestPolicyHookCommandCdInvalidatesWriteThenRun is CLA-103's review fix,
+// driven against a real built `cpass policy --hook` invocation: the
+// write-then-run `cd`-invalidation safety valve only recognized a BARE
+// `cd`, missing `command cd`/`builtin cd` — both ordinary, working shell
+// syntax that a real shell treats identically to a bare `cd`. Before this
+// fix, the hook resolved a LATER `bash t.sh` against the benign body
+// tracked from an EARLIER write to a DIFFERENT directory, instead of
+// failing closed on the (correct, here nonexistent) on-disk read at the
+// new directory — silently believing it had vetted a script it never
+// actually inspected. See TestPolicyRunCommandCdInvalidatesWriteThenRun
+// (policy_test.go) for the same shape proven against real execution,
+// with a pre-existing dangerous file at the cd target.
+func TestPolicyHookCommandCdInvalidatesWriteThenRun(t *testing.T) {
+	ve := newVault(t)
+	dir := t.TempDir()
+	cases := []struct {
+		name   string
+		prefix string
+	}{
+		{"command cd invalidates the write-then-run candidate", "command"},
+		{"builtin cd invalidates the write-then-run candidate", "builtin"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cmd := "cd " + dir + " && cat > t.sh <<'EOF'\necho ok\nEOF\n" + c.prefix + " cd /tmp\nbash t.sh"
+			r := ve.run(preToolUseJSON(cmd), "policy", "--hook")
+			if r.code != 2 || !strings.Contains(r.stderr, "invocation shape can't be checked statically") {
+				t.Fatalf("%s cd between write and run must invalidate the tracked body and fail closed: %s", c.prefix, r)
+			}
+		})
+	}
+	// A bare cd before BOTH the write and the run is unaffected — same
+	// sanity check TestPolicyHookWriteThenRun's own table implicitly
+	// relies on for its "allowed" case, made explicit here for the
+	// command/builtin-prefixed spelling too.
+	t.Run("a command cd before both write and run is unaffected", func(t *testing.T) {
+		cmd := "command cd " + dir + " && cat > t2.sh <<'EOF'\necho ok\nEOF\nbash t2.sh"
+		r := ve.run(preToolUseJSON(cmd), "policy", "--hook")
+		if r.code != 0 {
+			t.Fatalf("want exit 0, got %s", r)
+		}
+	})
+}
+
 // TestPolicyHookSetAsDataNotShellBuiltin is CLA-103's own reported
 // trigger, driven against a real built `cpass policy --hook` invocation:
 // the owner's transcripts showed the hook reading Python's `set(...)`
