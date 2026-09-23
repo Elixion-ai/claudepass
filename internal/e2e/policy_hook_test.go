@@ -400,6 +400,46 @@ func TestPolicyHookXtraceAllowlist(t *testing.T) {
 // actually executed. Resolved through a real temp directory (a same-
 // command `cd`, matching TestPolicyHookSecretFileGlobExpansion above) so
 // the write and the run share an unambiguous literal path.
+// TestPolicyHookLaterOverwriteInvalidatesWriteThenRun is CLA-103's round-2
+// review finding at the PreToolUse hook layer: a benign heredoc write to a
+// path, followed LATER IN THE SAME command by a plain (non-heredoc) `>`
+// redirect or a bare `tee` to that identical literal path, must invalidate
+// the tracked body rather than let a subsequent `bash t.sh` resolve
+// against the stale, no-longer-real first write. See
+// TestPolicyRunLaterOverwriteInvalidatesWriteThenRun (policy_test.go) for
+// the same shape proven against real execution with a marker only
+// genuinely unchecked execution could print.
+func TestPolicyHookLaterOverwriteInvalidatesWriteThenRun(t *testing.T) {
+	ve := newVault(t)
+	dir := t.TempDir()
+	cases := []struct {
+		name    string
+		command string
+	}{
+		{"a later plain > redirect to the same path invalidates the tracked heredoc body",
+			"cd " + dir + " && cat > t.sh <<'EOF'\necho ok\nEOF\necho 'cat .env' > t.sh\nbash t.sh"},
+		{"a later bare tee (no heredoc) to the same path invalidates the tracked heredoc body",
+			"cd " + dir + " && cat > t2.sh <<'EOF'\necho ok\nEOF\ntee t2.sh <<<'cat .env'\nbash t2.sh"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := ve.run(preToolUseJSON(c.command), "policy", "--hook")
+			if r.code != 2 || !strings.Contains(r.stderr, "invocation shape can't be checked statically") {
+				t.Fatalf("a later, unrecognized write to the identical path must invalidate the tracked heredoc body and fail closed: %s", r)
+			}
+		})
+	}
+	// Sanity: an unrelated write to a DIFFERENT path in between leaves the
+	// run's own tracked body alone.
+	t.Run("an unrelated write to a different path is unaffected", func(t *testing.T) {
+		cmd := "cd " + dir + " && cat > t3.sh <<'EOF'\necho ok\nEOF\necho unrelated > other.txt\nbash t3.sh"
+		r := ve.run(preToolUseJSON(cmd), "policy", "--hook")
+		if r.code != 0 {
+			t.Fatalf("want exit 0, got %s", r)
+		}
+	})
+}
+
 func TestPolicyHookWriteThenRun(t *testing.T) {
 	ve := newVault(t)
 	dir := t.TempDir()

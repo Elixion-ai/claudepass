@@ -295,6 +295,20 @@ func TestEvaluateHookWriteThenRun(t *testing.T) {
 			"cat > t4.sh <<'EOF'\necho ok\nEOF\ncommand cd /tmp\nbash t4.sh", true},
 		{"an intervening `builtin cd` between write and run fails closed",
 			"cat > t5.sh <<'EOF'\necho ok\nEOF\nbuiltin cd /tmp\nbash t5.sh", true},
+		// CLA-103 round-2 review: a LATER, unrecognized write to the
+		// IDENTICAL literal path must invalidate the earlier heredoc's
+		// tracked body at the hook layer too — see TestWriteThenRun
+		// (policy_test.go) for the same cases exercised directly through
+		// Evaluate, including the live-execution proof this ticket's own
+		// reproduction used.
+		{"a later plain > redirect to the same path invalidates the tracked heredoc body",
+			"cat > t6.sh <<'EOF'\necho ok\nEOF\necho 'echo REAL_EXECUTION_RAN_UNCHECKED_SCRIPT' > t6.sh\nbash t6.sh", true},
+		{"a later bare tee (no heredoc) to the same path invalidates the tracked heredoc body",
+			"cat > t7.sh <<'EOF'\necho ok\nEOF\ntee t7.sh <<<'echo REAL_EXECUTION_RAN_UNCHECKED_SCRIPT'\nbash t7.sh", true},
+		{"a later cp onto the same path invalidates the tracked heredoc body",
+			"cat > t8.sh <<'EOF'\necho ok\nEOF\ncp other.sh t8.sh\nbash t8.sh", true},
+		{"a later plain redirect to a DIFFERENT path leaves the run's own tracked body alone",
+			"cat > t9.sh <<'EOF'\necho ok\nEOF\necho unrelated > other.txt\nbash t9.sh", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

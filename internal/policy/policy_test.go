@@ -1733,6 +1733,27 @@ func TestWriteThenRun(t *testing.T) {
 		// file.
 		{"a ./ prefix mismatch fails closed rather than guessing",
 			"cat > t.sh <<'EOF'\necho ok\nEOF\nbash ./t.sh", true},
+		// CLA-103 round-2 review: a LATER, unrecognized write to the
+		// IDENTICAL literal path must invalidate the earlier heredoc's
+		// tracked body rather than let it keep certifying the run — the
+		// live reproduction the review reported (piped into a real
+		// enforcement path) genuinely executed the second write's content
+		// unchecked before this fix. A plain `>` redirect on any program
+		// (not only cat/tee-with-heredoc) is the generic shape.
+		{"a later plain > redirect to the same path invalidates the tracked heredoc body",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\necho 'echo REAL_EXECUTION_RAN_UNCHECKED_SCRIPT' > t.sh\nbash t.sh", true},
+		{"a later plain >> redirect to the same path invalidates the tracked heredoc body",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\necho 'echo REAL_EXECUTION_RAN_UNCHECKED_SCRIPT' >> t.sh\nbash t.sh", true},
+		{"a later bare tee (no heredoc) to the same path invalidates the tracked heredoc body",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\ntee t.sh <<<'echo REAL_EXECUTION_RAN_UNCHECKED_SCRIPT'\nbash t.sh", true},
+		{"a later cp onto the same path invalidates the tracked heredoc body",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\ncp other.sh t.sh\nbash t.sh", true},
+		{"a later mv onto the same path invalidates the tracked heredoc body",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\nmv other.sh t.sh\nbash t.sh", true},
+		// Paired benign: an unrelated plain write to a DIFFERENT path
+		// leaves the tracked entry for the run's own path untouched.
+		{"a later plain redirect to a DIFFERENT path leaves the run's own tracked body alone",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\necho unrelated > other.txt\nbash t.sh", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

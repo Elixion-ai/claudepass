@@ -739,6 +739,58 @@ func TestPolicyRunCommandCdInvalidatesWriteThenRun(t *testing.T) {
 	})
 }
 
+// TestPolicyRunLaterOverwriteInvalidatesWriteThenRun is CLA-103's round-2
+// review finding, reproduced against real execution exactly the way the
+// review itself reported it: a benign heredoc write to a path, followed —
+// LATER IN THE SAME wrapped command, with no intervening cd — by a plain
+// (non-heredoc) `>` redirect that silently replaces that identical path's
+// real on-disk content with something never checked at all, then a shell
+// invocation of that same path. Before this fix, ev.written kept
+// certifying the FIRST (benign) write's tracked body even though the
+// SECOND, unrecognized write is what the file actually held by the time
+// bash ran it — so cpass genuinely executed the real, never-inspected
+// script content unchecked. The real script prints a marker no refused
+// run could ever produce, so a regression here is caught even if the exit
+// code were ever accidentally relaxed — the same evidentiary standard
+// TestPolicyRunCommandCdInvalidatesWriteThenRun above already uses.
+func TestPolicyRunLaterOverwriteInvalidatesWriteThenRun(t *testing.T) {
+	ve := leakVault(t)
+	dir := t.TempDir()
+	cases := []struct {
+		name    string
+		rewrite string
+	}{
+		{"a later plain > redirect", "echo 'echo REAL_EXECUTION_RAN_UNCHECKED_SCRIPT' > t.sh"},
+		{"a later plain >> redirect", "echo 'echo REAL_EXECUTION_RAN_UNCHECKED_SCRIPT' >> t.sh"},
+		{"a later bare tee with no heredoc", "tee t.sh <<<'echo REAL_EXECUTION_RAN_UNCHECKED_SCRIPT'"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cmd := "cd " + dir + " && cat > t.sh <<'EOF'\necho benign\nEOF\n" + c.rewrite + "\nbash t.sh"
+			r := ve.run(nil, "run", "--with", "stripe/live", "--", "bash", "-c", cmd)
+			if r.code != 3 || !strings.Contains(r.stderr, "invocation shape can't be checked statically") {
+				t.Fatalf("a later, unrecognized write to the identical path must invalidate the tracked heredoc body and fail closed: %s", r)
+			}
+			if strings.Contains(r.stdout, "REAL_EXECUTION_RAN_UNCHECKED_SCRIPT") {
+				t.Fatalf("the later, never-inspected write's real content was actually executed unchecked: %s", r)
+			}
+			if strings.Contains(r.stdout+r.stderr, leakVal) {
+				t.Fatalf("leaked: %s", r)
+			}
+		})
+	}
+	// Sanity: an unrelated write to a DIFFERENT path in between leaves the
+	// run's own tracked body alone, and the ordinary write-then-run case
+	// keeps genuinely running (no regression from this fix).
+	t.Run("an unrelated write to a different path is unaffected", func(t *testing.T) {
+		cmd := "cd " + dir + " && cat > t2.sh <<'EOF'\necho benign\nEOF\necho unrelated > other.txt\nbash t2.sh"
+		r := ve.run(nil, "run", "--with", "stripe/live", "--", "bash", "-c", cmd)
+		if r.code != 0 || !strings.Contains(r.stdout, "benign") {
+			t.Fatalf("an unrelated write to a different path must not invalidate the run's own tracked body: %s", r)
+		}
+	})
+}
+
 // TestPolicyRunXtraceStillRefused is CLA-103's own stated scope: the
 // hook-only shell-tracing allowlist (Input.TraceAllowlist) must never
 // leak into cpass run's own Evaluate call, which runs with real Bound

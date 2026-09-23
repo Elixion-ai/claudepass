@@ -725,6 +725,34 @@ quoting) is a different literal word and is never matched either. A
 script whose written body itself reads a Secret file is still refused,
 exactly as if that content had come from a real file on disk.
 
+**A LATER write to the identical literal path, through any shape other
+than the four just above, invalidates the tracked entry (CLA-103 round-2
+review):** the write-then-run tracking above is deliberately narrow — it
+only ever recognises those four heredoc-to-file shapes as *authoritative*
+new content for a path. Before this fix, nothing invalidated a tracked
+entry when a LATER command in the same shell string wrote to the
+identical path some other way — a plain `> PATH`/`>> PATH` redirect on
+any program, a bare `tee PATH` with no attached heredoc, or a `cp`/`mv`
+onto `PATH` — so a benign heredoc write recorded early in a command could
+go on certifying a `bash PATH`/`sh PATH` run later in that SAME command
+even after a subsequent, unrecognised write had silently replaced
+`PATH`'s real content with something never checked at all. Now, every
+`>`/`>>` redirection target word in a simple command (on any program, not
+only the cat/tee-with-heredoc shape above) drops that specific path's
+tracked entry unless it is the exact path the heredoc-to-file tracking
+itself just recorded; and a bare `cp`, `mv`, or `tee` invocation that
+isn't one of the four authoritative shapes blanket-clears every pending
+entry instead — precisely modeling which of `cp`/`mv`'s own positional
+arguments is the destination (a trailing target directory, multiple
+sources, `-t`/`--target-directory`, ...) is the same unbounded per-tool
+task the `kubectl cp`/`docker cp` direction-blind edge below already
+declines generally, so this deliberately over-invalidates rather than
+guesses. Either way the later, real script-by-path read then fails
+closed on the ordinary "invocation shape can't be checked statically"
+refusal, exactly as if no write had ever been tracked for that path — it
+does not (and cannot) inspect the later write's own real content, since
+that content was never in a shape this package tracks at all.
+
 This hook never opens the Vault and makes no network call; it is a pure,
 static judgment over the command text (`internal/policy`).
 

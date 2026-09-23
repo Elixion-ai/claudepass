@@ -363,6 +363,37 @@ value can still end up somewhere it shouldn't, today:
       that content had come from a real file on disk, since the
       resolved content re-enters the same recursive evaluation every
       other script-by-path/heredoc body already goes through.
+    - **A LATER write to the identical literal path, through any shape
+      other than the four `heredocToFileWrite` shapes above, invalidates
+      the tracked entry (CLA-103 round-2 review — a genuine regression
+      vs. main, not merely a missed refusal).** The `cd` safety valve just
+      above only ever invalidated on a `cd`; nothing invalidated a tracked
+      entry when a LATER command in the SAME shell string wrote to the
+      identical path some other way. Live-reproduced: `cat > t.sh <<'EOF'
+      ... EOF; echo 'echo REAL_EXECUTION_RAN_UNCHECKED_SCRIPT' > t.sh;
+      bash t.sh` was allowed and the second, never-inspected write's real
+      content genuinely ran — proof only real, unvetted execution could
+      produce. `invalidateOverwrittenWrites` (`internal/policy/policy.go`,
+      shared by `ev.simple` and `hookWalk`) now resolves every `>`/`>>`
+      output-redirection target word in a simple command — tagged
+      generically by `splitCommands` on ANY program via
+      `word.outRedirTarget`, not only inside `heredocToFileWrite`'s own
+      narrow cat/tee-with-heredoc match — and deletes that specific
+      tracked entry unless it is exactly the path `heredocToFileWrite`
+      itself just recorded new content for from this same command. A bare
+      `cp`, `mv`, or `tee` invocation that isn't one of the four
+      authoritative shapes (no attached heredoc, for `tee`) instead
+      blanket-clears every pending entry: precisely identifying which of
+      `cp`/`mv`'s own positional arguments is the destination (a trailing
+      target directory, multiple sources, `-t`/`--target-directory`, ...)
+      is the same unbounded per-tool task the `kubectl cp`/`docker cp`
+      direction-blind edge above already declines generally, so this
+      deliberately over-invalidates (narrowing what write-then-run can
+      certify) rather than guesses. Either way the later script-by-path
+      read then fails closed on the ordinary "invocation shape can't be
+      checked statically" refusal — this does not, and cannot, inspect
+      the later write's own real content, since by construction that
+      content was never tracked in a shape this package recognises.
     - A heredoc (`<<[-]DELIM ... DELIM`) attached to a shell — `sh
       <<'EOF'` or `bash <<EOF`, quoted delimiter or not — has its body
       evaluated as the script it is, since the target shell runs it as

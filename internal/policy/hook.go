@@ -215,8 +215,10 @@ func hookWalk(command string, depth int, literals, written map[string]string) *R
 		// failing the on-disk read that hasn't happened yet
 		// (hookResolveScript below; heredocToFileWrite's own doc comment,
 		// policy.go, has the full shape).
+		var recordedWrite string
 		if path, body, appendMode, ok := heredocToFileWrite(words[j:]); ok {
 			resolved := resolveLiteralIn(path, literals)
+			recordedWrite = resolved
 			if appendMode {
 				// An earlier write to this identical path tracked in
 				// written already (from earlier in this same command)
@@ -235,6 +237,18 @@ func hookWalk(command string, depth int, literals, written map[string]string) *R
 			}
 			written[resolved] = body
 		}
+		// CLA-103 review: a LATER write to a path already tracked in
+		// written, through any shape other than the one heredocToFileWrite
+		// itself just recorded above (recordedWrite) — a plain `>
+		// PATH`/`>> PATH` redirect on any program, a bare `tee PATH` with
+		// no heredoc, or a cp/mv invocation — must invalidate that stale
+		// entry, mirroring evaluator.simple's identical call (policy.go).
+		// See invalidateOverwrittenWrites' own doc comment for the exact
+		// shapes and why cp/mv/bare-tee blanket-clear rather than resolve
+		// precisely.
+		invalidateOverwrittenWrites(words[j:], written, recordedWrite, func(s string) string {
+			return resolveLiteralIn(s, literals)
+		})
 		for _, w := range words {
 			for _, sub := range w.subs {
 				if r := hookWalk(sub, depth+1, literals, written); r != nil {
