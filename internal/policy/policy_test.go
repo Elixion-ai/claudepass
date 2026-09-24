@@ -1728,6 +1728,21 @@ func TestWriteThenRun(t *testing.T) {
 			"cat > t.sh <<'EOF'\necho ok\nEOF\necho x > $(printf t.sh)\nbash t.sh", true},
 		{"a redirect onto a different file keeps it allowed",
 			"cat > t.sh <<'EOF'\necho ok\nEOF\necho log > run.log\nbash t.sh", false},
+		// One file, several spellings: t.sh, ./t.sh and x/../t.sh must be
+		// the same recorded entry, or a rewrite spelled differently slips
+		// past the recorded benign body.
+		{"a redirect spelled ./t.sh overwrites the recorded t.sh",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\ncat other.sh > ./t.sh\nbash t.sh", true},
+		{"a second heredoc spelled ./t.sh replaces the recorded t.sh",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\ncat > ./t.sh <<'EOF'\ncat .env\nEOF\nbash t.sh", true},
+		{"a run spelled ./t.sh resolves the recorded t.sh",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\nbash ./t.sh", false},
+		{"a quoted redirect target is the same path",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\necho x > \"t.sh\"\nbash t.sh", true},
+		{"a clobber redirect >| overwrites the script",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\necho x >| t.sh\nbash t.sh", true},
+		{"a bare redirect with no command truncates the script",
+			"cat > t.sh <<'EOF'\necho ok\nEOF\n> t.sh\nbash t.sh", true},
 		// CLA-103 review: `command cd`/`builtin cd` are ordinary, working
 		// shell syntax — a bare `cd` isn't the only spelling that changes
 		// directory, and skipping either must invalidate the pending
@@ -1745,14 +1760,6 @@ func TestWriteThenRun(t *testing.T) {
 			"cd /tmp && cat > t2.sh <<'EOF'\necho ok\nEOF\nbash t2.sh", false},
 		{"a `command cd` before both write and run is unaffected",
 			"command cd /tmp && cat > t4.sh <<'EOF'\necho ok\nEOF\nbash t4.sh", false},
-		// A path that differs from the one actually executed even
-		// trivially — a `./` prefix here — is a different literal word
-		// and so is never matched; this package deliberately does not
-		// attempt path normalization, and falls back to its ordinary
-		// fail-closed refusal instead of guessing the two are the same
-		// file.
-		{"a ./ prefix mismatch fails closed rather than guessing",
-			"cat > t.sh <<'EOF'\necho ok\nEOF\nbash ./t.sh", true},
 		// CLA-103 round-2 review: a LATER, unrecognized write to the
 		// IDENTICAL literal path must invalidate the earlier heredoc's
 		// tracked body rather than let it keep certifying the run — the
@@ -1782,5 +1789,26 @@ func TestWriteThenRun(t *testing.T) {
 				t.Fatalf("command %q: refused=%v want %v (err=%v)", c.command, err != nil, c.refused, err)
 			}
 		})
+	}
+}
+
+// TestWriteThenRunBeatsStaleDiskCopy: when the script already exists on
+// disk, what the same command writes over it is what runs, so that body
+// (not the older copy) is what gets checked, through Evaluate and the hook.
+func TestWriteThenRunBeatsStaleDiskCopy(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "t.sh")
+	if err := os.WriteFile(p, []byte("echo ok\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dangerous := "cat > " + p + " <<'EOF'\ncat .env\nEOF\nbash " + p
+	if Evaluate(Input{Argv: []string{"sh", "-c", dangerous}}) == nil {
+		t.Fatal("Evaluate: a dangerous body written over a benign on-disk script must be refused")
+	}
+	if EvaluateHook(dangerous) == nil {
+		t.Fatal("EvaluateHook: a dangerous body written over a benign on-disk script must be refused")
+	}
+	benign := "cat > " + p + " <<'EOF'\necho fine\nEOF\nbash " + p
+	if err := EvaluateHook(benign); err != nil {
+		t.Fatalf("EvaluateHook: a benign rewrite of an existing script must stay allowed: %v", err)
 	}
 }

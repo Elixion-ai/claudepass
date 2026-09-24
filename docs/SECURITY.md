@@ -719,9 +719,9 @@ the on-disk read. This is deliberately narrow and exact, not a guess at
 including one reached through a `command`/`builtin` prefix (`command cd
 ...`/`builtin cd ...`, ordinary working shell syntax a review round
 caught this check missing at first — CLA-103 review) — invalidates it
-entirely (falling back to the ordinary refusal), and a path that differs
-from the one actually run even trivially (a `./` prefix, different
-quoting) is a different literal word and is never matched either. A
+entirely (falling back to the ordinary refusal). Recorded paths are
+normalized (`t.sh`, `./t.sh` and `x/../t.sh` are one entry), and a body
+this command writes takes priority over an older copy already on disk. A
 script whose written body itself reads a Secret file is still refused,
 exactly as if that content had come from a real file on disk.
 

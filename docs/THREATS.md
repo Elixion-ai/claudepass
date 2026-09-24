@@ -354,11 +354,11 @@ value can still end up somewhere it shouldn't, today:
       resolving a later same-named script-by-path invocation to the
       wrong (tracked, benign) body instead of the real, differently-owned
       file actually sitting at the new directory — a genuine bypass of
-      this whole safety valve, not merely a missed refusal. A path that
-      differs from the one actually run even trivially (a `./` prefix,
-      different quoting) is a different literal word and is never matched — both
-      fall back to this package's ordinary fail-closed refusal, not a
-      guess that the two might be the same file. A script whose written
+      this whole safety valve, not merely a missed refusal. Recorded paths
+      are normalized (`t.sh`, `./t.sh` and `x/../t.sh` are one entry),
+      so a rewrite spelled differently cannot slip past a recorded
+      benign body, and a body this command writes takes priority over
+      an older copy already on disk, since the write runs first. A script whose written
       body itself reads a Secret file is still refused exactly as if
       that content had come from a real file on disk, since the
       resolved content re-enters the same recursive evaluation every

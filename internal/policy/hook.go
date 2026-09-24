@@ -217,7 +217,7 @@ func hookWalk(command string, depth int, literals, written map[string]string) *R
 		// policy.go, has the full shape).
 		var recordedWrite string
 		if path, body, appendMode, ok := heredocToFileWrite(words[j:]); ok {
-			resolved := resolveLiteralIn(path, literals)
+			resolved := writtenKey(resolveLiteralIn(path, literals))
 			recordedWrite = resolved
 			if appendMode {
 				// An earlier write to this identical path tracked in
@@ -401,14 +401,12 @@ func hookWalk(command string, depth int, literals, written map[string]string) *R
 // makes re-parses the same command text and applies that rule there.
 func hookResolveScript(raw []string, written map[string]string) (content string, ok bool) {
 	content, scriptPath, refuse := shellCommandString(raw)
-	if !refuse {
-		return content, true
+	// What this same command wrote beats the copy on disk (see
+	// evaluator.shellScriptContent).
+	if wc, found := written[writtenKey(scriptPath)]; scriptPath != "" && found {
+		return wc, true
 	}
-	if scriptPath == "" {
-		return "", false
-	}
-	wc, found := written[scriptPath]
-	return wc, found
+	return content, !refuse
 }
 
 // commandStart reports whether word position i in words is where a shell

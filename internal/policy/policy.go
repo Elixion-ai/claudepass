@@ -190,11 +190,11 @@ type evaluator struct {
 	// case in simple) — deliberately blanket/conservative rather than
 	// reasoning precisely about which entries a particular cd target
 	// would or wouldn't invalidate, matching this package's existing
-	// "refuse/resolve rather than guess" default: a path that differs
-	// from the one actually executed even trivially (a `./` prefix, a
-	// different quoting) is a different map key and so is never matched,
-	// falling through to this package's ordinary fail-closed refusal
-	// unchanged.
+	// "refuse/resolve rather than guess" default. Keys go through
+	// writtenKey, so t.sh, ./t.sh and x/../t.sh are one entry and a
+	// rewrite spelled differently still replaces or invalidates it; a
+	// written body also takes priority over the copy on disk, since the
+	// write runs before the script does.
 	written map[string]string
 	// envAllowlist mirrors Input.EnvAllowlist (see its own doc comment):
 	// true only for the evaluator EvaluateHook builds, never for a real
@@ -1006,7 +1006,7 @@ func invalidateOverwrittenWrites(words []word, written map[string]string, record
 		if !w.outRedirTarget {
 			continue
 		}
-		resolved := resolve(w.raw)
+		resolved := writtenKey(resolve(w.raw))
 		if resolved == recordedPath {
 			continue
 		}
@@ -1029,7 +1029,7 @@ func invalidateOverwrittenWrites(words []word, written map[string]string, record
 	}
 	if shells[prog] {
 		for _, w := range words[cmd+1:] {
-			if _, ok := written[resolve(w.raw)]; ok {
+			if _, ok := written[writtenKey(resolve(w.raw))]; ok {
 				return // the run of a recorded script itself
 			}
 		}
@@ -1059,22 +1059,29 @@ func invalidateOverwrittenWrites(words []word, written map[string]string, record
 // of duplicating the written-map fallback four times over.
 func (ev *evaluator) shellScriptContent(raw []string) (content string, ok bool, refusal *Refusal) {
 	content, scriptPath, refuse := shellCommandString(raw)
-	if !refuse {
-		if hasTraceFlag(raw) {
-			return "", false, &Refusal{Rule: "shell tracing (-x) echoes expanded variables", Advice: "drop -x"}
-		}
-		return content, true, nil
+	// A body this same command wrote to the script beats whatever is on
+	// disk now: the write runs first, so it is what the shell executes.
+	if wc, found := ev.written[writtenKey(scriptPath)]; scriptPath != "" && found {
+		content, refuse = wc, false
 	}
-	if scriptPath == "" {
+	if refuse {
 		return "", false, nil
 	}
-	if wc, found := ev.written[scriptPath]; found {
-		if hasTraceFlag(raw) {
-			return "", false, &Refusal{Rule: "shell tracing (-x) echoes expanded variables", Advice: "drop -x"}
-		}
-		return wc, true, nil
+	if hasTraceFlag(raw) {
+		return "", false, &Refusal{Rule: "shell tracing (-x) echoes expanded variables", Advice: "drop -x"}
 	}
-	return "", false, nil
+	return content, true, nil
+}
+
+// writtenKey is the one key per file for evaluator.written: t.sh, ./t.sh
+// and x/../t.sh name the same script, so a rewrite spelled differently
+// must hit the same entry. A path that is not a plain literal is left
+// as-is; invalidateOverwrittenWrites treats those as unknown targets.
+func writtenKey(p string) string {
+	if p == "" || strings.ContainsAny(p, "$`*?[") {
+		return p
+	}
+	return filepath.Clean(p)
 }
 
 // shell judges a shell command string by splitting it into simple commands
@@ -1199,7 +1206,7 @@ func (ev *evaluator) simple(words []word, depth int) error {
 	// else.
 	var recordedWrite string
 	if path, body, appendMode, ok := heredocToFileWrite(rest); ok {
-		resolved := ev.resolveLiteral(path)
+		resolved := writtenKey(ev.resolveLiteral(path))
 		recordedWrite = resolved
 		if appendMode {
 			// A real `>>`/`tee -a` appends to whatever is already
