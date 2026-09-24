@@ -89,6 +89,25 @@ type word struct {
 	// regardless of this bit (see readBuiltins), so only read/
 	// mapfile/readarray's own checks consult it.
 	redirTarget bool
+
+	// outRedirTarget is set on an ordinary word that is the TARGET of a
+	// `>`/`>>` OUTPUT redirection (`cat > FILE`, `cat >> FILE`) — the
+	// mirror image of redirTarget above, which only ever tracks an INPUT
+	// target. outRedirAppend, meaningful only when outRedirTarget is
+	// true, distinguishes `>>` (append) from a bare `>` (truncate).
+	// Tracked so heredocToFileWrite (policy.go, CLA-103) can recognise a
+	// `cat > FILE <<DELIM`/`cat <<DELIM > FILE`/`cat >> FILE <<DELIM`
+	// write-then-run pattern within one simple command: real shell
+	// grammar reads the whole line — both the redirection and the `<<`
+	// — before the heredoc body is ever read (see the `case c == '\n':`
+	// heredoc-extraction branch below), so the redirection's own target
+	// word is already sitting in `cur`, tagged this way, by the time
+	// that heredoc word is appended. Never set on a positional argument
+	// that merely occupies the position a filename would (an ordinary
+	// reader argument, a read/mapfile/readarray destination name) —
+	// only the actual `>`/`>>` operator's own target word.
+	outRedirTarget bool
+	outRedirAppend bool
 }
 
 // pendingHeredoc is a <<[-]DELIM seen earlier on the current line, whose
@@ -167,6 +186,16 @@ func splitCommands(s string) [][]word {
 	// a-filename). Left false for a '>' output redirection's target,
 	// which is never a reader's file operand.
 	var pendingRedirIn bool
+	// pendingRedirOut and pendingRedirOutAppend mirror pendingRedirIn
+	// exactly (same set/consume/clear points) but for an OUTPUT
+	// redirection's own target word (word.outRedirTarget/outRedirAppend,
+	// CLA-103): set by the '<'/'>' case whenever the operator was '>',
+	// and carried onto the very next word tokenized. pendingRedirOutAppend
+	// records whether it was specifically '>>' (append) rather than a
+	// bare '>' (truncate) — see heredocToFileWrite's (policy.go) own doc
+	// comment for what a caller does with that distinction.
+	var pendingRedirOut bool
+	var pendingRedirOutAppend bool
 	// caseDepth, inCaseHeader and wantPattern together recognize a `case
 	// X in PATTERN) cmds ;; PATTERN2) cmds ;; esac` statement's own
 	// PATTERN words as pattern-arm syntax, not a command to evaluate —
@@ -212,6 +241,8 @@ func splitCommands(s string) [][]word {
 				// judged as the real one.
 				pendingFDBind = ""
 				pendingRedirIn = false
+				pendingRedirOut = false
+				pendingRedirOutAppend = false
 				switch w {
 				case "case":
 					caseDepth++
@@ -237,6 +268,8 @@ func splitCommands(s string) [][]word {
 				// word(s) already occupy it).
 				pendingFDBind = ""
 				pendingRedirIn = false
+				pendingRedirOut = false
+				pendingRedirOutAppend = false
 				inCaseHeader = false
 				wantPattern = true
 				return
@@ -245,13 +278,19 @@ func splitCommands(s string) [][]word {
 			pendingFDBind = ""
 			ri := pendingRedirIn
 			pendingRedirIn = false
-			cur = append(cur, word{raw: w, subs: ws, fdBindNum: fd, redirTarget: ri})
+			ro := pendingRedirOut
+			pendingRedirOut = false
+			roa := pendingRedirOutAppend
+			pendingRedirOutAppend = false
+			cur = append(cur, word{raw: w, subs: ws, fdBindNum: fd, redirTarget: ri, outRedirTarget: ro, outRedirAppend: roa})
 		}
 	}
 	flushCmd := func() {
 		flushWord()
 		pendingFDBind = ""
 		pendingRedirIn = false
+		pendingRedirOut = false
+		pendingRedirOutAppend = false
 		if wantPattern && caseDepth > 0 {
 			// A case-pattern word (or one alternative of a `|`-separated
 			// pattern list, each ended by its own flushCmd via the '|'
@@ -521,6 +560,13 @@ func splitCommands(s string) [][]word {
 			// onto this one's target.
 			pendingFDBind = ""
 			pendingRedirIn = false
+			pendingRedirOut = false
+			pendingRedirOutAppend = false
+			// Capture whether this is '>>' (append) before the consuming loop
+			// below swallows the second '>' — CLA-103's write-then-run
+			// tracking needs to tell `cat >> FILE` (prepend FILE's existing
+			// content) from a bare `cat > FILE` (truncate) apart.
+			isAppendOut := c == '>' && i+1 < len(s) && s[i+1] == '>'
 			var fdKey string
 			var fdKeyOK bool
 			if c == '<' {
@@ -579,6 +625,12 @@ func splitCommands(s string) [][]word {
 			// filename). The `<&N` fd-alias sub-case above already
 			// `continue`d before reaching here, so it never sets this.
 			pendingRedirIn = c == '<'
+			// Mirrors pendingRedirIn immediately above but for an OUTPUT
+			// target (word.outRedirTarget/outRedirAppend, CLA-103) — never
+			// set by the `<&N` fd-alias sub-case above, which already
+			// `continue`d before reaching here.
+			pendingRedirOut = c == '>'
+			pendingRedirOutAppend = isAppendOut
 		default:
 			buf.WriteByte(c)
 			inWord = true
@@ -1030,7 +1082,10 @@ const maxBraceExpansion = 256
 // comment) is carried onto every alternative a brace span inside its own
 // raw text expands to, exactly like subs already is, so `exec 3<
 // .{env,bashrc}` — a contrived but real shape — still ends up tracking
-// fd 3 against each expanded candidate.
+// fd 3 against each expanded candidate; redirTarget and
+// outRedirTarget/outRedirAppend (CLA-103) are carried the same way, so a
+// redirection target that happens to contain a brace span is still
+// recognised as one on every expanded alternative.
 func expandBraces(words []word) []word {
 	out := make([]word, 0, len(words))
 	for _, w := range words {
@@ -1039,7 +1094,7 @@ func expandBraces(words []word) []word {
 			continue
 		}
 		for _, r := range expandBraceWord(w.raw) {
-			out = append(out, word{raw: r, subs: w.subs, fdBindNum: w.fdBindNum, redirTarget: w.redirTarget})
+			out = append(out, word{raw: r, subs: w.subs, fdBindNum: w.fdBindNum, redirTarget: w.redirTarget, outRedirTarget: w.outRedirTarget, outRedirAppend: w.outRedirAppend})
 		}
 	}
 	return out

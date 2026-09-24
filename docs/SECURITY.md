@@ -683,6 +683,76 @@ rather than runs unchecked):
   server's `run_with_secrets`/`capture` tools never set it, since real
   execution has real Bound Secret values sitting in the same process
   environment as `PATH`/`HOME`.
+  **Exception (CLA-103, hook layer only):** `set -x`, `set -o xtrace`,
+  and a combined short-flag group containing `x` (`-euxo pipefail`, and
+  the same reached through `shell -c '...; set -x; ...'`) are allowed —
+  the owner's own transcripts showed this refusal blocking the extremely
+  common `set -euxo pipefail` script preamble, and at the hook layer
+  nothing is ever Bound yet (the hook judges a raw Bash call before
+  `cpass` has parsed anything, let alone resolved a Handle — see the
+  printenv exception just above), so tracing a debugging script there
+  can only ever echo the Agent's own already-visible commands and its
+  own process environment, never a Vault Secret. A bare `set` with no
+  arguments is a different rule — it prints every variable
+  unconditionally, which has nothing to do with tracing specifically —
+  and stays refused everywhere. This allowlist applies only to `cpass
+  policy --hook`'s own `Evaluate` call (`Input.TraceAllowlist`): `cpass
+  run` and the MCP server's `run_with_secrets`/`capture` tools never set
+  it, since real execution DOES have real Bound Secret values sitting in
+  the process a traced script's own `+ echo $STRIPE_LIVE`-style line
+  would echo.
+
+**Write-then-run (CLA-103):** a script-by-path shell invocation
+(`bash script.sh`) ordinarily reads `script.sh` from disk to check its
+content — but a single Bash tool call routinely both writes a script and
+runs it (`cat > script.sh <<'EOF' ... EOF; bash script.sh`), and this
+whole check runs *before* either the write or the run has actually
+executed, so the file genuinely isn't on disk yet at check time. `cat >
+PATH <<DELIM`, `cat <<DELIM > PATH` (the same reordering), `cat >> PATH
+<<DELIM` (append), and `tee [-a] PATH <<DELIM` are recognised within one
+command, and when a LATER shell invocation in the same command names the
+identical literal path (resolved through the same plain-string-variable
+tracking a script path already gets — `G=script.sh; bash $G`), that
+heredoc's own body is checked as the script's content instead of failing
+the on-disk read. This is deliberately narrow and exact, not a guess at
+"looks like a write": a `cd` anywhere between the write and the run —
+including one reached through a `command`/`builtin` prefix (`command cd
+...`/`builtin cd ...`, ordinary working shell syntax a review round
+caught this check missing at first — CLA-103 review) — invalidates it
+entirely (falling back to the ordinary refusal). Recorded paths are
+normalized (`t.sh`, `./t.sh` and `x/../t.sh` are one entry), and a body
+this command writes takes priority over an older copy already on disk. A
+script whose written body itself reads a Secret file is still refused,
+exactly as if that content had come from a real file on disk.
+
+**A LATER write to the identical literal path, through any shape other
+than the four just above, invalidates the tracked entry (CLA-103 round-2
+review):** the write-then-run tracking above is deliberately narrow — it
+only ever recognises those four heredoc-to-file shapes as *authoritative*
+new content for a path. Before this fix, nothing invalidated a tracked
+entry when a LATER command in the same shell string wrote to the
+identical path some other way — a plain `> PATH`/`>> PATH` redirect on
+any program, a bare `tee PATH` with no attached heredoc, or a `cp`/`mv`
+onto `PATH` — so a benign heredoc write recorded early in a command could
+go on certifying a `bash PATH`/`sh PATH` run later in that SAME command
+even after a subsequent, unrecognised write had silently replaced
+`PATH`'s real content with something never checked at all. Now, every
+`>`/`>>` redirection target word in a simple command (on any program, not
+only the cat/tee-with-heredoc shape above) drops that specific path's
+tracked entry unless it is the exact path the heredoc-to-file tracking
+itself just recorded. Beyond redirects the rule is closed rather than a list of writers:
+between the write and the run, a command keeps the recorded body only if
+it is a pure assignment, a `contentPreserving` program (`chmod`, `echo`,
+`ls`, `mkdir`, `test`, ...), or the shell invocation that runs a recorded
+path itself. Any other program (`cp`, `curl -o`, `sed -i`, `unzip`, another
+script) clears every recorded write, and so does a redirect whose target
+is not a plain literal. This is proportionate per ADR-0013: an on-disk
+script already had the same overwrite-before-run exposure across two
+calls, so a write-then-run in one call adds no capability. Either way the later, real script-by-path read then fails
+closed on the ordinary "invocation shape can't be checked statically"
+refusal, exactly as if no write had ever been tracked for that path — it
+does not (and cannot) inspect the later write's own real content, since
+that content was never in a shape this package tracks at all.
 
 This hook never opens the Vault and makes no network call; it is a pure,
 static judgment over the command text (`internal/policy`).
@@ -827,7 +897,17 @@ detail.
    actually exist in the command's cwd (`cat .en?`/`cat .e*` against a
    real `.env`), not only the argument's own literal text. See
    `docs/THREATS.md` item 15 for the narrower edges this round's fixes
-   leave disclosed.
+   leave disclosed. **CLA-103** additionally resolves a script-by-path
+   shell invocation (`bash script.sh`) against a heredoc-to-file write
+   seen earlier in the SAME wrapped command (`cat > script.sh <<'EOF'
+   ... EOF; bash script.sh`) when the on-disk read fails, rather than
+   refusing just because the write genuinely hasn't happened yet at
+   check time — see the write-then-run paragraph in the PreToolUse hook
+   section above for the exact shape and its deliberate limits; unlike
+   the hook-only `printenv`/`set -x` exceptions just above it, this
+   applies identically here, in the MCP server, and in the hook, since
+   it is resolving what a command's own text already says, not relaxing
+   a rule for one surface specifically.
 3. Builds the child's environment: `os.Environ()` with `CPASS_KEY` itself
    stripped out first (see below), plus one variable per env-bound Handle,
    set to its value. A file-bound Handle instead gets a fresh Secret file,

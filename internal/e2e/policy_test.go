@@ -637,3 +637,173 @@ func TestProductionBinaryHasNoTestHooks(t *testing.T) {
 		t.Fatalf("release unsafe-allow must refuse without a real terminal: %s", r)
 	}
 }
+
+// TestPolicyRunWriteThenRun is CLA-103's write-then-run pattern at the
+// cpass run e2e layer, driven against a real built cpass binary with
+// real execution: writing a script via a heredoc-to-file redirect and
+// running it in the same wrapped command must not be refused just
+// because the file genuinely isn't on disk yet when Evaluate runs,
+// before the child process (which does the actual writing) has even
+// started — and the underlying script must still genuinely run,
+// this package's own core use case.
+func TestPolicyRunWriteThenRun(t *testing.T) {
+	ve := leakVault(t)
+	dir := t.TempDir()
+	safe := "cd " + dir + " && cat > t.sh <<'EOF'\n#!/bin/sh\necho ok\nEOF\nbash t.sh"
+	r := ve.run(nil, "run", "--with", "stripe/live", "--", "bash", "-c", safe)
+	if r.code != 0 {
+		t.Fatalf("a benign script written then run in one call must still run: %s", r)
+	}
+	if !strings.Contains(r.stdout, "ok") {
+		t.Fatalf("the written script's own output should reach stdout: %s", r)
+	}
+	// Paired bypass: a script written then run that itself reads a secret
+	// file is still refused.
+	dangerous := "cd " + dir + " && cat > t2.sh <<'EOF'\ncat .env\nEOF\nbash t2.sh"
+	r = ve.run(nil, "run", "--with", "stripe/live", "--", "bash", "-c", dangerous)
+	if r.code != 3 || !strings.Contains(r.stderr, "Secret-bearing file") {
+		t.Fatalf("a dangerous script written then run must still be refused: %s", r)
+	}
+	if strings.Contains(r.stdout+r.stderr, leakVal) {
+		t.Fatalf("leaked: %s", r)
+	}
+}
+
+// TestPolicyRunCommandCdInvalidatesWriteThenRun is CLA-103's review fix:
+// the write-then-run `cd`-invalidation safety valve only recognized a
+// BARE `cd`, missing `command cd`/`builtin cd` — both ordinary, working
+// shell syntax. Reproduced against real execution at this e2e layer,
+// mirroring the review's own live finding exactly: a benign heredoc is
+// written to one directory, then `command cd`/`builtin cd` moves into a
+// SECOND directory that already holds a differently-owned, genuinely
+// dangerous same-named script — before this fix, Command Policy resolved
+// the later `bash t.sh` against the tracked BENIGN body from the first
+// write (believing it had vetted what would run) and let cpass actually
+// execute the real, never-inspected file at the new directory
+// unchecked — a full bypass of the write-then-run guarantee, not merely
+// a missed refusal. The real script prints a marker no refused run could
+// ever produce, so a regression here is caught even if the exit code
+// were ever accidentally relaxed.
+func TestPolicyRunCommandCdInvalidatesWriteThenRun(t *testing.T) {
+	ve := leakVault(t)
+	dir := t.TempDir()
+	realtarget := filepath.Join(dir, "realtarget")
+	if err := os.MkdirAll(realtarget, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The real, pre-existing file at the cd target: genuinely dangerous
+	// (reads a Secret-bearing file) and, if actually run unchecked, prints
+	// a marker proving so.
+	if err := os.WriteFile(filepath.Join(realtarget, "t.sh"), []byte("cat .env\necho REAL_EXECUTION_RAN_UNCHECKED_SCRIPT\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realtarget, ".env"), []byte("DUMMY=not-the-bound-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prefixes := []string{"command", "builtin"}
+	for _, prefix := range prefixes {
+		t.Run(prefix+" cd", func(t *testing.T) {
+			// The heredoc write itself is to a DIFFERENT path (dir/t.sh,
+			// benign) than the one the command actually cds into and runs
+			// (realtarget/t.sh, dangerous) — exactly the review's own
+			// shape, not a simplified same-path stand-in.
+			cmd := "cd " + dir + " && cat > t.sh <<'EOF'\necho benign\nEOF\n" + prefix + " cd " + realtarget + " && bash t.sh"
+			r := ve.run(nil, "run", "--with", "stripe/live", "--", "bash", "-c", cmd)
+			if r.code != 3 || !strings.Contains(r.stderr, "invocation shape can't be checked statically") {
+				t.Fatalf("%s cd between a write-then-run write and its run must invalidate the tracked body and fail closed: %s", prefix, r)
+			}
+			if strings.Contains(r.stdout, "REAL_EXECUTION_RAN_UNCHECKED_SCRIPT") {
+				t.Fatalf("%s cd let the real, unvetted script at the new directory actually execute: %s", prefix, r)
+			}
+			if strings.Contains(r.stdout+r.stderr, leakVal) {
+				t.Fatalf("leaked: %s", r)
+			}
+		})
+	}
+	// Sanity: a BARE cd between the same write and run is still refused
+	// the same way (no regression from this fix), and the ordinary,
+	// no-intervening-cd write-then-run case still genuinely runs.
+	t.Run("bare cd (no regression)", func(t *testing.T) {
+		cmd := "cd " + dir + " && cat > t2.sh <<'EOF'\necho benign\nEOF\ncd " + realtarget + " && bash t2.sh"
+		r := ve.run(nil, "run", "--with", "stripe/live", "--", "bash", "-c", cmd)
+		if r.code != 3 || !strings.Contains(r.stderr, "invocation shape can't be checked statically") {
+			t.Fatalf("a bare cd between write and run must still fail closed: %s", r)
+		}
+	})
+	t.Run("no intervening cd still runs", func(t *testing.T) {
+		cmd := "cd " + dir + " && cat > t3.sh <<'EOF'\necho benign\nEOF\nbash t3.sh"
+		r := ve.run(nil, "run", "--with", "stripe/live", "--", "bash", "-c", cmd)
+		if r.code != 0 || !strings.Contains(r.stdout, "benign") {
+			t.Fatalf("write-then-run with no intervening cd must still genuinely run: %s", r)
+		}
+	})
+}
+
+// TestPolicyRunLaterOverwriteInvalidatesWriteThenRun is CLA-103's round-2
+// review finding, reproduced against real execution exactly the way the
+// review itself reported it: a benign heredoc write to a path, followed —
+// LATER IN THE SAME wrapped command, with no intervening cd — by a plain
+// (non-heredoc) `>` redirect that silently replaces that identical path's
+// real on-disk content with something never checked at all, then a shell
+// invocation of that same path. Before this fix, ev.written kept
+// certifying the FIRST (benign) write's tracked body even though the
+// SECOND, unrecognized write is what the file actually held by the time
+// bash ran it — so cpass genuinely executed the real, never-inspected
+// script content unchecked. The real script prints a marker no refused
+// run could ever produce, so a regression here is caught even if the exit
+// code were ever accidentally relaxed — the same evidentiary standard
+// TestPolicyRunCommandCdInvalidatesWriteThenRun above already uses.
+func TestPolicyRunLaterOverwriteInvalidatesWriteThenRun(t *testing.T) {
+	ve := leakVault(t)
+	dir := t.TempDir()
+	cases := []struct {
+		name    string
+		rewrite string
+	}{
+		{"a later plain > redirect", "echo 'echo REAL_EXECUTION_RAN_UNCHECKED_SCRIPT' > t.sh"},
+		{"a later plain >> redirect", "echo 'echo REAL_EXECUTION_RAN_UNCHECKED_SCRIPT' >> t.sh"},
+		{"a later bare tee with no heredoc", "tee t.sh <<<'echo REAL_EXECUTION_RAN_UNCHECKED_SCRIPT'"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cmd := "cd " + dir + " && cat > t.sh <<'EOF'\necho benign\nEOF\n" + c.rewrite + "\nbash t.sh"
+			r := ve.run(nil, "run", "--with", "stripe/live", "--", "bash", "-c", cmd)
+			if r.code != 3 || !strings.Contains(r.stderr, "invocation shape can't be checked statically") {
+				t.Fatalf("a later, unrecognized write to the identical path must invalidate the tracked heredoc body and fail closed: %s", r)
+			}
+			if strings.Contains(r.stdout, "REAL_EXECUTION_RAN_UNCHECKED_SCRIPT") {
+				t.Fatalf("the later, never-inspected write's real content was actually executed unchecked: %s", r)
+			}
+			if strings.Contains(r.stdout+r.stderr, leakVal) {
+				t.Fatalf("leaked: %s", r)
+			}
+		})
+	}
+	// Sanity: an unrelated write to a DIFFERENT path in between leaves the
+	// run's own tracked body alone, and the ordinary write-then-run case
+	// keeps genuinely running (no regression from this fix).
+	t.Run("an unrelated write to a different path is unaffected", func(t *testing.T) {
+		cmd := "cd " + dir + " && cat > t2.sh <<'EOF'\necho benign\nEOF\necho unrelated > other.txt\nbash t2.sh"
+		r := ve.run(nil, "run", "--with", "stripe/live", "--", "bash", "-c", cmd)
+		if r.code != 0 || !strings.Contains(r.stdout, "benign") {
+			t.Fatalf("an unrelated write to a different path must not invalidate the run's own tracked body: %s", r)
+		}
+	})
+}
+
+// TestPolicyRunXtraceStillRefused is CLA-103's own stated scope: the
+// hook-only shell-tracing allowlist (Input.TraceAllowlist) must never
+// leak into cpass run's own Evaluate call, which runs with real Bound
+// Secret values already sitting in the child's environment — unlike
+// the PreToolUse hook, which allows this (TestPolicyHookXtraceAllowlist,
+// internal/e2e/policy_hook_test.go).
+func TestPolicyRunXtraceStillRefused(t *testing.T) {
+	ve := leakVault(t)
+	r := ve.run(nil, "run", "--with", "stripe/live", "--", "bash", "-c", "set -x; echo hi")
+	if r.code != 3 || !strings.Contains(r.stderr, "echoes expanded variables") {
+		t.Fatalf("set -x must still be refused under cpass run: %s", r)
+	}
+	if strings.Contains(r.stdout+r.stderr, leakVal) {
+		t.Fatalf("leaked: %s", r)
+	}
+}

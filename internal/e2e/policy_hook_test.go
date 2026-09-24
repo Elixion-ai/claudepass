@@ -290,3 +290,183 @@ func TestPolicyHookSecretFileGlobExpansion(t *testing.T) {
 		})
 	}
 }
+
+// TestPolicyHookCommandCdInvalidatesWriteThenRun is CLA-103's review fix,
+// driven against a real built `cpass policy --hook` invocation: the
+// write-then-run `cd`-invalidation safety valve only recognized a BARE
+// `cd`, missing `command cd`/`builtin cd` — both ordinary, working shell
+// syntax that a real shell treats identically to a bare `cd`. Before this
+// fix, the hook resolved a LATER `bash t.sh` against the benign body
+// tracked from an EARLIER write to a DIFFERENT directory, instead of
+// failing closed on the (correct, here nonexistent) on-disk read at the
+// new directory — silently believing it had vetted a script it never
+// actually inspected. See TestPolicyRunCommandCdInvalidatesWriteThenRun
+// (policy_test.go) for the same shape proven against real execution,
+// with a pre-existing dangerous file at the cd target.
+func TestPolicyHookCommandCdInvalidatesWriteThenRun(t *testing.T) {
+	ve := newVault(t)
+	dir := t.TempDir()
+	cases := []struct {
+		name   string
+		prefix string
+	}{
+		{"command cd invalidates the write-then-run candidate", "command"},
+		{"builtin cd invalidates the write-then-run candidate", "builtin"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cmd := "cd " + dir + " && cat > t.sh <<'EOF'\necho ok\nEOF\n" + c.prefix + " cd /tmp\nbash t.sh"
+			r := ve.run(preToolUseJSON(cmd), "policy", "--hook")
+			if r.code != 2 || !strings.Contains(r.stderr, "invocation shape can't be checked statically") {
+				t.Fatalf("%s cd between write and run must invalidate the tracked body and fail closed: %s", c.prefix, r)
+			}
+		})
+	}
+	// A bare cd before BOTH the write and the run is unaffected — same
+	// sanity check TestPolicyHookWriteThenRun's own table implicitly
+	// relies on for its "allowed" case, made explicit here for the
+	// command/builtin-prefixed spelling too.
+	t.Run("a command cd before both write and run is unaffected", func(t *testing.T) {
+		cmd := "command cd " + dir + " && cat > t2.sh <<'EOF'\necho ok\nEOF\nbash t2.sh"
+		r := ve.run(preToolUseJSON(cmd), "policy", "--hook")
+		if r.code != 0 {
+			t.Fatalf("want exit 0, got %s", r)
+		}
+	})
+}
+
+// TestPolicyHookSetAsDataNotShellBuiltin is CLA-103's own reported
+// trigger, driven against a real built `cpass policy --hook` invocation:
+// the owner's transcripts showed the hook reading Python's `set(...)`
+// (and other languages'/tools' unrelated uses of the bare word "set") as
+// the shell `set` builtin and blocking real work.
+func TestPolicyHookSetAsDataNotShellBuiltin(t *testing.T) {
+	ve := newVault(t)
+	cases := []string{
+		`python3 -c "print(set([1, 2]))"`,
+		"python3 - <<'EOF'\nitems = set()\nfor x in set([1, 2]):\n    items.add(x)\nEOF",
+		`node -e "console.log(new Set([1]))"`,
+		"kubectl set image deploy/web web=nginx:1.27",
+		`psql -c "UPDATE users SET active = true"`,
+		"echo set",
+	}
+	for _, cmd := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			r := ve.run(preToolUseJSON(cmd), "policy", "--hook")
+			if r.code != 0 {
+				t.Fatalf("command %q should be allowed (set/SET here is data, not the shell builtin): %s", cmd, r)
+			}
+		})
+	}
+}
+
+// TestPolicyHookXtraceAllowlist is CLA-103's hook-only allowance for
+// shell tracing, driven against a real built `cpass policy --hook`
+// invocation: `set -x` and a combined short-flag group containing `x`
+// are not a reveal worth blocking everyday debugging over at the hook
+// layer, where nothing is ever Bound yet. A bare `set` (a different
+// rule — it prints every variable unconditionally) still refuses.
+func TestPolicyHookXtraceAllowlist(t *testing.T) {
+	ve := newVault(t)
+	cases := []struct {
+		name    string
+		command string
+		blocked bool
+	}{
+		{"set -x alone is allowed", "set -x\nls -la", false},
+		{"a combined short-flag group containing x is allowed", "set -euxo pipefail\nls", false},
+		{"set -x reached through a nested bash -c is allowed", "bash -c 'set -x; ls'", false},
+		{"bare set with no arguments still refuses", "set", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := ve.run(preToolUseJSON(c.command), "policy", "--hook")
+			if c.blocked {
+				if r.code != 2 || !strings.HasPrefix(r.stderr, "cpass: refused: ") {
+					t.Fatalf("want a refused message on stderr: %s", r)
+				}
+			} else if r.code != 0 {
+				t.Fatalf("want exit 0, got %s", r)
+			}
+		})
+	}
+}
+
+// TestPolicyHookWriteThenRun is CLA-103's write-then-run pattern, driven
+// against a real built `cpass policy --hook` invocation: writing a
+// script via a heredoc-to-file redirect and running it in the same Bash
+// tool call must not be refused just because the file genuinely isn't on
+// disk yet — this hook runs before either the write or the run has
+// actually executed. Resolved through a real temp directory (a same-
+// command `cd`, matching TestPolicyHookSecretFileGlobExpansion above) so
+// the write and the run share an unambiguous literal path.
+// TestPolicyHookLaterOverwriteInvalidatesWriteThenRun is CLA-103's round-2
+// review finding at the PreToolUse hook layer: a benign heredoc write to a
+// path, followed LATER IN THE SAME command by a plain (non-heredoc) `>`
+// redirect or a bare `tee` to that identical literal path, must invalidate
+// the tracked body rather than let a subsequent `bash t.sh` resolve
+// against the stale, no-longer-real first write. See
+// TestPolicyRunLaterOverwriteInvalidatesWriteThenRun (policy_test.go) for
+// the same shape proven against real execution with a marker only
+// genuinely unchecked execution could print.
+func TestPolicyHookLaterOverwriteInvalidatesWriteThenRun(t *testing.T) {
+	ve := newVault(t)
+	dir := t.TempDir()
+	cases := []struct {
+		name    string
+		command string
+	}{
+		{"a later plain > redirect to the same path invalidates the tracked heredoc body",
+			"cd " + dir + " && cat > t.sh <<'EOF'\necho ok\nEOF\necho 'cat .env' > t.sh\nbash t.sh"},
+		{"a later bare tee (no heredoc) to the same path invalidates the tracked heredoc body",
+			"cd " + dir + " && cat > t2.sh <<'EOF'\necho ok\nEOF\ntee t2.sh <<<'cat .env'\nbash t2.sh"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := ve.run(preToolUseJSON(c.command), "policy", "--hook")
+			if r.code != 2 || !strings.Contains(r.stderr, "invocation shape can't be checked statically") {
+				t.Fatalf("a later, unrecognized write to the identical path must invalidate the tracked heredoc body and fail closed: %s", r)
+			}
+		})
+	}
+	// Sanity: an unrelated write to a DIFFERENT path in between leaves the
+	// run's own tracked body alone.
+	t.Run("an unrelated write to a different path is unaffected", func(t *testing.T) {
+		cmd := "cd " + dir + " && cat > t3.sh <<'EOF'\necho ok\nEOF\necho unrelated > other.txt\nbash t3.sh"
+		r := ve.run(preToolUseJSON(cmd), "policy", "--hook")
+		if r.code != 0 {
+			t.Fatalf("want exit 0, got %s", r)
+		}
+	})
+}
+
+func TestPolicyHookWriteThenRun(t *testing.T) {
+	ve := newVault(t)
+	dir := t.TempDir()
+	cases := []struct {
+		name    string
+		command string
+		blocked bool
+	}{
+		{"a benign script written then run in one call is allowed",
+			"cd " + dir + " && cat > t.sh <<'EOF'\n#!/usr/bin/env bash\nset -e\necho ok\nEOF\nbash t.sh", false},
+		// Paired bypass: a script written then run that itself reads a
+		// secret file is still refused — this is Command Policy
+		// correctly resolving and checking the real script content, not
+		// merely allowing every write-then-run shape on sight.
+		{"paired bypass: a dangerous script written then run is refused",
+			"cd " + dir + " && cat > t3.sh <<'EOF'\ncat .env\nEOF\nbash t3.sh", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := ve.run(preToolUseJSON(c.command), "policy", "--hook")
+			if c.blocked {
+				if r.code != 2 || !strings.Contains(r.stderr, "Secret-bearing file") {
+					t.Fatalf("want a refused message mentioning the secret file: %s", r)
+				}
+			} else if r.code != 0 {
+				t.Fatalf("want exit 0, got %s", r)
+			}
+		})
+	}
+}
