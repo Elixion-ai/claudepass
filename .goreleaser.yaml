@@ -62,13 +62,16 @@ checksum:
 # is what turns on the keyless flow instead of expecting a local key pair.
 # install.sh verifies this with `cosign verify-blob` when cosign is on the
 # installing machine's PATH — see docs/SECURITY.md "Verifying a release".
+# cosign v3 (what release.yml installs) writes one Sigstore bundle holding
+# the signature, certificate and transparency-log proof; it ignores the old
+# --output-signature/--output-certificate flags, which is what failed the
+# first v0.3.0 release job.
 signs:
   - cmd: cosign
-    certificate: "${artifact}.pem"
+    signature: "${artifact}.sigstore.json"
     args:
       - sign-blob
-      - "--output-certificate=${certificate}"
-      - "--output-signature=${signature}"
+      - "--bundle=${signature}"
       - "${artifact}"
       - --yes
     artifacts: checksum

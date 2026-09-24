@@ -136,7 +136,7 @@ verify_checksum() {
 }
 
 # github_dl_url NAME — the GitHub Release download URL for a same-named
-# asset (checksums.txt, checksums.txt.sig, ...) of the resolved $version,
+# asset (checksums.txt, checksums.txt.sigstore.json, ...) of the resolved $version,
 # under $github_base. Mirrors GitHub's own two URL shapes: the "latest"
 # alias redirects to whatever tag is newest, an explicit tag addresses it
 # directly — same distinction install.sh's own /dl/ fetches already make.
@@ -188,17 +188,20 @@ verify_signature() {
     fi
 
     if have cosign; then
-        sig="$workdir/checksums.txt.sig"
-        pem="$workdir/checksums.txt.pem"
-        sig_url="$(github_dl_url checksums.txt.sig)"
-        pem_url="$(github_dl_url checksums.txt.pem)"
-        if curl -fsSL "$sig_url" -o "$sig" 2>/dev/null && curl -fsSL "$pem_url" -o "$pem" 2>/dev/null; then
+        bundle="$workdir/checksums.txt.sigstore.json"
+        cosign_err="$workdir/cosign.stderr"
+        bundle_url="$(github_dl_url checksums.txt.sigstore.json)"
+        if curl -fsSL "$bundle_url" -o "$bundle" 2>/dev/null; then
             if cosign verify-blob \
                 --certificate-identity-regexp "^https://github\\.com/${gh_owner}/${gh_repo}/" \
                 --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-                --certificate "$pem" --signature "$sig" \
-                "$checksums" >/dev/null 2>&1; then
+                --bundle "$bundle" \
+                "$checksums" >/dev/null 2>"$cosign_err"; then
                 signature_status="verified (cosign, keyless/Sigstore)"
+            elif grep -qi "unknown flag\|could not parse\|unsupported bundle\|unmarshal" "$cosign_err"; then
+                # A cosign too old to read a Sigstore bundle says nothing
+                # about the download itself.
+                signature_status="unavailable (installed cosign cannot read Sigstore bundles; upgrade cosign)"
             else
                 signature_status="FAILED (cosign could not verify checksums.txt's signature)"
                 echo "warning: cosign could not verify checksums.txt's signature — the download may be tampered; see docs/SECURITY.md" >&2

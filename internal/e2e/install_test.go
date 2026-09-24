@@ -293,7 +293,7 @@ func fakeGhOnPath(t *testing.T, script string) string {
 // left unset (unlike every other test in this file) so the "have gh"
 // branch actually runs, against a fake gh put first on $PATH. cosign is
 // not stubbed: it either isn't on the test machine's PATH at all, or its
-// curl fetches for checksums.txt.sig/.pem 404 against the fixture GitHub
+// curl fetch for checksums.txt.sigstore.json 404s against the fixture GitHub
 // server below (which only serves checksums.txt), so signature_status
 // resolves to "unavailable" without ever invoking a real cosign binary,
 // on any machine.

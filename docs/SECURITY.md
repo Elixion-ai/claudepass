@@ -1138,12 +1138,11 @@ diff checksums-dl.txt checksums-gh.txt && echo "origins agree"
 shasum -a 256 "$ASSET" | grep -Ff - checksums-gh.txt
 
 # Cosign keyless signature over checksums.txt:
-curl -fsSL "https://github.com/Elixion-ai/claudepass/releases/download/$TAG/checksums.txt.sig" -o checksums.txt.sig
-curl -fsSL "https://github.com/Elixion-ai/claudepass/releases/download/$TAG/checksums.txt.pem" -o checksums.txt.pem
+curl -fsSL "https://github.com/Elixion-ai/claudepass/releases/download/$TAG/checksums.txt.sigstore.json" -o checksums.txt.sigstore.json
 cosign verify-blob \
   --certificate-identity-regexp '^https://github\.com/Elixion-ai/claudepass/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate checksums.txt.pem --signature checksums.txt.sig \
+  --bundle checksums.txt.sigstore.json \
   checksums-gh.txt
 
 # Build-provenance attestation over the archive itself:
