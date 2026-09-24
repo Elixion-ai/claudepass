@@ -228,10 +228,8 @@ jobs:
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
-# Branch protection (a repo setting, not expressible in this file): once
-# this workflow has run on main at least once, require both
-# "build-and-test (macos-latest)" and "build-and-test (ubuntu-latest)" as
-# status checks on main. Left for a human/owner action — see CLA-18's
-# agent summary for why (this team pushes to main directly rather than
-# through PRs, and turning this on before a check has ever reported risks
-# rejecting that very push).
+# Branch protection (a repo setting, not expressible in this file): main
+# requires both "build-and-test (macos-latest)" and
+# "build-and-test (ubuntu-latest)" as status checks. Checks attach to a
+# commit, so push new work to a branch first and fast-forward main to that
+# same SHA once it is green; renaming either job breaks the requirement.
